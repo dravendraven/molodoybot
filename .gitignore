@@ -1,0 +1,22 @@
+# Ignorar arquivos temporários do Python
+__pycache__/
+*.pyc
+
+# Ignorar ambientes virtuais (se você usa)
+.venv/
+venv/
+env/
+
+# --- SEGURANÇA ---
+# Ignorar o arquivo de configuração real com suas senhas
+bot_config.json
+fishing_map.json
+cavebot_scripts/
+build/
+dist/
+objects.srv
+Downloads.code-workspace
+app.ico
+
+# Ignorar o banco de dados do Fishing se ele for muito grande ou pessoal
+# fishing_map.json (já coloquei acima)

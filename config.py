@@ -1,5 +1,5 @@
 # config.py
-import foods_db
+from database import foods_db
 
 # ==============================================================================
 # 1. GERAIS E CONEXÃO
@@ -180,7 +180,7 @@ OFFSET_STATUS_TIMER = 0x31DBDC # Int: Tempo restante da mensagem na tela
 # Pesca
 # ==============================================================================
 OFFSET_LAST_INTERACTION_ID = 0x31C630
-WATER_IDS = WATER_IDS = range(4597, 4615)
+WATER_IDS = range(4597, 4615)
 
 # Se você já tem essa constante com outro nome, pode usar a mesma.
 OFFSET_LAST_USED_ITEM_ID = 0x31C630
