@@ -101,7 +101,9 @@ BOT_SETTINGS = {
     "rune_flee_delay": 2.0,
     "auto_eat": False,
     "mana_train": False,
-    "rune_movement": True
+    "rune_movement": True,
+    "rune_human_min": 15,   # Segundos mínimos de espera
+    "rune_human_max": 300  # Segundos máximos de espera
 }
 
 # Variáveis de Controle de Execução
@@ -907,6 +909,8 @@ def runemaker_thread():
                 'check_hunger': check_hunger_state, 
                 'mana_train': BOT_SETTINGS['mana_train'],
                 'enable_movement': BOT_SETTINGS.get('rune_movement', False),
+                'human_min': BOT_SETTINGS.get('rune_human_min', 0),
+                'human_max': BOT_SETTINGS.get('rune_human_max', 0),
             }
             
             runemaker_loop(pm, base_addr, hwnd, 
@@ -1218,7 +1222,7 @@ def open_settings():
 
     toplevel_settings = ctk.CTkToplevel(app)
     toplevel_settings.title("Configurações")
-    toplevel_settings.geometry("360x560") 
+    toplevel_settings.geometry("360x500") 
     toplevel_settings.attributes("-topmost", True)
     
     def on_settings_close():
@@ -1449,125 +1453,163 @@ def open_settings():
 
     ctk.CTkButton(tab_fisher, text="Salvar Fisher", command=save_fish, fg_color="#2CC985").pack(side="bottom", pady=10, fill="x", padx=20)
 
-    # 6. ABA RUNE
-    frame_rune = create_grid_frame(tab_rune)
+    # ==============================================================================
+    # 6. ABA RUNE (LAYOUT ULTRA-COMPACTO)
+    # ==============================================================================
+    
+    # Helper para atualizar labels de posição (definido aqui para ter acesso aos widgets)
+    def update_rune_pos_labels():
+        lbl_work_pos.configure(text=str(BOT_SETTINGS.get('rune_work_pos', (0,0,0))))
+        lbl_safe_pos.configure(text=str(BOT_SETTINGS.get('rune_safe_pos', (0,0,0))))
 
-    ctk.CTkLabel(frame_rune, text="Mana Req:", text_color="gray").grid(row=0, column=0, sticky="e", padx=10, pady=5)
-    entry_mana = ctk.CTkEntry(frame_rune, width=60, justify="center")
-    entry_mana.grid(row=0, column=1, sticky="w")
+    def set_rune_pos(type_pos):
+        # Pega posição atual do player e salva
+        if pm:
+            try:
+                x = pm.read_int(base_addr + 0x1D16F0) # OFFSET_PLAYER_X
+                y = pm.read_int(base_addr + 0x1D16EC) # OFFSET_PLAYER_Y
+                z = pm.read_int(base_addr + 0x1D16E8) # OFFSET_PLAYER_Z
+                
+                key = 'rune_work_pos' if type_pos == "WORK" else 'rune_safe_pos'
+                BOT_SETTINGS[key] = (x, y, z)
+                update_rune_pos_labels()
+                log(f"📍 {type_pos} definido: {x}, {y}, {z}")
+            except:
+                log("❌ Erro ao ler posição. Logue no char.")
+
+    # --- SEÇÃO 1: CRAFT (Tudo em 2 linhas) ---
+    frame_craft = ctk.CTkFrame(tab_rune, fg_color="#2b2b2b")
+    frame_craft.pack(fill="x", padx=5, pady=2)
+    
+    ctk.CTkLabel(frame_craft, text="⚙️ Crafting", font=("Verdana", 11, "bold"), height=18).pack(anchor="w", padx=5, pady=(10,10))
+    
+    f_c1 = ctk.CTkFrame(frame_craft, fg_color="transparent")
+    f_c1.pack(fill="x", padx=2, pady=2)
+    
+    # Linha compacta: Mana | Hotkey | Mão
+    ctk.CTkLabel(f_c1, text="Mana:", font=("Verdana", 10)).pack(side="left", padx=5)
+    entry_mana = ctk.CTkEntry(f_c1, width=45, height=22, font=("Verdana", 10), justify="center")
+    entry_mana.pack(side="left", padx=5)
     entry_mana.insert(0, str(BOT_SETTINGS['rune_mana']))
-
-    ctk.CTkLabel(frame_rune, text="Hotkey:", text_color="gray").grid(row=1, column=0, sticky="e", padx=10, pady=5)
-    entry_hk = ctk.CTkEntry(frame_rune, width=60, justify="center")
-    entry_hk.grid(row=1, column=1, sticky="w")
+    
+    ctk.CTkLabel(f_c1, text="Key:", font=("Verdana", 10)).pack(side="left", padx=5)
+    entry_hk = ctk.CTkEntry(f_c1, width=35, height=22, font=("Verdana", 10), justify="center")
+    entry_hk.pack(side="left", padx=5)
     entry_hk.insert(0, BOT_SETTINGS['rune_hotkey'])
-
-    ctk.CTkLabel(frame_rune, text="Mão:", text_color="gray").grid(row=2, column=0, sticky="e", padx=10, pady=5)
-    combo_hand = ctk.CTkComboBox(frame_rune, values=["RIGHT", "LEFT", "BOTH"], width=80, state="readonly")
-    combo_hand.grid(row=2, column=1, sticky="w")
+    
+    ctk.CTkLabel(f_c1, text="Hand:", font=("Verdana", 10)).pack(side="left", padx=5)
+    combo_hand = ctk.CTkComboBox(f_c1, values=["RIGHT", "LEFT", "BOTH"], width=65, height=22, font=("Verdana", 10), state="readonly")
+    combo_hand.pack(side="left", padx=5)
     combo_hand.set(BOT_SETTINGS['rune_hand'])
 
-    #frame_rune_opts = ctk.CTkFrame(tab_rune, fg_color="transparent")
-    #frame_rune_opts.pack(pady=10)
-    frame_rune_opts = create_grid_frame(tab_rune)
+    # --- SEÇÃO 2: HUMANIZAÇÃO ---
+    frame_human = ctk.CTkFrame(tab_rune, fg_color="#2b2b2b")
+    frame_human.pack(fill="x", padx=5, pady=2)
+    
+    f_h1 = ctk.CTkFrame(frame_human, fg_color="transparent")
+    f_h1.pack(fill="x", padx=2, pady=2)
+    
+    ctk.CTkLabel(f_h1, text="Ao atingir mana, esperar de", font=("Verdana", 9)).pack(side="left", padx=5)
+    
+    entry_human_min = ctk.CTkEntry(f_h1, width=35, height=22, font=("Verdana", 10), justify="center")
+    entry_human_min.pack(side="left", padx=2)
+    entry_human_min.insert(0, str(BOT_SETTINGS.get('rune_human_min', 5)))
+    
+    ctk.CTkLabel(f_h1, text="até", font=("Verdana", 9)).pack(side="left", padx=5)
+    
+    entry_human_max = ctk.CTkEntry(f_h1, width=35, height=22, font=("Verdana", 10), justify="center")
+    entry_human_max.pack(side="left", padx=2)
+    entry_human_max.insert(0, str(BOT_SETTINGS.get('rune_human_max', 30)))
 
-    def toggle_eat():
-        BOT_SETTINGS['auto_eat'] = bool(switch_eat.get())
-        
-    switch_eat = ctk.CTkSwitch(frame_rune_opts, text="Auto Eat", command=toggle_eat, progress_color="#00C000", font=("Verdana", 10))
-    switch_eat.grid(row=0, column=0, sticky="e", padx=10)
+    ctk.CTkLabel(f_h1, text="segundos", font=("Verdana", 9)).pack(side="left", padx=2)
+
+    # --- SEÇÃO 3: SEGURANÇA & MOVIMENTO ---
+    frame_move = ctk.CTkFrame(tab_rune, fg_color="#2b2b2b")
+    frame_move.pack(fill="x", padx=5, pady=10)
+    
+    ctk.CTkLabel(frame_move, text="🚨 Anti-PK / Movimento", font=("Verdana", 11, "bold"), height=18).pack(anchor="w", padx=5, pady=(10,10))
+
+    # Toggle Flee + Delays
+    f_m1 = ctk.CTkFrame(frame_move, fg_color="transparent")
+    f_m1.pack(fill="x", padx=2, pady=5)
+    
+    switch_movement = ctk.CTkSwitch(f_m1, text="Fugir para safe (alarme)", font=("Verdana", 10), width=50, height=20)
+    switch_movement.pack(side="left", padx=2)
+    if BOT_SETTINGS.get('rune_movement', False): switch_movement.select()
+
+    f_m2 = ctk.CTkFrame(frame_move, fg_color="transparent")
+    f_m2.pack(fill="x", padx=2, pady=2)
+    
+    ctk.CTkLabel(f_m2, text="Reação(s):", font=("Verdana", 10)).pack(side="left", padx=(2,2))
+    entry_flee = ctk.CTkEntry(f_m2, width=35, height=22, font=("Verdana", 10), justify="center")
+    entry_flee.pack(side="left")
+    entry_flee.insert(0, str(BOT_SETTINGS.get('rune_flee_delay', 0.5)))
+
+    ctk.CTkLabel(f_m2, text="Retorno(s):", font=("Verdana", 10)).pack(side="left", padx=(10,2))
+    entry_ret_delay = ctk.CTkEntry(f_m2, width=35, height=22, font=("Verdana", 10), justify="center")
+    entry_ret_delay.pack(side="left")
+    entry_ret_delay.insert(0, str(BOT_SETTINGS.get('rune_return_delay', 300)))
+
+    # Coordenadas (Linhas finas)
+    f_coords = ctk.CTkFrame(frame_move, fg_color="transparent")
+    f_coords.pack(fill="x", padx=2, pady=2)
+    
+    # Work
+    f_wk = ctk.CTkFrame(f_coords, fg_color="transparent", height=25)
+    f_wk.pack(fill="x")
+    ctk.CTkButton(f_wk, text="Set Work", width=60, height=20, font=("Verdana", 9), fg_color="#444", 
+                  command=lambda: set_rune_pos("WORK")).pack(side="left", padx=2)
+    lbl_work_pos = ctk.CTkLabel(f_wk, text=str(BOT_SETTINGS.get('rune_work_pos', (0,0,0))), font=("Verdana", 10), text_color="gray")
+    lbl_work_pos.pack(side="left", padx=5)
+
+    # Safe
+    f_sf = ctk.CTkFrame(f_coords, fg_color="transparent", height=25)
+    f_sf.pack(fill="x")
+    ctk.CTkButton(f_sf, text="Set Safe", width=60, height=20, font=("Verdana", 9), fg_color="#444", 
+                  command=lambda: set_rune_pos("SAFE")).pack(side="left", padx=2)
+    lbl_safe_pos = ctk.CTkLabel(f_sf, text=str(BOT_SETTINGS.get('rune_safe_pos', (0,0,0))), font=("Verdana", 10), text_color="gray")
+    lbl_safe_pos.pack(side="left", padx=5)
+
+    # --- SEÇÃO 4: EXTRAS ---
+    frame_extras = ctk.CTkFrame(tab_rune, fg_color="#2b2b2b")
+    frame_extras.pack(fill="x", padx=5, pady=2)
+
+    ctk.CTkLabel(frame_extras, text="Outros", font=("Verdana", 11, "bold"), height=18).pack(anchor="w", padx=5, pady=(10,10))
+    
+    f_ex = ctk.CTkFrame(frame_extras, fg_color="transparent")
+    f_ex.pack(fill="x", padx=2, pady=5)
+    
+    switch_eat = ctk.CTkSwitch(f_ex, text="Auto Eat", font=("Verdana", 10), width=60, height=20)
+    switch_eat.pack(side="left", padx=10)
     if BOT_SETTINGS['auto_eat']: switch_eat.select()
 
-    def toggle_train():
-        BOT_SETTINGS['mana_train'] = bool(switch_train.get())
-        
-    switch_train = ctk.CTkSwitch(frame_rune_opts, text="Mana Train", command=toggle_train, progress_color="#A54EF9", font=("Verdana", 10))
-    switch_train.grid(row=0, column=1, sticky="w")
+    switch_train = ctk.CTkSwitch(f_ex, text="Mana Train (No rune)", font=("Verdana", 10), width=60, height=20)
+    switch_train.pack(side="left", padx=20)
     if BOT_SETTINGS['mana_train']: switch_train.select()
 
-    frame_rune_movement = ctk.CTkFrame(tab_rune, fg_color="transparent")
-    frame_rune_movement.pack(pady=10)
-
-    def toggle_movement():
-        # Apenas para atualização visual imediata se necessário, o save real é no botão Salvar
-        pass
-
-    # Switch para Ativar/Desativar Movimentação
-    switch_movement = ctk.CTkSwitch(frame_rune_movement, text="Movimento (Safe/Work)", command=toggle_movement, 
-                                    progress_color="#4EA5F9", font=("Verdana", 10))
-    switch_movement.pack(padx=15)
-    
-    # Carregar estado atual (Padrão False se não existir, para segurança)
-    if BOT_SETTINGS.get('rune_movement', False):
-        switch_movement.select()
-    else:
-        switch_movement.deselect()
-
-    ctk.CTkLabel(tab_rune, text="Segurança (Anti-PK)", font=("Verdana", 10, "bold")).pack(pady=(0, 0))
-    
-    frame_rune_safe = create_grid_frame(tab_rune)
-
-    ctk.CTkLabel(frame_rune_safe, text="Delay Fuga (s):", text_color="gray").grid(row=0, column=0, sticky="e", padx=10)
-    
-    entry_flee = ctk.CTkEntry(frame_rune_safe, width=50, justify="center")
-    entry_flee.grid(row=0, column=1, sticky="w")
-    entry_flee.insert(0, str(BOT_SETTINGS['rune_flee_delay']))
-    
-    lbl_hint_flee = ctk.CTkLabel(frame_rune_safe, text="↳ Tempo de reação simulado antes de correr (Humanização).", 
-                                 font=("Verdana", 8), text_color="#888888")
-    lbl_hint_flee.grid(row=1, column=0, columnspan=2, sticky="w", padx=20, pady=(0, 5))
-
-    ctk.CTkLabel(frame_rune_safe, text="Delay Retorno (s):", text_color="gray").grid(row=2, column=0, sticky="e", padx=10)
-    
-    entry_ret_delay = ctk.CTkEntry(frame_rune_safe, width=50, justify="center")
-    entry_ret_delay.grid(row=2, column=1, sticky="w")
-    entry_ret_delay.insert(0, str(BOT_SETTINGS['rune_return_delay']))
-
-    lbl_hint_ret = ctk.CTkLabel(frame_rune_safe, text="↳ Tempo esperando no Safe Spot após o perigo sumir.", 
-                                font=("Verdana", 8), text_color="#888888")
-    lbl_hint_ret.grid(row=3, column=0, columnspan=2, sticky="w", padx=20)
-
-    frame_pos = ctk.CTkFrame(tab_rune, fg_color="transparent")
-    frame_pos.pack(pady=0)
-    
-    lbl_work_pos = ctk.CTkLabel(frame_pos, text=f"Work: {BOT_SETTINGS['rune_work_pos']}", font=("Verdana", 9))
-    lbl_work_pos.grid(row=0, column=0, padx=5)
-    lbl_safe_pos = ctk.CTkLabel(frame_pos, text=f"Safe: {BOT_SETTINGS['rune_safe_pos']}", font=("Verdana", 9))
-    lbl_safe_pos.grid(row=0, column=1, padx=5)
-
-    def set_pos(tipo):
-        try:
-            x, y, z = get_player_pos(pm, base_addr)
-            if x == 0: return
-            
-            if tipo == "WORK":
-                BOT_SETTINGS['rune_work_pos'] = (x, y, z)
-                lbl_work_pos.configure(text=f"Work: {x},{y},{z}")
-            else:
-                BOT_SETTINGS['rune_safe_pos'] = (x, y, z)
-                lbl_safe_pos.configure(text=f"Safe: {x},{y},{z}")
-            save_config_file()
-        except: pass
-
-    ctk.CTkButton(frame_pos, text="Set Work", command=lambda: set_pos("WORK"), width=70, height=25, fg_color="#404040").grid(row=1, column=0, padx=5, pady=2)
-    ctk.CTkButton(frame_pos, text="Set Safe", command=lambda: set_pos("SAFE"), width=70, height=25, fg_color="#404040").grid(row=1, column=1, padx=5, pady=2)
-
+    # --- SAVE ---
     def save_rune():
         try:
             BOT_SETTINGS['rune_mana'] = int(entry_mana.get())
             BOT_SETTINGS['rune_hotkey'] = entry_hk.get().upper()
             BOT_SETTINGS['rune_hand'] = combo_hand.get()
-            BOT_SETTINGS['rune_return_delay'] = int(entry_ret_delay.get())
+            BOT_SETTINGS['rune_blank_id'] = 3147
+            
+            BOT_SETTINGS['rune_human_min'] = int(entry_human_min.get())
+            BOT_SETTINGS['rune_human_max'] = int(entry_human_max.get())
+            
             BOT_SETTINGS['rune_flee_delay'] = float(entry_flee.get())
+            BOT_SETTINGS['rune_return_delay'] = int(entry_ret_delay.get())
             BOT_SETTINGS['rune_movement'] = bool(switch_movement.get())
+            BOT_SETTINGS['auto_eat'] = bool(switch_eat.get())
+            BOT_SETTINGS['mana_train'] = bool(switch_train.get())
+            
             save_config_file()
             log("🔮 Rune Config salva!")
-        except: log("❌ Erro valores Rune.")
+        except:
+            log("❌ Erro ao salvar Rune.")
 
-    ctk.CTkButton(tab_rune, text="Salvar Rune", command=save_rune, fg_color="#2CC985").pack(side="bottom", pady=10, fill="x", padx=20)
-    
-    ctk.CTkButton(toplevel_settings, text="Fechar", command=on_settings_close, 
-                  fg_color="#202020", border_width=1, border_color="#404040", height=25).pack(side="bottom", pady=10)
+    ctk.CTkButton(tab_rune, text="Salvar Rune", command=save_rune, height=32, fg_color="#00A86B", hover_color="#008f5b").pack(side="bottom", fill="x", padx=20, pady=5)
     
     # ==========================================================================
     # 7. ABA CAVEBOT (INTERFACE COMPLETA)
