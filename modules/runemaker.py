@@ -99,6 +99,14 @@ def reequip_hand(pm, base_addr, item_id, target_slot_enum, container_idx=0):
         pos_to = packet.get_inventory_pos(target_slot_enum)
         packet.move_item(pm, pos_from, pos_to, item_id, 1)
         time.sleep(0.4)
+
+def get_target_id(pm, base_addr):
+    """Lê o ID do alvo atual na memória."""
+    try:
+        # Usa o OFFSET definido no config.py
+        return pm.read_int(base_addr + TARGET_ID_PTR)
+    except:
+        return 0
     
 def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe_callback=None, is_gm_callback=None, log_callback=None, eat_callback=None):
     
@@ -123,6 +131,8 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
     is_full_lock = False
     full_lock_time = 0
     FULL_COOLDOWN_SECONDS = 60 
+    last_combat_time = 0
+    COMBAT_COOLDOWN = 5
 
     # CONTROLE DE HUMANIZAÇÃO (DELAY)
     next_cast_time = 0
@@ -138,6 +148,25 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
             packet.stop(pm) 
             time.sleep(2)
             continue
+
+        # ======================================================================
+        # 🛡️ PROTEÇÃO DE BATALHA (SEGURANÇA)
+        # ======================================================================
+        current_target = get_target_id(pm, base_addr)
+        
+        if current_target != 0:
+            # Estamos atacando algo!
+            last_combat_time = time.time()
+            # Resetamos o timer de cast para não castar assim que a luta acabar
+            # next_cast_time = 0 
+            time.sleep(0.5)
+            continue # Pula o resto do loop (não come, não treina, não faz runa)
+            
+        # Se não estamos atacando, verificamos o cooldown
+        if time.time() - last_combat_time < COMBAT_COOLDOWN:
+            # Estamos no "buffer" de segurança pós-combate
+            time.sleep(0.5)
+            continue # Ainda perigoso, espera...
 
         # ======================================================================
         # LÓGICA DE COMIDA (AUTO EAT)

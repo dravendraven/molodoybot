@@ -83,6 +83,7 @@ BOT_SETTINGS = {
     # Loot
     "loot_containers": 2,
     "loot_dest": 0,
+    "loot_drop_food": False,
     
     # Fisher
     "fisher_min": 4,
@@ -782,35 +783,44 @@ def auto_loot_thread():
             # 1. Tenta Lootear
             did_loot = run_auto_loot(pm, base_addr, hwnd, 
                                    my_containers_count=BOT_SETTINGS['loot_containers'],
-                                   dest_container_index=BOT_SETTINGS['loot_dest'])
+                                   dest_container_index=BOT_SETTINGS['loot_dest'],
+                                   drop_food_if_full=BOT_SETTINGS.get('loot_drop_food', False))
             
             if did_loot:
-                if isinstance(did_loot, tuple) and did_loot[0] == "EAT":
-                    item_id = did_loot[1]
-                    food_name = foods_db.get_food_name(item_id)
-                    log(f"🍖 {food_name} comido(a) do corpo.")
-                    register_food_eaten(item_id) 
+                # --- CASOS COM DADOS (TUPLAS) ---
+                if isinstance(did_loot, tuple):
+                    action = did_loot[0]
+                    
+                    if action == "EAT":
+                        item_id = did_loot[1]
+                        food_name = foods_db.get_food_name(item_id)
+                        log(f"🍖 {food_name} comido(a) do corpo.")
+                        register_food_eaten(item_id)
 
-                if isinstance(did_loot, tuple) and did_loot[0] == "LOOT":
-                    _, item_id, count = did_loot
-                    gold_tracker.add_loot(item_id, count)
-                    log(f"💰 Loot: {count}x ID {item_id}")
+                    elif action == "DROP_FOOD":
+                        # 🔥 LÓGICA NOVA AQUI
+                        item_id = did_loot[1]
+                        food_name = foods_db.get_food_name(item_id)
+                        log(f"🗑️ Joguei {food_name} no chão (Full).")
 
+                    elif action == "LOOT":
+                        _, item_id, count = did_loot
+                        gold_tracker.add_loot(item_id, count)
+                        log(f"💰 Loot: {count}x ID {item_id}")
+
+                # --- CASOS DE STATUS (STRINGS) ---
                 elif did_loot == "FULL_BP_ALARM":
                     log("⚠️ BACKPACKS CHEIAS! Loot pausado.")
                     time.sleep(2) 
                 
-                elif did_loot == "EAT":
-                    log("🍖 Comida consumida.")
-                
                 elif did_loot == "EAT_FULL":
-                    pass 
+                    pass # Já tratado pelo DROP_FOOD, mas mantemos por segurança
                 
                 elif did_loot == "DROP":
-                    log("🗑️ Lixo jogado fora.")
+                    log("🗑️ Item dropado no chão.")
                 
-                elif did_loot == "BAG":
-                    log("🎒 Bag extra aberta.")
+                # elif did_loot == "BAG":
+                #     log("🎒 Bag extra aberta.")
                 
                 time.sleep(0.5)
                 continue
@@ -1375,12 +1385,28 @@ def open_settings():
     
     ctk.CTkLabel(tab_loot, text="(0 = Primeira BP, 1 = Segunda...)", font=("Verdana", 9), text_color="#555555").pack(pady=(0, 20))
 
+    # --- NOVO: SWITCH DROP FOOD ---
+    frame_loot_opts = ctk.CTkFrame(tab_loot, fg_color="transparent")
+    frame_loot_opts.pack(fill="x", padx=10, pady=5)
+
+    def toggle_drop_food(): pass # O valor é lido no save
+    
+    switch_drop_food = ctk.CTkSwitch(frame_loot_opts, text="Jogar Food no chão se Full", 
+                                     command=toggle_drop_food, font=("Verdana", 10), progress_color="#FFA500")
+    switch_drop_food.pack(anchor="center")
+    
+    # Carrega estado atual
+    if BOT_SETTINGS.get('loot_drop_food', False):
+        switch_drop_food.select()
+
     def save_loot():
         try:
             BOT_SETTINGS['loot_containers'] = int(entry_cont_count.get())
             BOT_SETTINGS['loot_dest'] = int(entry_dest_idx.get())
+            BOT_SETTINGS['loot_drop_food'] = bool(switch_drop_food.get())
+            
             save_config_file()
-            log(f"💰 Loot salvo: {BOT_SETTINGS['loot_containers']} BPs | Dest: {BOT_SETTINGS['loot_dest']}")
+            log(f"💰 Loot salvo: {BOT_SETTINGS['loot_containers']} BPs | Dest: {BOT_SETTINGS['loot_dest']} | Drop: {BOT_SETTINGS['loot_drop_food']}")
         except: log("❌ Use números inteiros.")
 
     ctk.CTkButton(tab_loot, text="Salvar Loot", command=save_loot, fg_color="#2CC985").pack(side="bottom", pady=10, fill="x", padx=20)
@@ -1486,7 +1512,7 @@ def open_settings():
     f_c1 = ctk.CTkFrame(frame_craft, fg_color="transparent")
     f_c1.pack(fill="x", padx=2, pady=2)
     
-    # Linha compacta: Mana | Hotkey | Mão
+    # Linha compacta: Ma| Hotkey | Mão
     ctk.CTkLabel(f_c1, text="Mana:", font=("Verdana", 10)).pack(side="left", padx=5)
     entry_mana = ctk.CTkEntry(f_c1, width=45, height=22, font=("Verdana", 10), justify="center")
     entry_mana.pack(side="left", padx=5)
@@ -2097,7 +2123,7 @@ widget = canvas.get_tk_widget()
 widget.pack(fill="both", expand=True, padx=1, pady=2)
 
 # LOG
-txt_log = ctk.CTkTextbox(main_frame, height=90, font=("Consolas", 11), fg_color="#151515", text_color="#00FF00", border_width=1)
+txt_log = ctk.CTkTextbox(main_frame, height=120, font=("Consolas", 11), fg_color="#151515", text_color="#00FF00", border_width=1)
 txt_log.pack(side="bottom", fill="x", padx=5, pady=5, expand=True)
 
 # ==============================================================================

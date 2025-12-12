@@ -105,7 +105,7 @@ def get_best_loot_destination(containers, my_containers_max_count, start_index=0
 # ==============================================================================
 # EXECUÇÃO DO AUTO LOOT
 # ==============================================================================
-def run_auto_loot(pm, base_addr, hwnd, my_containers_count=MY_CONTAINERS_COUNT, dest_container_index=DEST_CONTAINER_INDEX):
+def run_auto_loot(pm, base_addr, hwnd, my_containers_count=MY_CONTAINERS_COUNT, dest_container_index=DEST_CONTAINER_INDEX, drop_food_if_full=False):
     
     containers = scan_containers(pm, base_addr)
     limit_containers = int(my_containers_count)
@@ -147,12 +147,33 @@ def run_auto_loot(pm, base_addr, hwnd, my_containers_count=MY_CONTAINERS_COUNT, 
             # --- AUTO EAT ---
             if item.id in FOOD_IDS:
                 food_name = foods_db.get_food_name(item.id)
-                print(f"🍖 Comida no corpo: {food_name} (ID: {item.id})")
+                # print(f"🍖 Comida no corpo: {food_name}") # Opcional: Debug
+                
                 food_pos = packet.get_container_pos(cont.index, item.slot_index)
-                for i in range(item.count):
-                    packet.use_item(pm, food_pos, item.id)
-                    time.sleep(0.25)
-                    if is_player_full(pm, base_addr): return "EAT_FULL"
+                
+                # 1. Tenta comer uma vez
+                packet.use_item(pm, food_pos, item.id)
+                
+                # Pequeno delay para o servidor processar a mensagem de "You are full"
+                time.sleep(0.25)
+                
+                # 2. Verifica se encheu a barriga
+                if is_player_full(pm, base_addr):
+                    if drop_food_if_full:
+                        print(f"🤢 Barriga cheia! Descartando {food_name}...")
+                        
+                        # --- LÓGICA DE DROP (JOGAR NO CHÃO) ---
+                        px, py, pz = get_player_pos(pm, base_addr)
+                        pos_ground = {'x': px, 'y': py, 'z': pz}
+                        
+                        # Move do Corpo -> Chão
+                        packet.move_item(pm, food_pos, pos_ground, item.id, item.count)
+                        
+                        return ("DROP_FOOD", item.id, item.count)
+                    else:
+                        # Se a opção estiver desligada, apenas ignora
+                        return "EAT_FULL"
+
                 return ("EAT", item.id)
 
             # --- AUTO LOOT ---
