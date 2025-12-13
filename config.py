@@ -9,8 +9,8 @@ MY_PLAYER_NAME = "It is Molodoy"
 OFFSET_CONNECTION = 0x31C588
 
 # Integração Telegram
-TELEGRAM_TOKEN = "7238077578:AAELH9lr8dLGJqOE5mZlXmYkpH4fIHDAGAM"
-TELEGRAM_CHAT_ID = "452514119"
+TELEGRAM_TOKEN = "YOUR_TELEGRAM_TOKEN"
+TELEGRAM_CHAT_ID = "YOUR_TELEGRAM_CHAT_ID"
 
 # ==============================================================================
 # 1. CONFIGURAÇÕES PADRÃO
