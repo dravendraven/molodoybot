@@ -117,7 +117,7 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
         print(f"[{timestamp}] [RUNEMAKER] {text}")
         if log_callback: log_callback(f"[RUNE] {text}")
 
-    log_msg(f"Iniciado (Packet Mode + Hotkeys).")
+    log_msg(f"Iniciado.")
     
     hotkey_str = config.get('hotkey', 'F3')
     vk_hotkey = get_vk_code(hotkey_str)

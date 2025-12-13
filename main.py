@@ -529,10 +529,12 @@ def trainer_loop():
                         best = final_candidates[0]
                         if BOT_SETTINGS['debug_mode']: print(f"-> Melhor Candidato: {best['name']} (ID: {best['id']})")            
                         if best["id"] != current_target_id:
-                            log(f"⚔️ ATACANDO (Packet): {best['name']}")
-                            packet.attack(pm, base_addr, best["id"])
-                            
+                            log(f"⚔️ ATACANDO: {best['name']}")
+                            packet.attack(pm, base_addr, best["id"])               
                             current_target_id = best["id"]
+                            current_monitored_id = best["id"] 
+                            last_target_data = best.copy()
+                            monitor.start(best["id"], best["name"], best["hp"])
                             next_attack_time = 0
                             waiting_for_attack = False
                             time.sleep(0.5)
@@ -903,8 +905,7 @@ def runemaker_thread():
         if pm is None: time.sleep(1); continue
         if hwnd == 0: hwnd = win32gui.FindWindow("TibiaClient", None) or win32gui.FindWindow(None, "Tibia")
 
-        try:
-            
+        try:           
             
             cfg = {
                 'mana_req': BOT_SETTINGS['rune_mana'],
