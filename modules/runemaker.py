@@ -113,9 +113,9 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
     #if config is None: config = {}
 
     def get_cfg(key, default=None):
-        # Se config for uma função (lambda), chama ela para pegar os dados atuais
-        current_data = config() if callable(config) else (config or {})
-        return current_data.get(key, default)
+        if callable(config):
+            return config().get(key, default)
+        return config.get(key, default) if config else default
 
     def log_msg(text):
         timestamp = time.strftime("%H:%M:%S")
@@ -188,7 +188,7 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                     is_full_lock = False 
             
             if not is_full_lock:
-                is_hungry_func = config.get('check_hunger')
+                is_hungry_func = get_cfg('check_hunger')
                 if is_hungry_func and is_hungry_func():
                     try:
                         result = attempt_eat(pm, base_addr, hwnd)
@@ -218,13 +218,13 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
             
             try:
                 curr_mana = pm.read_int(base_addr + OFFSET_PLAYER_MANA)
-                mana_req = config.get('mana_req', 100)
+                mana_req = get_cfg('mana_req', 100)
                 
                 if curr_mana >= mana_req:
                     # 1. Se não tem timer definido, cria um
                     if next_cast_time == 0:
-                        h_min = config.get('human_min', 0)
-                        h_max = config.get('human_max', 0)
+                        h_min = get_cfg('human_min', 0)
+                        h_max = get_cfg('human_max', 0)
                         
                         if h_max > 0:
                             delay = random.uniform(h_min, h_max)
@@ -270,7 +270,7 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
             at_safe = (curr_pos[0] == safe_pos[0] and curr_pos[1] == safe_pos[1])
             if not at_safe:
                 if not is_fleeing_active:
-                    flee_delay = config.get('flee_delay', 0)
+                    flee_delay = get_cfg('flee_delay', 0)
                     if flee_delay > 0:
                         wait = random.uniform(flee_delay, flee_delay * 1.2)
                         log_msg(f"🚨 PERIGO! Reagindo em {wait:.1f}s...")
@@ -297,14 +297,14 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                 curr_mana = pm.read_int(base_addr + OFFSET_PLAYER_MANA)
             except: time.sleep(1); continue
 
-            mana_req = config.get('mana_req', 100)
+            mana_req = get_cfg('mana_req', 100)
 
             # >>> LÓGICA DE HUMANIZAÇÃO (BUFFER DE TEMPO) <<<
             if curr_mana >= mana_req:
                 # Se ainda não definimos um tempo de espera, define agora
                 if next_cast_time == 0:
-                    h_min = config.get('human_min', 0)
-                    h_max = config.get('human_max', 0)
+                    h_min = get_cfg('human_min', 0)
+                    h_max = get_cfg('human_max', 0)
                     
                     if h_max > 0:
                         delay = random.uniform(h_min, h_max)

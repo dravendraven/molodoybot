@@ -1033,7 +1033,6 @@ def runemaker_thread():
         if hwnd == 0: hwnd = win32gui.FindWindow("TibiaClient", None) or win32gui.FindWindow(None, "Tibia")
 
         try:           
-            
             runemaker_loop(pm, base_addr, hwnd, 
                            check_running=should_run, 
                            config=config_provider, # <--- MUDANÇA AQUI
@@ -1067,32 +1066,32 @@ def skill_monitor_loop():
                 pass
         time.sleep(1)
 
-def cavebot_thread():
-    global cavebot_manager
-    while bot_running:
-        if not is_connected: 
-            time.sleep(1); continue
+# def cavebot_thread():
+#     global cavebot_manager
+#     while bot_running:
+#         if not is_connected: 
+#             time.sleep(1); continue
         
-        # Inicializa se necessário
-        if cavebot_manager is None and pm is not None:
-            cavebot_manager = CavebotManager(pm, base_addr)
+#         # Inicializa se necessário
+#         if cavebot_manager is None and pm is not None:
+#             cavebot_manager = CavebotManager(pm, base_addr)
         
-        # Executa ciclo se manager existir
-        if cavebot_manager:
-            # Se estiver gravando, roda mesmo com switch desligado
-            if cavebot_manager.is_recording:
-                try:
-                    cavebot_manager.run_cycle()
-                except: pass
+#         # Executa ciclo se manager existir
+#         if cavebot_manager:
+#             # Se estiver gravando, roda mesmo com switch desligado
+#             if cavebot_manager.is_recording:
+#                 try:
+#                     cavebot_manager.run_cycle()
+#                 except: pass
             
-            # Se switch ligado, roda walker
-            elif switch_cavebot.get():
-                try:
-                    cavebot_manager.run_cycle()
-                except Exception as e:
-                    print(f"Cavebot: {e}")
+#             # Se switch ligado, roda walker
+#             elif switch_cavebot.get():
+#                 try:
+#                     cavebot_manager.run_cycle()
+#                 except Exception as e:
+#                     print(f"Cavebot: {e}")
                     
-        time.sleep(0.1) # 100ms para resposta rápida
+#         time.sleep(0.1) # 100ms para resposta rápida
 
 # ==============================================================================
 # 6. FUNÇÕES DA INTERFACE (CALLBACKS E JANELAS)
@@ -2319,7 +2318,7 @@ threading.Thread(target=regen_monitor_loop, daemon=True).start()
 threading.Thread(target=auto_fisher_thread, daemon=True).start()
 threading.Thread(target=runemaker_thread, daemon=True).start()
 threading.Thread(target=connection_watchdog, daemon=True).start()
-threading.Thread(target=cavebot_thread, daemon=True).start()
+# threading.Thread(target=cavebot_thread, daemon=True).start()
 
 update_stats_visibility()
 
