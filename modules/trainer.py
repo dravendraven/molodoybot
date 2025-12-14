@@ -10,8 +10,8 @@ from core.mouse_lock import acquire_mouse, release_mouse
 
 # Definições de Delay (Copiados do main.py original)
 SCAN_DELAY = 0.5
-HUMAN_DELAY_MIN = 1
-HUMAN_DELAY_MAX = 2
+# HUMAN_DELAY_MIN = 1
+# HUMAN_DELAY_MAX = 2
 
 def get_connected_char_name(pm, base_addr):
     """Lê o nome do personagem logado para evitar auto-target."""
@@ -65,8 +65,10 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
         if not get_cfg('is_safe', True): 
             time.sleep(0.5)
             continue 
-
-        # Carrega função de log e outras configs
+        
+        min_delay = get_cfg('min_delay', 1.0)
+        max_delay = get_cfg('max_delay', 2.0)
+        attack_range = get_cfg('range', 1) # Padrão 1 (Melee)
         log = get_cfg('log_callback', print)
         debug_mode = get_cfg('debug_mode', False)
         loot_enabled = get_cfg('loot_enabled', False)
@@ -107,7 +109,7 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
                         
                         dist_x = abs(my_x - cx)
                         dist_y = abs(my_y - cy)
-                        is_melee = (dist_x <= 1 and dist_y <= 1)
+                        is_in_range = (dist_x <= attack_range and dist_y <= attack_range)
                 
                         if debug_mode: print(f"Slot {i}: {name} (Vis:{vis} Z:{z} HP:{hp} Dist:({dist_x},{dist_y}))")
 
@@ -122,7 +124,7 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
                             
                             # Usa a lista dinâmica de targets
                             if any(t in name for t in targets_list):
-                                if is_melee and hp > 0:
+                                if is_in_range and hp > 0:
                                     if debug_mode: print(f"      -> CANDIDATO: HP:{hp} Dist:({dist_x},{dist_y})")
                                     valid_candidates.append({
                                         "id": c_id,
@@ -133,7 +135,7 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
                                         "abs_x": cx,
                                         "abs_y": cy,
                                         "z": z,
-                                        "is_melee": is_melee,
+                                        "is_in_range": is_in_range,
                                         "line": current_line
                                     })
                 except: continue
@@ -203,7 +205,7 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
 
                                 acquire_mouse()
                                 try:
-                                    time.sleep(1.5)
+                                    time.sleep(random.uniform(0.8, 1.2))
                                     ctrl_right_click_at(hwnd, click_x, click_y)
                                 finally:
                                     release_mouse()
@@ -242,7 +244,7 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
                 if len(final_candidates) > 0:
 
                     if next_attack_time == 0:
-                        delay = random.uniform(HUMAN_DELAY_MIN, HUMAN_DELAY_MAX) 
+                        delay = random.uniform(min_delay, max_delay)
                         next_attack_time = time.time() + delay 
                         #waiting_for_attack = True
                         log(f"⏳ Aguardando {delay:.2f}s para atacar...")   

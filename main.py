@@ -72,7 +72,12 @@ BOT_SETTINGS = {
     "telegram_chat_id": TELEGRAM_CHAT_ID, # Do config.py
     "vocation": "Knight",
     "debug_mode": False,
+
+    #trainer
     "ignore_first": False,
+    "trainer_min_delay": 1.0,
+    "trainer_max_delay": 2.0,
+    "trainer_range": 1, # 1 = Melee, 3+ = Distance
     
     # Listas
     "targets": list(TARGET_MONSTERS),
@@ -576,7 +581,11 @@ def start_trainer_thread():
         'loot_enabled': switch_loot.get(),
         
         # Passa a função de log da interface
-        'log_callback': log
+        'log_callback': log,
+
+        'min_delay': BOT_SETTINGS.get('trainer_min_delay', 1.0),
+        'max_delay': BOT_SETTINGS.get('trainer_max_delay', 2.0),
+        'range': BOT_SETTINGS.get('trainer_range', 1)
     }
 
     # Função para checar se o bot ainda deve rodar (stop kill)
@@ -1347,12 +1356,13 @@ def open_settings():
     tabview.pack(fill="both", expand=True, padx=10, pady=10)
     
     tab_geral  = tabview.add("Geral")
+    tab_trainer = tabview.add("Trainer")
     tab_alarm  = tabview.add("Alarme")
     tab_alvos  = tabview.add("Alvos") 
     tab_loot   = tabview.add("Loot")
     tab_fisher = tabview.add("Fisher")
     tab_rune   = tabview.add("Rune")
-    tab_cavebot = tabview.add("Cavebot")
+    #tab_cavebot = tabview.add("Cavebot")
 
     def create_grid_frame(parent):
         f = ctk.CTkFrame(parent, fg_color="transparent")
@@ -1388,16 +1398,16 @@ def open_settings():
     switch_debug.pack(anchor="w", pady=5)
     if BOT_SETTINGS['debug_mode']: switch_debug.select()
 
-    def on_ignore_toggle():
-        BOT_SETTINGS['ignore_first'] = bool(switch_ignore.get())
-        log(f"🛡️ Ignorar 1º: {BOT_SETTINGS['ignore_first']}")
+    # def on_ignore_toggle():
+    #     BOT_SETTINGS['ignore_first'] = bool(switch_ignore.get())
+    #     log(f"🛡️ Ignorar 1º: {BOT_SETTINGS['ignore_first']}")
 
-    switch_ignore = ctk.CTkSwitch(frame_switches, text="Ignorar 1º Monstro", command=on_ignore_toggle, progress_color="#FFA500")
-    switch_ignore.pack(anchor="w", pady=5)
-    if BOT_SETTINGS['ignore_first']: switch_ignore.select()
+    # switch_ignore = ctk.CTkSwitch(frame_switches, text="Ignorar 1º Monstro", command=on_ignore_toggle, progress_color="#FFA500")
+    # switch_ignore.pack(anchor="w", pady=5)
+    # if BOT_SETTINGS['ignore_first']: switch_ignore.select()
 
-    ctk.CTkLabel(frame_switches, text="   ↳ Ignora o primeiro alvo do battle ao atacar.", 
-                 font=("Verdana", 8), text_color="#777", justify="left").pack(anchor="w", pady=(0, 10))
+    # ctk.CTkLabel(frame_switches, text="   ↳ Ignora o primeiro alvo do battle ao atacar.", 
+    #              font=("Verdana", 8), text_color="#777", justify="left").pack(anchor="w", pady=(0, 10))
     
     def on_light_toggle():
         global full_light_enabled
@@ -1417,6 +1427,70 @@ def open_settings():
         log(f"⚙️ Geral salvo.")
 
     ctk.CTkButton(tab_geral, text="Salvar Geral", command=save_geral, fg_color="#2CC985").pack(side="bottom", pady=10, fill="x", padx=20)
+
+    # ABA TRAINER
+    frame_tr = ctk.CTkFrame(tab_trainer, fg_color="transparent")
+    frame_tr.pack(fill="x", pady=10)
+    
+    # Delay
+    ctk.CTkLabel(frame_tr, text="Delay de Ataque (s):", font=("Verdana", 12, "bold")).pack(anchor="w", padx=10)
+    
+    f_dely = ctk.CTkFrame(frame_tr, fg_color="transparent")
+    f_dely.pack(fill="x", padx=10, pady=5)
+    
+    ctk.CTkLabel(f_dely, text="Min:").pack(side="left")
+    entry_tr_min = ctk.CTkEntry(f_dely, width=50)
+    entry_tr_min.pack(side="left", padx=5)
+    entry_tr_min.insert(0, str(BOT_SETTINGS.get('trainer_min_delay', 1.0)))
+    
+    ctk.CTkLabel(f_dely, text="Max:").pack(side="left", padx=(10,0))
+    entry_tr_max = ctk.CTkEntry(f_dely, width=50)
+    entry_tr_max.pack(side="left", padx=5)
+    entry_tr_max.insert(0, str(BOT_SETTINGS.get('trainer_max_delay', 2.0)))
+    
+    # Range
+    ctk.CTkLabel(frame_tr, text="Distância de Ataque (SQM):", font=("Verdana", 12, "bold")).pack(anchor="w", padx=10, pady=(15,0))
+    
+    f_rng = ctk.CTkFrame(frame_tr, fg_color="transparent")
+    f_rng.pack(fill="x", padx=10, pady=5)
+    
+    entry_tr_range = ctk.CTkEntry(f_rng, width=50)
+    entry_tr_range.pack(side="left")
+    entry_tr_range.insert(0, str(BOT_SETTINGS.get('trainer_range', 1)))
+    
+    ctk.CTkLabel(f_rng, text="(1 = Melee / 3+ = Distance)", text_color="gray", font=("Verdana", 10)).pack(side="left", padx=10)
+
+    # --- IGNORAR 1º MONSTRO (MOVIDO DA GERAL) ---
+    ctk.CTkLabel(frame_tr, text="Lógica de Alvo:", font=("Verdana", 12, "bold")).pack(anchor="w", padx=10, pady=(15,0))
+    
+    frame_tr_ignore = ctk.CTkFrame(tab_trainer, fg_color="transparent")
+    frame_tr_ignore.pack(fill="x", padx=10, pady=10)
+
+    def on_ignore_toggle():
+        BOT_SETTINGS['ignore_first'] = bool(switch_ignore.get())
+        log(f"🛡️ Ignorar 1º: {BOT_SETTINGS['ignore_first']}")
+
+    switch_ignore = ctk.CTkSwitch(frame_tr_ignore, text="Ignorar 1º Monstro", command=on_ignore_toggle, progress_color="#FFA500")
+    switch_ignore.pack(anchor="w")
+    
+    if BOT_SETTINGS.get('ignore_first', False):
+        switch_ignore.select()
+
+    ctk.CTkLabel(frame_tr_ignore, text="   ↳ Ignora o primeiro alvo da lista (útil para Monk/Treino)", 
+                 font=("Verdana", 8), text_color="#777", justify="left").pack(anchor="w")
+
+    # Função de Salvar Específica (ou adicione na save_geral se preferir)
+    def save_trainer():
+        try:
+            BOT_SETTINGS['trainer_min_delay'] = float(entry_tr_min.get().replace(',', '.'))
+            BOT_SETTINGS['trainer_max_delay'] = float(entry_tr_max.get().replace(',', '.'))
+            BOT_SETTINGS['trainer_range'] = int(entry_tr_range.get())
+            save_config_file()
+            log("⚔️ Configurações do Trainer salvas!")
+        except:
+            log("❌ Erro nos valores do Trainer.")
+
+    ctk.CTkButton(tab_trainer, text="Salvar Trainer", command=save_trainer, fg_color="#2CC985").pack(side="bottom", pady=10, fill="x", padx=20)
 
     # 2. ABA ALARME
     frame_alarm = create_grid_frame(tab_alarm)
@@ -1743,164 +1817,164 @@ def open_settings():
     # 7. ABA CAVEBOT (INTERFACE COMPLETA)
     # ==========================================================================
     
-    # --- 1. CONTROLES DE GRAVAÇÃO ---
-    frame_cv_actions = ctk.CTkFrame(tab_cavebot, fg_color="transparent")
-    frame_cv_actions.pack(fill="x", pady=(5, 0), padx=5)
+    # # --- 1. CONTROLES DE GRAVAÇÃO ---
+    # frame_cv_actions = ctk.CTkFrame(tab_cavebot, fg_color="transparent")
+    # frame_cv_actions.pack(fill="x", pady=(5, 0), padx=5)
 
-    def refresh_waypoints_visual():
-        if not cavebot_manager: return
-        txt_waypoints.configure(state="normal")
-        txt_waypoints.delete("0.0", "end")
-        for i, wp in enumerate(cavebot_manager.waypoints):
-            # Mostra o tipo e a coordenada
-            line = f"{i:03d}: [{wp['type']}] {wp['x']}, {wp['y']}, {wp['z']}\n"
-            txt_waypoints.insert("end", line)
-        txt_waypoints.configure(state="disabled")
-        txt_waypoints.see("end")
+    # def refresh_waypoints_visual():
+    #     if not cavebot_manager: return
+    #     txt_waypoints.configure(state="normal")
+    #     txt_waypoints.delete("0.0", "end")
+    #     for i, wp in enumerate(cavebot_manager.waypoints):
+    #         # Mostra o tipo e a coordenada
+    #         line = f"{i:03d}: [{wp['type']}] {wp['x']}, {wp['y']}, {wp['z']}\n"
+    #         txt_waypoints.insert("end", line)
+    #     txt_waypoints.configure(state="disabled")
+    #     txt_waypoints.see("end")
 
-    def toggle_rec():
-        if not cavebot_manager: return
-        if cavebot_manager.is_recording:
-            cavebot_manager.stop_recording()
-            btn_rec.configure(text="● REC", fg_color="#303030", border_color="gray", border_width=1)
-            refresh_waypoints_visual()
-        else:
-            cavebot_manager.start_recording()
-            btn_rec.configure(text="■ STOP", fg_color="#FF5555", text_color="white", border_width=0)
+    # def toggle_rec():
+    #     if not cavebot_manager: return
+    #     if cavebot_manager.is_recording:
+    #         cavebot_manager.stop_recording()
+    #         btn_rec.configure(text="● REC", fg_color="#303030", border_color="gray", border_width=1)
+    #         refresh_waypoints_visual()
+    #     else:
+    #         cavebot_manager.start_recording()
+    #         btn_rec.configure(text="■ STOP", fg_color="#FF5555", text_color="white", border_width=0)
 
-    def clear_wp():
-        if cavebot_manager:
-            cavebot_manager.clear()
-            refresh_waypoints_visual()
+    # def clear_wp():
+    #     if cavebot_manager:
+    #         cavebot_manager.clear()
+    #         refresh_waypoints_visual()
             
-    # Botões Principais (REC / LIMPAR)
-    btn_rec = ctk.CTkButton(frame_cv_actions, text="● REC", command=toggle_rec, 
-                            width=60, fg_color="#303030", border_color="gray", border_width=1)
-    btn_rec.pack(side="left", padx=2)
+    # # Botões Principais (REC / LIMPAR)
+    # btn_rec = ctk.CTkButton(frame_cv_actions, text="● REC", command=toggle_rec, 
+    #                         width=60, fg_color="#303030", border_color="gray", border_width=1)
+    # btn_rec.pack(side="left", padx=2)
 
-    ctk.CTkButton(frame_cv_actions, text="Limpar", command=clear_wp, 
-                  width=50, fg_color="#404040").pack(side="right", padx=2)
+    # ctk.CTkButton(frame_cv_actions, text="Limpar", command=clear_wp, 
+    #               width=50, fg_color="#404040").pack(side="right", padx=2)
 
-    # --- 2. BOTÕES DE TIPOS ESPECIAIS (NOVO) ---
-    frame_cv_types = ctk.CTkFrame(tab_cavebot, fg_color="transparent")
-    frame_cv_types.pack(fill="x", pady=2, padx=5)
+    # # --- 2. BOTÕES DE TIPOS ESPECIAIS (NOVO) ---
+    # frame_cv_types = ctk.CTkFrame(tab_cavebot, fg_color="transparent")
+    # frame_cv_types.pack(fill="x", pady=2, padx=5)
 
-    def add_special_wp(wp_type):
-        if not pm or not cavebot_manager: return
-        x, y, z = get_player_pos(pm, base_addr)
-        if x == 0: return
+    # def add_special_wp(wp_type):
+    #     if not pm or not cavebot_manager: return
+    #     x, y, z = get_player_pos(pm, base_addr)
+    #     if x == 0: return
         
-        # Adiciona o ponto na posição atual do jogador
-        cavebot_manager.add_waypoint(wp_type, x, y, z)
-        refresh_waypoints_visual()
+    #     # Adiciona o ponto na posição atual do jogador
+    #     cavebot_manager.add_waypoint(wp_type, x, y, z)
+    #     refresh_waypoints_visual()
         
-        # Feedback visual rápido (pisca o botão ou log)
-        log(f"➕ {wp_type} adicionado em {x},{y},{z}")
+    #     # Feedback visual rápido (pisca o botão ou log)
+    #     log(f"➕ {wp_type} adicionado em {x},{y},{z}")
 
-    # Botões pequenos para inserir ações manuais
-    ctk.CTkButton(frame_cv_types, text="+ Node", width=60, height=20, fg_color="#404040", 
-                  command=lambda: add_special_wp("NODE")).pack(side="left", padx=2)
+    # # Botões pequenos para inserir ações manuais
+    # ctk.CTkButton(frame_cv_types, text="+ Node", width=60, height=20, fg_color="#404040", 
+    #               command=lambda: add_special_wp("NODE")).pack(side="left", padx=2)
                   
-    ctk.CTkButton(frame_cv_types, text="+ Rope", width=60, height=20, fg_color="#A54EF9", 
-                  command=lambda: add_special_wp("ROPE")).pack(side="left", padx=2)
+    # ctk.CTkButton(frame_cv_types, text="+ Rope", width=60, height=20, fg_color="#A54EF9", 
+    #               command=lambda: add_special_wp("ROPE")).pack(side="left", padx=2)
                   
-    ctk.CTkButton(frame_cv_types, text="+ Ladder", width=60, height=20, fg_color="#E0E000", text_color="black",
-                  command=lambda: add_special_wp("LADDER")).pack(side="left", padx=2)
+    # ctk.CTkButton(frame_cv_types, text="+ Ladder", width=60, height=20, fg_color="#E0E000", text_color="black",
+    #               command=lambda: add_special_wp("LADDER")).pack(side="left", padx=2)
 
-    # --- 3. LISTA VISUAL ---
-    frame_list = ctk.CTkFrame(tab_cavebot)
-    frame_list.pack(fill="both", expand=True, padx=5, pady=5)
+    # # --- 3. LISTA VISUAL ---
+    # frame_list = ctk.CTkFrame(tab_cavebot)
+    # frame_list.pack(fill="both", expand=True, padx=5, pady=5)
     
-    txt_waypoints = ctk.CTkTextbox(frame_list, font=("Consolas", 10), activate_scrollbars=True)
-    txt_waypoints.pack(fill="both", expand=True)
-    txt_waypoints.configure(state="disabled")
+    # txt_waypoints = ctk.CTkTextbox(frame_list, font=("Consolas", 10), activate_scrollbars=True)
+    # txt_waypoints.pack(fill="both", expand=True)
+    # txt_waypoints.configure(state="disabled")
 
-    # --- 4. GERENCIADOR DE ARQUIVOS ---
-    ctk.CTkLabel(tab_cavebot, text="Salvar/Carregar", font=("Verdana", 9, "bold")).pack(pady=(5, 0))
+    # # --- 4. GERENCIADOR DE ARQUIVOS ---
+    # ctk.CTkLabel(tab_cavebot, text="Salvar/Carregar", font=("Verdana", 9, "bold")).pack(pady=(5, 0))
 
-    frame_cv_file = ctk.CTkFrame(tab_cavebot, fg_color="transparent")
-    frame_cv_file.pack(fill="x", padx=5)
+    # frame_cv_file = ctk.CTkFrame(tab_cavebot, fg_color="transparent")
+    # frame_cv_file.pack(fill="x", padx=5)
 
-    entry_filename = ctk.CTkEntry(frame_cv_file, placeholder_text="nome_script", height=25)
-    entry_filename.pack(side="left", fill="x", expand=True, padx=(0, 5))
+    # entry_filename = ctk.CTkEntry(frame_cv_file, placeholder_text="nome_script", height=25)
+    # entry_filename.pack(side="left", fill="x", expand=True, padx=(0, 5))
 
-    # Funções de Arquivo
-    def refresh_script_list_ui():
-        # Limpa lista visual de arquivos
-        for widget in scroll_scripts.winfo_children():
-            widget.destroy()
+    # # Funções de Arquivo
+    # def refresh_script_list_ui():
+    #     # Limpa lista visual de arquivos
+    #     for widget in scroll_scripts.winfo_children():
+    #         widget.destroy()
         
-        # Cria pasta se não existir
-        directory = "cavebot_scripts"
-        if not os.path.exists(directory): os.makedirs(directory)
+    #     # Cria pasta se não existir
+    #     directory = "cavebot_scripts"
+    #     if not os.path.exists(directory): os.makedirs(directory)
         
-        files = [f for f in os.listdir(directory) if f.endswith(".json")]
+    #     files = [f for f in os.listdir(directory) if f.endswith(".json")]
         
-        if not files:
-            ctk.CTkLabel(scroll_scripts, text="Nenhum script salvo.", text_color="gray").pack(pady=5)
-            return
+    #     if not files:
+    #         ctk.CTkLabel(scroll_scripts, text="Nenhum script salvo.", text_color="gray").pack(pady=5)
+    #         return
 
-        for f in files:
-            display_name = f.replace(".json", "")
-            # Botão para selecionar o script
-            btn = ctk.CTkButton(scroll_scripts, text=f"📄 {display_name}", 
-                                fg_color="#303030", hover_color="#404040",
-                                height=25, anchor="w",
-                                command=lambda name=display_name: select_script(name))
-            btn.pack(fill="x", pady=1, padx=2)
+    #     for f in files:
+    #         display_name = f.replace(".json", "")
+    #         # Botão para selecionar o script
+    #         btn = ctk.CTkButton(scroll_scripts, text=f"📄 {display_name}", 
+    #                             fg_color="#303030", hover_color="#404040",
+    #                             height=25, anchor="w",
+    #                             command=lambda name=display_name: select_script(name))
+    #         btn.pack(fill="x", pady=1, padx=2)
 
-    def select_script(name):
-        entry_filename.delete(0, "end")
-        entry_filename.insert(0, name)
+    # def select_script(name):
+    #     entry_filename.delete(0, "end")
+    #     entry_filename.insert(0, name)
 
-    def save_cv():
-        if not cavebot_manager: return
-        fname = entry_filename.get().strip()
-        if not fname: 
-            log("⚠️ Digite um nome para salvar.")
-            return
+    # def save_cv():
+    #     if not cavebot_manager: return
+    #     fname = entry_filename.get().strip()
+    #     if not fname: 
+    #         log("⚠️ Digite um nome para salvar.")
+    #         return
             
-        if cavebot_manager.save_waypoints(fname):
-            log(f"💾 Script '{fname}' salvo!")
-            refresh_script_list_ui()
+    #     if cavebot_manager.save_waypoints(fname):
+    #         log(f"💾 Script '{fname}' salvo!")
+    #         refresh_script_list_ui()
 
-    def load_cv():
-        if not cavebot_manager: return
-        fname = entry_filename.get().strip()
-        if not fname: return
+    # def load_cv():
+    #     if not cavebot_manager: return
+    #     fname = entry_filename.get().strip()
+    #     if not fname: return
         
-        if cavebot_manager.load_waypoints(fname):
-            refresh_waypoints_visual() # <--- Função que estava faltando, agora existe!
-            log(f"📂 Carregado: {fname}")
+    #     if cavebot_manager.load_waypoints(fname):
+    #         refresh_waypoints_visual() # <--- Função que estava faltando, agora existe!
+    #         log(f"📂 Carregado: {fname}")
 
-    def delete_cv():
-        fname = entry_filename.get().strip()
-        if not fname: return
-        path = os.path.join("cavebot_scripts", fname + ".json")
-        try:
-            if os.path.exists(path):
-                os.remove(path)
-                log(f"🗑️ Script '{fname}' deletado.")
-                entry_filename.delete(0, "end")
-                refresh_script_list_ui()
-        except: pass
+    # def delete_cv():
+    #     fname = entry_filename.get().strip()
+    #     if not fname: return
+    #     path = os.path.join("cavebot_scripts", fname + ".json")
+    #     try:
+    #         if os.path.exists(path):
+    #             os.remove(path)
+    #             log(f"🗑️ Script '{fname}' deletado.")
+    #             entry_filename.delete(0, "end")
+    #             refresh_script_list_ui()
+    #     except: pass
 
-    # Botões Save/Load
-    ctk.CTkButton(frame_cv_file, text="Salvar", command=save_cv, width=60, fg_color="#2CC985").pack(side="right", padx=2)
-    ctk.CTkButton(frame_cv_file, text="Carregar", command=load_cv, width=60, fg_color="#4EA5F9").pack(side="right", padx=2)
+    # # Botões Save/Load
+    # ctk.CTkButton(frame_cv_file, text="Salvar", command=save_cv, width=60, fg_color="#2CC985").pack(side="right", padx=2)
+    # ctk.CTkButton(frame_cv_file, text="Carregar", command=load_cv, width=60, fg_color="#4EA5F9").pack(side="right", padx=2)
 
-    # --- 4. LISTA DE ARQUIVOS SALVOS ---
-    ctk.CTkLabel(tab_cavebot, text="Scripts Disponíveis:", text_color="gray", font=("Verdana", 9)).pack(anchor="w", padx=5, pady=(5,0))
+    # # --- 4. LISTA DE ARQUIVOS SALVOS ---
+    # ctk.CTkLabel(tab_cavebot, text="Scripts Disponíveis:", text_color="gray", font=("Verdana", 9)).pack(anchor="w", padx=5, pady=(5,0))
     
-    scroll_scripts = ctk.CTkScrollableFrame(tab_cavebot, height=100, fg_color="#1A1A1A")
-    scroll_scripts.pack(fill="x", padx=5, pady=5)
+    # scroll_scripts = ctk.CTkScrollableFrame(tab_cavebot, height=100, fg_color="#1A1A1A")
+    # scroll_scripts.pack(fill="x", padx=5, pady=5)
 
-    # Botão Delete
-    ctk.CTkButton(tab_cavebot, text="Apagar Selecionado", command=delete_cv, 
-                  fg_color="#FF5555", hover_color="#990000", height=20, font=("Verdana", 9)).pack(pady=2)
+    # # Botão Delete
+    # ctk.CTkButton(tab_cavebot, text="Apagar Selecionado", command=delete_cv, 
+    #               fg_color="#FF5555", hover_color="#990000", height=20, font=("Verdana", 9)).pack(pady=2)
 
-    # Inicializa a lista de arquivos ao abrir a aba
-    refresh_script_list_ui()
+    # # Inicializa a lista de arquivos ao abrir a aba
+    # refresh_script_list_ui()
 
 def toggle_graph():
     global is_graph_visible
@@ -2109,8 +2183,8 @@ switch_fisher.grid(row=1, column=1, sticky="w", padx=(10, 0), pady=5)
 switch_runemaker = ctk.CTkSwitch(frame_controls, text="Runemaker", progress_color="#A54EF9", font=("Verdana", 11))
 switch_runemaker.grid(row=2, column=0, sticky="w", padx=(20, 0), pady=5)
 
-switch_cavebot = ctk.CTkSwitch(frame_controls, text="Cavebot", progress_color="#00C000", font=("Verdana", 11))
-switch_cavebot.grid(row=2, column=1, sticky="w", padx=(10, 0), pady=5)
+# switch_cavebot = ctk.CTkSwitch(frame_controls, text="Cavebot", progress_color="#00C000", font=("Verdana", 11))
+# switch_cavebot.grid(row=2, column=1, sticky="w", padx=(10, 0), pady=5)
 
 # STATS
 frame_stats = ctk.CTkFrame(main_frame, fg_color="transparent", border_color="#303030", border_width=1, corner_radius=6)
