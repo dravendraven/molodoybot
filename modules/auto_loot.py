@@ -105,24 +105,30 @@ def get_best_loot_destination(containers, my_containers_max_count, start_index=0
 # ==============================================================================
 # EXECUÇÃO DO AUTO LOOT
 # ==============================================================================
-def run_auto_loot(pm, base_addr, hwnd, my_containers_count=MY_CONTAINERS_COUNT, dest_container_index=DEST_CONTAINER_INDEX, drop_food_if_full=False):
+def run_auto_loot(pm, base_addr, hwnd, config=None):
+    
+    # --- HELPER DE CONFIGURAÇÃO ---
+    def get_cfg(key, default):
+        if callable(config):
+            return config().get(key, default)
+        return default
+
+    # Lê as configs atuais
+    my_containers_count = get_cfg('loot_containers', 2)
+    dest_container_index = get_cfg('loot_dest', 0)
+    drop_food_if_full = get_cfg('loot_drop_food', False)
     
     containers = scan_containers(pm, base_addr)
     limit_containers = int(my_containers_count)
     
-    # Se não tem containers de monstros abertos, não faz nada
     if len(containers) <= limit_containers: return None
 
-    # 1. Calcula onde vamos jogar o loot ANTES de processar
-    # Isso evita calcular para cada item, assumindo que vai caber um por vez
     dest_idx, dest_slot = get_best_loot_destination(containers, limit_containers, dest_container_index)
-    
     is_backpack_full = (dest_idx is None)
 
-    # Itera sobre containers de Monstros (os que estão além do meu limite)
     for cont in containers[limit_containers:]:
         
-        # --- LÓGICA DE BAG (ABRIR BAGS DENTRO DE CORPOS) ---
+        # --- LÓGICA DE BAG ---
         has_bag_to_open = False
         bag_item_ref = None
         useful_items_count = 0
@@ -146,73 +152,49 @@ def run_auto_loot(pm, base_addr, hwnd, my_containers_count=MY_CONTAINERS_COUNT, 
             
             # --- AUTO EAT ---
             if item.id in FOOD_IDS:
-                food_name = foods_db.get_food_name(item.id)
-                # print(f"🍖 Comida no corpo: {food_name}") # Opcional: Debug
-                
                 food_pos = packet.get_container_pos(cont.index, item.slot_index)
                 
-                # 1. Tenta comer uma vez
+                # Tenta comer
                 packet.use_item(pm, food_pos, item.id)
-                
-                # Pequeno delay para o servidor processar a mensagem de "You are full"
                 time.sleep(0.25)
                 
-                # 2. Verifica se encheu a barriga
+                # Verifica se está full e a config de drop
                 if is_player_full(pm, base_addr):
                     if drop_food_if_full:
+                        food_name = foods_db.get_food_name(item.id)
                         print(f"🤢 Barriga cheia! Descartando {food_name}...")
                         
-                        # --- LÓGICA DE DROP (JOGAR NO CHÃO) ---
                         px, py, pz = get_player_pos(pm, base_addr)
                         pos_ground = {'x': px, 'y': py, 'z': pz}
-                        
-                        # Move do Corpo -> Chão
                         packet.move_item(pm, food_pos, pos_ground, item.id, item.count)
-                        
                         return ("DROP_FOOD", item.id, item.count)
                     else:
-                        # Se a opção estiver desligada, apenas ignora
                         return "EAT_FULL"
 
                 return ("EAT", item.id)
 
             # --- AUTO LOOT ---
             if item.id in LOOT_IDS:
-                
-                # VERIFICAÇÃO DE FULL
                 if is_backpack_full:
                     print(f"⚠️ BACKPACK CHEIA! Não consigo pegar {item.id}")
-                    # Retorna um código especial para a GUI talvez tocar um alarme
                     return "FULL_BP_ALARM"
 
                 print(f"💰 Loot: ID {item.id} -> BP {dest_idx} Slot {dest_slot}")
                 
                 pos_from = packet.get_container_pos(cont.index, item.slot_index)
-                
-                # AQUI ESTÁ A MÁGICA: Joga no slot calculado dinamicamente
                 pos_to = packet.get_container_pos(dest_idx, dest_slot)
                 
                 packet.move_item(pm, pos_from, pos_to, item.id, item.count)
-                
                 time.sleep(0.3)
-                
-                # Truque: Incrementa o slot localmente para tentar pegar o próximo item
-                # Se a BP encher nesse meio tempo, na próxima iteração o get_best recalcula
                 dest_slot += 1
-                
                 return ("LOOT", item.id, item.count)
 
             # --- AUTO DROP ---
             if item.id in DROP_IDS:
                 print(f"🗑️ Drop: ID {item.id}")
                 pos_from = packet.get_container_pos(cont.index, item.slot_index)
-                # Precisamos da posição do player para jogar no chão
-                # Import circular evitado se passarmos coordenadas ou lermos aqui rápido
-                # Vamos assumir que drop é menos prioritário ou usar import dentro da func
-                
                 px, py, pz = get_player_pos(pm, base_addr)
                 pos_ground = {'x': px, 'y': py, 'z': pz}
-                
                 packet.move_item(pm, pos_from, pos_ground, item.id, item.count)
                 time.sleep(0.3)
                 return "DROP"

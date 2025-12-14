@@ -110,7 +110,12 @@ def get_target_id(pm, base_addr):
     
 def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe_callback=None, is_gm_callback=None, log_callback=None, eat_callback=None):
     
-    if config is None: config = {}
+    #if config is None: config = {}
+
+    def get_cfg(key, default=None):
+        # Se config for uma função (lambda), chama ela para pegar os dados atuais
+        current_data = config() if callable(config) else (config or {})
+        return current_data.get(key, default)
 
     def log_msg(text):
         timestamp = time.strftime("%H:%M:%S")
@@ -119,14 +124,12 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
 
     log_msg(f"Iniciado.")
     
-    hotkey_str = config.get('hotkey', 'F3')
-    vk_hotkey = get_vk_code(hotkey_str)
-    
+    # hotkey_str = config.get('hotkey', 'F3')
+    # vk_hotkey = get_vk_code(hotkey_str)
     last_danger_time = 0 
-    return_delay = config.get('return_delay', 300)
+    # return_delay = config.get('return_delay', 300)
     is_fleeing_active = False 
     last_mana_log = 0
-
     # CONTROLE DE "BARRIGA CHEIA"
     is_full_lock = False
     full_lock_time = 0
@@ -139,6 +142,14 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
 
     while True:
         if check_running and not check_running(): return
+
+        # Agora lemos as configs DENTRO do loop
+        hotkey_str = get_cfg('hotkey', 'F3')
+        vk_hotkey = get_vk_code(hotkey_str)
+        mana_req = get_cfg('mana_req', 100)
+        return_delay = get_cfg('return_delay', 300)
+        flee_delay = get_cfg('flee_delay', 0)
+        # ----------------------------------------
         
         is_safe = is_safe_callback() if is_safe_callback else True
         is_gm = is_gm_callback() if is_gm_callback else False
@@ -171,7 +182,7 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
         # ======================================================================
         # LÓGICA DE COMIDA (AUTO EAT)
         # ======================================================================
-        if config.get('auto_eat', False):
+        if get_cfg('auto_eat', False):
             if is_full_lock:
                 if time.time() - full_lock_time > FULL_COOLDOWN_SECONDS:
                     is_full_lock = False 
@@ -197,7 +208,7 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
         # ======================================================================
         # MANA TRAIN
         # ======================================================================
-        if config.get('mana_train', False):
+        if get_cfg('mana_train', False):
             if not is_safe:
                 if time.time() - last_mana_log > 5:
                     log_msg("⚠️ Alarme ativo! Mana Train pausado.")
@@ -243,11 +254,10 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
         # RUNEMAKER (Movimento + Runas)
         # ======================================================================
         
-        safe_pos = config.get('safe_pos', (0,0,0))
-        work_pos = config.get('work_pos', (0,0,0))
-
+        safe_pos = get_cfg('safe_pos', (0,0,0))
+        work_pos = get_cfg('work_pos', (0,0,0))
         coords_defined = (safe_pos[0] != 0)
-        movement_allowed = config.get('enable_movement', False) 
+        movement_allowed = get_cfg('enable_movement', False)
         has_coords = coords_defined and movement_allowed
         
         target_destination = None
@@ -308,7 +318,7 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                 if time.time() >= next_cast_time:
                     log_msg(f"⚡ Mana ok ({curr_mana}). Fabricando...")
                     
-                    hand_mode = config.get('hand_mode', 'RIGHT')
+                    hand_mode = get_cfg('hand_mode', 'RIGHT')
                     hands_to_use = []
                     if hand_mode == "BOTH": hands_to_use = [SLOT_LEFT, SLOT_RIGHT]
                     elif hand_mode == "LEFT": hands_to_use = [SLOT_LEFT]
@@ -321,9 +331,8 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                         
                         # === LIMPEZA DE MÃO ===
                         unequipped_item_id = unequip_hand(pm, base_addr, slot_enum)
-                        
-                        # === BUSCA DA BLANK RUNE ===
-                        blank_data = find_item_in_containers(pm, base_addr, config.get('blank_id', 3147))
+                        blank_id = get_cfg('blank_id', 3147)
+                        blank_data = find_item_in_containers(pm, base_addr, blank_id)
                         
                         if not blank_data:
                             log_msg(f"⚠️ Sem Blanks na BP! (Ou não encontrada)")
@@ -334,7 +343,7 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                         # Move Blank -> Mão
                         pos_from = packet.get_container_pos(blank_data['container_index'], blank_data['slot_index'])
                         pos_to = packet.get_inventory_pos(slot_enum)
-                        packet.move_item(pm, pos_from, pos_to, config.get('blank_id', 3147), 1)
+                        packet.move_item(pm, pos_from, pos_to, blank_id, 1)
                         
                         active_runes.append({
                             "hand_pos": pos_to, 
@@ -361,7 +370,7 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                                  rune_id_to_move = detected_id
                              else:
                                  log_msg(f"⚠️ Erro: ID não detectado na mão! Usando Blank padrão.")
-                                 rune_id_to_move = config.get('blank_id', 3147)
+                                 rune_id_to_move = blank_id
 
                              # 2. Devolve Runa para Backpack
                              pos_dest = packet.get_container_pos(info['origin_idx'], 0)

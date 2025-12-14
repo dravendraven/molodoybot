@@ -35,6 +35,8 @@ from core.input_core import ctrl_right_click_at
 from core import packet
 from core.cavebot_core import *
 from database import foods_db
+from modules.trainer import trainer_loop
+from modules.alarm import alarm_loop
 #import corpses
 
 # ==============================================================================
@@ -313,332 +315,431 @@ def connection_watchdog():
         
         time.sleep(1)
 
-def trainer_loop():
+# def trainer_loop():
+#     hwnd = 0
+#     current_monitored_id = 0
+#     last_target_data = None 
+#     next_attack_time = 0       
+#     waiting_for_attack = False
+
+#     while bot_running:
+#         if not is_connected: time.sleep(1); continue
+#         if not switch_trainer.get(): time.sleep(1); continue
+#         if pm is None: time.sleep(1); continue
+#         if hwnd == 0: hwnd = win32gui.FindWindow("TibiaClient", None) or win32gui.FindWindow(None, "Tibia")
+#         if not is_safe_to_bot: time.sleep(0.5); continue 
+
+#         try:  
+#             current_name = get_connected_char_name()
+#             if not current_name: 
+#                 time.sleep(0.5); continue
+            
+#             target_addr = base_addr + TARGET_ID_PTR
+#             list_start = base_addr + TARGET_ID_PTR + REL_FIRST_ID
+#             my_x, my_y, my_z = get_player_pos(pm, base_addr)
+#             if my_z == 0: 
+#                 time.sleep(0.2)
+#                 continue
+
+#             # 2. SCAN: MAPEAR O CAMPO DE BATALHA
+#             valid_candidates = []
+#             visual_line_count = 0 
+
+#             if BOT_SETTINGS['debug_mode']: print(f"\n--- INÍCIO DO SCAN (Meu Z: {my_z}) ---")
+            
+#             for i in range(MAX_CREATURES):
+#                 slot = list_start + (i * STEP_SIZE)
+#                 try:
+#                     c_id = pm.read_int(slot)
+#                     if c_id > 0:
+#                         raw = pm.read_string(slot + OFFSET_NAME, 32)
+#                         name = raw.split('\x00')[0].strip()
+#                         vis = pm.read_int(slot + OFFSET_VISIBLE)
+#                         z = pm.read_int(slot + OFFSET_Z)
+#                         cx = pm.read_int(slot + OFFSET_X)
+#                         cy = pm.read_int(slot + OFFSET_Y)
+#                         hp = pm.read_int(slot + OFFSET_HP)
+                        
+#                         dist_x = abs(my_x - cx)
+#                         dist_y = abs(my_y - cy)
+#                         is_melee = (dist_x <= 1 and dist_y <= 1)
+                
+#                         if BOT_SETTINGS['debug_mode']: print(f"Slot {i}: {name} (Vis:{vis} Z:{z} HP:{hp} Dist:({dist_x},{dist_y}))")
+
+#                         if name == current_name: continue
+
+#                         is_on_battle_list = (vis == 1 and z == my_z)
+
+#                         if is_on_battle_list:
+#                             if BOT_SETTINGS['debug_mode']: print(f"   [LINHA {visual_line_count}] -> {name} (ID: {c_id})")
+#                             current_line = visual_line_count
+#                             visual_line_count += 1 
+                            
+#                             if any(t in name for t in BOT_SETTINGS['targets']):
+#                                 if is_melee and hp > 0:
+#                                     if BOT_SETTINGS['debug_mode']: print(f"      -> CANDIDATO: HP:{hp} Dist:({dist_x},{dist_y})")
+#                                     valid_candidates.append({
+#                                         "id": c_id,
+#                                         "name": name,
+#                                         "hp": hp,
+#                                         "dist_x": dist_x,
+#                                         "dist_y": dist_y,
+#                                         "abs_x": cx,
+#                                         "abs_y": cy,
+#                                         "z": z,
+#                                         "is_melee": is_melee,
+#                                         "line": current_line
+#                                     })
+#                 except: continue
+
+#             if BOT_SETTINGS['debug_mode']:
+#                 print(f"--- FIM DO SCAN (Total Linhas: {visual_line_count}) ---\n")
+#                 print("--- CANDIDATOS VÁLIDOS ---")
+#                 print(f"Valid Candidates:")
+#                 print(f"Candidato 1: {valid_candidates[0] if len(valid_candidates) > 0 else 'Nenhum'}")
+#                 print(f"Candidato 2: {valid_candidates[1] if len(valid_candidates) > 1 else 'Nenhum'}")
+#                 print("-------------------------")
+#                 print("---- TOMADA DE DECISÃO ----")
+
+#             current_target_id = pm.read_int(target_addr)
+#             should_attack_new = False
+
+#             # Cenário A: Já estou atacando alguém
+#             if current_target_id != 0:
+#                 if BOT_SETTINGS['debug_mode']: print(f"Atacando ID: {current_target_id}")
+#                 target_data = next((c for c in valid_candidates if c["id"] == current_target_id), None)
+#                 if BOT_SETTINGS['debug_mode']: print(f"-> Target Data: {target_data}")
+                
+#                 if target_data:
+#                     waiting_for_attack = False 
+#                     next_attack_time = 0       
+#                     last_target_data = target_data.copy()
+#                     if current_target_id != current_monitored_id:
+#                         monitor.start(current_target_id, target_data["name"], target_data["hp"])
+#                         current_monitored_id = current_target_id
+#                         if BOT_SETTINGS['debug_mode']: print(f"--> Iniciando monitoramento em {target_data['name']} (ID: {current_target_id})")
+#                     else:
+#                         monitor.update(target_data["hp"])
+#                         if BOT_SETTINGS['debug_mode']: print(f"--> Atualizando monitoramento em {target_data['name']} (HP: {target_data['hp']})")
+#                 else:
+#                     if BOT_SETTINGS['debug_mode']: print("-> Alvo inválido (morto/fora de alcance).")
+#                     pass
+
+#            # --- CENÁRIO B: O ALVO SUMIU (MORREU OU PAREI DE ATACAR?) ---
+#             elif current_target_id == 0 and current_monitored_id != 0:
+#                 target_still_alive = False
+#                 if last_target_data:
+#                     for m in valid_candidates:
+#                         if m["id"] == last_target_data["id"]:
+#                             target_still_alive = True
+#                             break
+                
+#                 if target_still_alive:
+#                     log("🛑 Ataque interrompido (Monstro ainda vivo).")
+#                     monitor.stop_and_report()
+#                     current_monitored_id = 0
+#                     last_target_data = None
+#                     should_attack_new = True 
+                
+#                 else:
+#                     log("💀 Alvo eliminado (Confirmado).")
+                    
+#                     if last_target_data and switch_loot.get():
+#                         dx = last_target_data["abs_x"] - my_x
+#                         dy = last_target_data["abs_y"] - my_y
+                        
+#                         if abs(dx) <= 1 and abs(dy) <= 1 and last_target_data["z"] == my_z:
+
+#                             # # 1. Descobre o ID do corpo pelo Nome do monstro morto
+#                             # monster_name = last_target_data["name"]
+#                             # corpse_id = corpses.get_corpse_id(monster_name)
+                            
+#                             # if corpse_id > 0:
+#                             #     log(f"🔪 Abrindo corpo de {monster_name} (Packet ID: {corpse_id})...")
+                                
+#                             #     # 2. Prepara a Posição Absoluta (Mundo)
+#                             #     target_pos = {
+#                             #         'x': last_target_data["abs_x"], 
+#                             #         'y': last_target_data["abs_y"], 
+#                             #         'z': last_target_data["z"]
+#                             #     }
+                                
+#                             #     # 3. Envia o Pacote Use Item (0x82)
+#                             #     # stack_pos=1: Assume que o corpo é o primeiro item acima do chão (Stack 0 = Ground)
+#                             #     time.sleep(1.5)
+#                             #     packet.use_item(pm, target_pos, corpse_id, stack_pos=1)                              
+#                             #     # Pequena pausa para o servidor processar e abrir o container
+#                             #     # time.sleep(0.5)
+#                             #     # packet.use_item(pm, target_pos, corpse_id, stack_pos=2)
+#                             #     time.sleep(0.8)
+                                
+#                             # else:
+#                             #     log(f"⚠️ ID do corpo de '{monster_name}' não configurado em corpses.py!")
+
+#                             gv = get_game_view(pm, base_addr)
+#                             if gv:
+#                                 click_x, click_y = get_screen_coord(gv, dx, dy, hwnd)
+#                                 log(f"🔪 Abrindo corpo em ({dx}, {dy})...")
+
+#                                 acquire_mouse()
+#                                 try:
+#                                     time.sleep(1.5)
+#                                     ctrl_right_click_at(hwnd, click_x, click_y)
+#                                 finally:
+#                                     release_mouse()
+#                                 time.sleep(0.8) 
+#                             else:
+#                                 log("❌ Erro ao calcular GameView.")
+                    
+#                     elif last_target_data and not switch_loot.get():
+#                         log("ℹ️ Auto Loot desligado. Ignorando corpo.")
+
+#                     monitor.stop_and_report()
+#                     current_monitored_id = 0
+#                     last_target_data = None 
+#                     should_attack_new = True
+
+#             # Cenário C: Não estou atacando ninguém
+#             else:
+#                 if BOT_SETTINGS['debug_mode']: print("Não estou atacando ninguém.")
+#                 if current_monitored_id != 0:
+#                     monitor.stop_and_report()
+#                     current_monitored_id = 0
+#                     if BOT_SETTINGS['debug_mode']: print("--> Monitoramento finalizado.")
+#                 should_attack_new = True
+
+#             # 4. AÇÃO FINAL
+#             if should_attack_new:
+#                 final_candidates = valid_candidates
+
+#                 if BOT_SETTINGS['ignore_first']:
+#                     if len(valid_candidates) >= 2:
+#                         final_candidates = [valid_candidates[1]]
+#                     else:
+#                         final_candidates = []
+                
+#                 if BOT_SETTINGS['debug_mode']: print("Decidido: Atacar novo alvo.")
+#                 if len(final_candidates) > 0:
+
+#                     if next_attack_time == 0:
+#                         delay = random.uniform(HUMAN_DELAY_MIN, HUMAN_DELAY_MAX) 
+#                         next_attack_time = time.time() + delay 
+#                         waiting_for_attack = True
+#                         log(f"⏳ Aguardando {delay:.2f}s para atacar...")   
+
+#                     if time.time() >= next_attack_time:
+#                         best = final_candidates[0]
+#                         if BOT_SETTINGS['debug_mode']: print(f"-> Melhor Candidato: {best['name']} (ID: {best['id']})")            
+#                         if best["id"] != current_target_id:
+#                             log(f"⚔️ ATACANDO: {best['name']}")
+#                             packet.attack(pm, base_addr, best["id"])               
+#                             current_target_id = best["id"]
+#                             current_monitored_id = best["id"] 
+#                             last_target_data = best.copy()
+#                             monitor.start(best["id"], best["name"], best["hp"])
+#                             next_attack_time = 0
+#                             waiting_for_attack = False
+#                             time.sleep(0.5)
+#                     #         log(f"⚔️ ATACANDO: {best['name']} (Linha {best['line']})")
+#                         pass
+
+#             if BOT_SETTINGS['debug_mode']: print("---- FIM DA ITERAÇÃO ----")
+#             time.sleep(SCAN_DELAY)
+
+#         except Exception as e:
+#             print(f"[ERRO LOOP] {e}")
+#             time.sleep(1)
+
+def start_trainer_thread():
+    """
+    Thread Wrapper para o Trainer.
+    Cria a ponte de configuração em tempo real entre o Main e o Módulo.
+    """
     hwnd = 0
-    current_monitored_id = 0
-    last_target_data = None 
-    next_attack_time = 0       
-    waiting_for_attack = False
-
-    while bot_running:
-        if not is_connected: time.sleep(1); continue
-        if not switch_trainer.get(): time.sleep(1); continue
-        if pm is None: time.sleep(1); continue
-        if hwnd == 0: hwnd = win32gui.FindWindow("TibiaClient", None) or win32gui.FindWindow(None, "Tibia")
-        if not is_safe_to_bot: time.sleep(0.5); continue 
-
-        try:  
-            current_name = get_connected_char_name()
-            if not current_name: 
-                time.sleep(0.5); continue
-            
-            target_addr = base_addr + TARGET_ID_PTR
-            list_start = base_addr + TARGET_ID_PTR + REL_FIRST_ID
-            my_x, my_y, my_z = get_player_pos(pm, base_addr)
-            if my_z == 0: 
-                time.sleep(0.2)
-                continue
-
-            # 2. SCAN: MAPEAR O CAMPO DE BATALHA
-            valid_candidates = []
-            visual_line_count = 0 
-
-            if BOT_SETTINGS['debug_mode']: print(f"\n--- INÍCIO DO SCAN (Meu Z: {my_z}) ---")
-            
-            for i in range(MAX_CREATURES):
-                slot = list_start + (i * STEP_SIZE)
-                try:
-                    c_id = pm.read_int(slot)
-                    if c_id > 0:
-                        raw = pm.read_string(slot + OFFSET_NAME, 32)
-                        name = raw.split('\x00')[0].strip()
-                        vis = pm.read_int(slot + OFFSET_VISIBLE)
-                        z = pm.read_int(slot + OFFSET_Z)
-                        cx = pm.read_int(slot + OFFSET_X)
-                        cy = pm.read_int(slot + OFFSET_Y)
-                        hp = pm.read_int(slot + OFFSET_HP)
-                        
-                        dist_x = abs(my_x - cx)
-                        dist_y = abs(my_y - cy)
-                        is_melee = (dist_x <= 1 and dist_y <= 1)
-                
-                        if BOT_SETTINGS['debug_mode']: print(f"Slot {i}: {name} (Vis:{vis} Z:{z} HP:{hp} Dist:({dist_x},{dist_y}))")
-
-                        if name == current_name: continue
-
-                        is_on_battle_list = (vis == 1 and z == my_z)
-
-                        if is_on_battle_list:
-                            if BOT_SETTINGS['debug_mode']: print(f"   [LINHA {visual_line_count}] -> {name} (ID: {c_id})")
-                            current_line = visual_line_count
-                            visual_line_count += 1 
-                            
-                            if any(t in name for t in BOT_SETTINGS['targets']):
-                                if is_melee and hp > 0:
-                                    if BOT_SETTINGS['debug_mode']: print(f"      -> CANDIDATO: HP:{hp} Dist:({dist_x},{dist_y})")
-                                    valid_candidates.append({
-                                        "id": c_id,
-                                        "name": name,
-                                        "hp": hp,
-                                        "dist_x": dist_x,
-                                        "dist_y": dist_y,
-                                        "abs_x": cx,
-                                        "abs_y": cy,
-                                        "z": z,
-                                        "is_melee": is_melee,
-                                        "line": current_line
-                                    })
-                except: continue
-
-            if BOT_SETTINGS['debug_mode']:
-                print(f"--- FIM DO SCAN (Total Linhas: {visual_line_count}) ---\n")
-                print("--- CANDIDATOS VÁLIDOS ---")
-                print(f"Valid Candidates:")
-                print(f"Candidato 1: {valid_candidates[0] if len(valid_candidates) > 0 else 'Nenhum'}")
-                print(f"Candidato 2: {valid_candidates[1] if len(valid_candidates) > 1 else 'Nenhum'}")
-                print("-------------------------")
-                print("---- TOMADA DE DECISÃO ----")
-
-            current_target_id = pm.read_int(target_addr)
-            should_attack_new = False
-
-            # Cenário A: Já estou atacando alguém
-            if current_target_id != 0:
-                if BOT_SETTINGS['debug_mode']: print(f"Atacando ID: {current_target_id}")
-                target_data = next((c for c in valid_candidates if c["id"] == current_target_id), None)
-                if BOT_SETTINGS['debug_mode']: print(f"-> Target Data: {target_data}")
-                
-                if target_data:
-                    waiting_for_attack = False 
-                    next_attack_time = 0       
-                    last_target_data = target_data.copy()
-                    if current_target_id != current_monitored_id:
-                        monitor.start(current_target_id, target_data["name"], target_data["hp"])
-                        current_monitored_id = current_target_id
-                        if BOT_SETTINGS['debug_mode']: print(f"--> Iniciando monitoramento em {target_data['name']} (ID: {current_target_id})")
-                    else:
-                        monitor.update(target_data["hp"])
-                        if BOT_SETTINGS['debug_mode']: print(f"--> Atualizando monitoramento em {target_data['name']} (HP: {target_data['hp']})")
-                else:
-                    if BOT_SETTINGS['debug_mode']: print("-> Alvo inválido (morto/fora de alcance).")
-                    pass
-
-           # --- CENÁRIO B: O ALVO SUMIU (MORREU OU PAREI DE ATACAR?) ---
-            elif current_target_id == 0 and current_monitored_id != 0:
-                target_still_alive = False
-                if last_target_data:
-                    for m in valid_candidates:
-                        if m["id"] == last_target_data["id"]:
-                            target_still_alive = True
-                            break
-                
-                if target_still_alive:
-                    log("🛑 Ataque interrompido (Monstro ainda vivo).")
-                    monitor.stop_and_report()
-                    current_monitored_id = 0
-                    last_target_data = None
-                    should_attack_new = True 
-                
-                else:
-                    log("💀 Alvo eliminado (Confirmado).")
-                    
-                    if last_target_data and switch_loot.get():
-                        dx = last_target_data["abs_x"] - my_x
-                        dy = last_target_data["abs_y"] - my_y
-                        
-                        if abs(dx) <= 1 and abs(dy) <= 1 and last_target_data["z"] == my_z:
-
-                            # # 1. Descobre o ID do corpo pelo Nome do monstro morto
-                            # monster_name = last_target_data["name"]
-                            # corpse_id = corpses.get_corpse_id(monster_name)
-                            
-                            # if corpse_id > 0:
-                            #     log(f"🔪 Abrindo corpo de {monster_name} (Packet ID: {corpse_id})...")
-                                
-                            #     # 2. Prepara a Posição Absoluta (Mundo)
-                            #     target_pos = {
-                            #         'x': last_target_data["abs_x"], 
-                            #         'y': last_target_data["abs_y"], 
-                            #         'z': last_target_data["z"]
-                            #     }
-                                
-                            #     # 3. Envia o Pacote Use Item (0x82)
-                            #     # stack_pos=1: Assume que o corpo é o primeiro item acima do chão (Stack 0 = Ground)
-                            #     time.sleep(1.5)
-                            #     packet.use_item(pm, target_pos, corpse_id, stack_pos=1)                              
-                            #     # Pequena pausa para o servidor processar e abrir o container
-                            #     # time.sleep(0.5)
-                            #     # packet.use_item(pm, target_pos, corpse_id, stack_pos=2)
-                            #     time.sleep(0.8)
-                                
-                            # else:
-                            #     log(f"⚠️ ID do corpo de '{monster_name}' não configurado em corpses.py!")
-
-                            gv = get_game_view(pm, base_addr)
-                            if gv:
-                                click_x, click_y = get_screen_coord(gv, dx, dy, hwnd)
-                                log(f"🔪 Abrindo corpo em ({dx}, {dy})...")
-
-                                acquire_mouse()
-                                try:
-                                    time.sleep(1.5)
-                                    ctrl_right_click_at(hwnd, click_x, click_y)
-                                finally:
-                                    release_mouse()
-                                time.sleep(0.8) 
-                            else:
-                                log("❌ Erro ao calcular GameView.")
-                    
-                    elif last_target_data and not switch_loot.get():
-                        log("ℹ️ Auto Loot desligado. Ignorando corpo.")
-
-                    monitor.stop_and_report()
-                    current_monitored_id = 0
-                    last_target_data = None 
-                    should_attack_new = True
-
-            # Cenário C: Não estou atacando ninguém
-            else:
-                if BOT_SETTINGS['debug_mode']: print("Não estou atacando ninguém.")
-                if current_monitored_id != 0:
-                    monitor.stop_and_report()
-                    current_monitored_id = 0
-                    if BOT_SETTINGS['debug_mode']: print("--> Monitoramento finalizado.")
-                should_attack_new = True
-
-            # 4. AÇÃO FINAL
-            if should_attack_new:
-                final_candidates = valid_candidates
-
-                if BOT_SETTINGS['ignore_first']:
-                    if len(valid_candidates) >= 2:
-                        final_candidates = [valid_candidates[1]]
-                    else:
-                        final_candidates = []
-                
-                if BOT_SETTINGS['debug_mode']: print("Decidido: Atacar novo alvo.")
-                if len(final_candidates) > 0:
-
-                    if next_attack_time == 0:
-                        delay = random.uniform(HUMAN_DELAY_MIN, HUMAN_DELAY_MAX) 
-                        next_attack_time = time.time() + delay 
-                        waiting_for_attack = True
-                        log(f"⏳ Aguardando {delay:.2f}s para atacar...")   
-
-                    if time.time() >= next_attack_time:
-                        best = final_candidates[0]
-                        if BOT_SETTINGS['debug_mode']: print(f"-> Melhor Candidato: {best['name']} (ID: {best['id']})")            
-                        if best["id"] != current_target_id:
-                            log(f"⚔️ ATACANDO: {best['name']}")
-                            packet.attack(pm, base_addr, best["id"])               
-                            current_target_id = best["id"]
-                            current_monitored_id = best["id"] 
-                            last_target_data = best.copy()
-                            monitor.start(best["id"], best["name"], best["hp"])
-                            next_attack_time = 0
-                            waiting_for_attack = False
-                            time.sleep(0.5)
-                    #         log(f"⚔️ ATACANDO: {best['name']} (Linha {best['line']})")
-                        pass
-
-            if BOT_SETTINGS['debug_mode']: print("---- FIM DA ITERAÇÃO ----")
-            time.sleep(SCAN_DELAY)
-
-        except Exception as e:
-            print(f"[ERRO LOOP] {e}")
-            time.sleep(1)
-
-def alarm_loop():
-    global is_safe_to_bot, is_gm_detected, gm_found
-    last_alert = 0
     
-    while bot_running:
-        if not is_connected:
-            time.sleep(1)
-            continue
-
-        if not switch_alarm.get():
-            if not is_safe_to_bot:
-                log("🔔 Alarme desativado manualmente. Retomando rotinas.")
-                is_gm_detected = False 
-                is_safe_to_bot = True
-            time.sleep(1)
-            continue
-            
-        if pm is None:
-            time.sleep(1); continue
-            
-        try:
-            current_name = get_connected_char_name()
-            first = base_addr + TARGET_ID_PTR + REL_FIRST_ID
-            my_x, my_y, my_z = get_player_pos(pm, base_addr)
+    # --- CONFIG PROVIDER ---
+    # Essa função é executada pelo trainer.py a cada ciclo.
+    # Ela captura o estado ATUAL dos botões e variáveis globais.
+    config_provider = lambda: {
+        # Lê o estado do botão (Switch) em tempo real
+        'enabled': switch_trainer.get(),
         
-            danger = False
-            d_name = ""
-            
-            for i in range(MAX_CREATURES):
-                slot = first + (i * STEP_SIZE)
-                try:
-                    if pm.read_int(slot) > 0:
-                        vis = pm.read_int(slot + OFFSET_VISIBLE)
-                        cz = pm.read_int(slot + OFFSET_Z)
+        # Lê a variável de segurança controlada pelo Alarme
+        'is_safe': is_safe_to_bot, 
+        
+        # Lê as configurações salvas/editadas no menu
+        'targets': BOT_SETTINGS['targets'],
+        'ignore_first': BOT_SETTINGS['ignore_first'],
+        'debug_mode': BOT_SETTINGS['debug_mode'],
+        
+        # Lê o botão de loot para saber se deve abrir corpos
+        'loot_enabled': switch_loot.get(),
+        
+        # Passa a função de log da interface
+        'log_callback': log
+    }
 
-                        is_z_valid = False
-                        if BOT_SETTINGS['alarm_floor'] == "Padrão":
-                            is_z_valid = (cz == my_z)
-                        elif BOT_SETTINGS['alarm_floor'] == "Superior (+1)":
-                            is_z_valid = (cz == my_z or cz == my_z - 1)
-                        elif BOT_SETTINGS['alarm_floor'] == "Inferior (-1)":
-                            is_z_valid = (cz == my_z or cz == my_z + 1)
-                        elif BOT_SETTINGS['alarm_floor'] == "Todos (Raio-X)":
-                            is_z_valid = (abs(cz - my_z) <= 1)
-                        else: 
-                            is_z_valid = (cz == my_z)
+    # Função para checar se o bot ainda deve rodar (stop kill)
+    check_running = lambda: bot_running and is_connected
 
-                        if vis != 0 and is_z_valid:
-                            raw = pm.read_string(slot + OFFSET_NAME, 32)
-                            name = raw.split('\x00')[0].strip()
-                            if name == current_name: continue
-
-                            if name.startswith("GM ") or name.startswith("CM ") or name.startswith("God "):
-                                danger = True
-                                gm_found = True
-                                d_name = f"GAMEMASTER {name}"
-                                break 
-                            
-                            is_safe = any(s in name for s in BOT_SETTINGS['safe'])
-                            
-                            if not is_safe:
-                                cx = pm.read_int(slot + OFFSET_X)
-                                cy = pm.read_int(slot + OFFSET_Y)
-                                dist = max(abs(my_x - cx), abs(my_y - cy))
-                                
-                                if dist <= BOT_SETTINGS['alarm_range']:
-                                    danger = True
-                                    d_name = f"{name} ({dist} SQM)"
-                                    break 
-                except: continue
-                
-            if danger:
-                is_safe_to_bot = False 
-                is_gm_detected = gm_found
-                log(f"⚠️ PERIGO: {d_name}!")
-                if gm_found: 
-                    winsound.Beep(2000, 1000) 
-                else:
-                    winsound.Beep(1000, 500)
-                
-                if (time.time() - last_alert) > 60:
-                    send_telegram(f"PERIGO! {d_name} aproximou-se!")
-                    last_alert = time.time()
-            else: 
-                is_safe_to_bot = True 
-                is_gm_detected = False
-
-            time.sleep(0.5)
-        except Exception as e: 
-            print(f"Erro Alarm: {e}")
+    while bot_running:
+        if not check_running(): 
             time.sleep(1)
+            continue
+            
+        if pm is None: 
+            time.sleep(1)
+            continue
+            
+        if hwnd == 0: 
+            hwnd = win32gui.FindWindow("TibiaClient", None) or win32gui.FindWindow(None, "Tibia")
+
+        try:
+            # Chama a função principal do módulo novo
+            trainer_loop(pm, base_addr, hwnd, monitor, check_running, config_provider)
+            
+            # Se a função retornar (ex: desconectou), espera um pouco antes de tentar de novo
+            time.sleep(1)
+            
+        except Exception as e:
+            print(f"Trainer Thread Crash: {e}")
+            time.sleep(5)
+
+# def alarm_loop():
+#     global is_safe_to_bot, is_gm_detected, gm_found
+#     last_alert = 0
+    
+#     while bot_running:
+#         if not is_connected:
+#             time.sleep(1)
+#             continue
+
+#         if not switch_alarm.get():
+#             if not is_safe_to_bot:
+#                 log("🔔 Alarme desativado manualmente. Retomando rotinas.")
+#                 is_gm_detected = False 
+#                 is_safe_to_bot = True
+#             time.sleep(1)
+#             continue
+            
+#         if pm is None:
+#             time.sleep(1); continue
+            
+#         try:
+#             current_name = get_connected_char_name()
+#             first = base_addr + TARGET_ID_PTR + REL_FIRST_ID
+#             my_x, my_y, my_z = get_player_pos(pm, base_addr)
+        
+#             danger = False
+#             d_name = ""
+            
+#             for i in range(MAX_CREATURES):
+#                 slot = first + (i * STEP_SIZE)
+#                 try:
+#                     if pm.read_int(slot) > 0:
+#                         vis = pm.read_int(slot + OFFSET_VISIBLE)
+#                         cz = pm.read_int(slot + OFFSET_Z)
+
+#                         is_z_valid = False
+#                         if BOT_SETTINGS['alarm_floor'] == "Padrão":
+#                             is_z_valid = (cz == my_z)
+#                         elif BOT_SETTINGS['alarm_floor'] == "Superior (+1)":
+#                             is_z_valid = (cz == my_z or cz == my_z - 1)
+#                         elif BOT_SETTINGS['alarm_floor'] == "Inferior (-1)":
+#                             is_z_valid = (cz == my_z or cz == my_z + 1)
+#                         elif BOT_SETTINGS['alarm_floor'] == "Todos (Raio-X)":
+#                             is_z_valid = (abs(cz - my_z) <= 1)
+#                         else: 
+#                             is_z_valid = (cz == my_z)
+
+#                         if vis != 0 and is_z_valid:
+#                             raw = pm.read_string(slot + OFFSET_NAME, 32)
+#                             name = raw.split('\x00')[0].strip()
+#                             if name == current_name: continue
+
+#                             if name.startswith("GM ") or name.startswith("CM ") or name.startswith("God "):
+#                                 danger = True
+#                                 gm_found = True
+#                                 d_name = f"GAMEMASTER {name}"
+#                                 break 
+                            
+#                             is_safe = any(s in name for s in BOT_SETTINGS['safe'])
+                            
+#                             if not is_safe:
+#                                 cx = pm.read_int(slot + OFFSET_X)
+#                                 cy = pm.read_int(slot + OFFSET_Y)
+#                                 dist = max(abs(my_x - cx), abs(my_y - cy))
+                                
+#                                 if dist <= BOT_SETTINGS['alarm_range']:
+#                                     danger = True
+#                                     d_name = f"{name} ({dist} SQM)"
+#                                     break 
+#                 except: continue
+                
+#             if danger:
+#                 is_safe_to_bot = False 
+#                 is_gm_detected = gm_found
+#                 log(f"⚠️ PERIGO: {d_name}!")
+#                 if gm_found: 
+#                     winsound.Beep(2000, 1000) 
+#                 else:
+#                     winsound.Beep(1000, 500)
+                
+#                 if (time.time() - last_alert) > 60:
+#                     send_telegram(f"PERIGO! {d_name} aproximou-se!")
+#                     last_alert = time.time()
+#             else: 
+#                 is_safe_to_bot = True 
+#                 is_gm_detected = False
+
+#             time.sleep(0.5)
+#         except Exception as e: 
+#             print(f"Erro Alarm: {e}")
+#             time.sleep(1)
+
+def start_alarm_thread():
+    """
+    Thread Wrapper para o Alarme.
+    Conecta o módulo independente às variáveis globais do Main.
+    """
+    
+    # Callbacks: Funções que o módulo pode chamar para alterar coisas aqui no Main
+    def set_safe(val): 
+        global is_safe_to_bot
+        is_safe_to_bot = val
+        
+    def set_gm(val): 
+        global is_gm_detected
+        is_gm_detected = val
+    
+    callbacks = {
+        'set_safe': set_safe,
+        'set_gm': set_gm,
+        'telegram': send_telegram,
+        'log': log
+    }
+
+    # Config Provider: Lê os valores da GUI a cada ciclo
+    alarm_cfg = lambda: {
+        'enabled': switch_alarm.get(),
+        'safe_list': BOT_SETTINGS['safe'], # Lista de amigos
+        'range': BOT_SETTINGS['alarm_range'],
+        'floor': BOT_SETTINGS['alarm_floor']
+    }
+
+    # Checagem de execução
+    check_run = lambda: bot_running and is_connected
+
+    while bot_running:
+        if not check_run(): time.sleep(1); continue
+        if pm is None: time.sleep(1); continue
+
+        try:
+            # Inicia o loop do módulo
+            alarm_loop(pm, base_addr, check_run, alarm_cfg, callbacks)
+        except Exception as e:
+            print(f"Alarm Thread Crash: {e}")
+            time.sleep(5)
 
 def regen_monitor_loop():
     global pm, base_addr, bot_running, is_connected
@@ -761,32 +862,23 @@ def regen_monitor_loop():
 def auto_loot_thread():
     """Thread dedicada para verificar, coletar loot e organizar."""
     hwnd = 0
+
+    config_provider = lambda: {
+        'loot_containers': BOT_SETTINGS['loot_containers'],
+        'loot_dest': BOT_SETTINGS['loot_dest'],
+        'loot_drop_food': BOT_SETTINGS.get('loot_drop_food', False)
+    }
+
     while bot_running:
-        if not is_connected:
-            time.sleep(1)
-            continue
-
-        if not switch_loot.get():
-            time.sleep(1)
-            continue
-
-        if not is_safe_to_bot:
-            time.sleep(1)
-            continue
-
-        if pm is None:
-            time.sleep(1)
-            continue
-            
-        if hwnd == 0:
-            hwnd = win32gui.FindWindow("TibiaClient", None) or win32gui.FindWindow(None, "Tibia")
+        if not is_connected: time.sleep(1); continue
+        if not switch_loot.get(): time.sleep(1); continue
+        if not is_safe_to_bot: time.sleep(1); continue
+        if pm is None: time.sleep(1); continue   
+        if hwnd == 0: hwnd = win32gui.FindWindow("TibiaClient", None) or win32gui.FindWindow(None, "Tibia")
         
         try:
             # 1. Tenta Lootear
-            did_loot = run_auto_loot(pm, base_addr, hwnd, 
-                                   my_containers_count=BOT_SETTINGS['loot_containers'],
-                                   dest_container_index=BOT_SETTINGS['loot_dest'],
-                                   drop_food_if_full=BOT_SETTINGS.get('loot_drop_food', False))
+            did_loot = run_auto_loot(pm, base_addr, hwnd, config=config_provider)
             
             if did_loot:
                 # --- CASOS COM DADOS (TUPLAS) ---
@@ -846,6 +938,16 @@ def auto_fisher_thread():
     def should_fish():
         return bot_running and is_connected and switch_fisher.get() and is_safe_to_bot
 
+    # --- CONFIG PROVIDER (O SEGREDO) ---
+    # Essa função "empacota" as configurações atuais do BOT_SETTINGS.
+    # O Fisher vai chamar ela a cada ciclo para saber se você mudou algo.
+    config_provider = lambda: {
+        'min_attempts': BOT_SETTINGS.get('fisher_min', 4),
+        'max_attempts': BOT_SETTINGS.get('fisher_max', 6),
+        'check_cap': BOT_SETTINGS.get('fisher_check_cap', True),
+        'min_cap_val': BOT_SETTINGS.get('fisher_min_cap', 6.0), # Valor padrão 6.0
+    }
+
     while bot_running:
         if not should_fish():
             time.sleep(1)
@@ -859,13 +961,12 @@ def auto_fisher_thread():
             hwnd = win32gui.FindWindow("TibiaClient", None) or win32gui.FindWindow(None, "Tibia")
 
         try:
-            current_range = (BOT_SETTINGS['fisher_min'], BOT_SETTINGS['fisher_max'])
-            
+            # Chamamos o loop passando o provider em vez dos valores fixos
             fishing_loop(pm, base_addr, hwnd, 
                          check_running=should_fish, 
                          log_callback=log,
                          debug_hud_callback=update_fisher_hud,
-                         max_attempts_range=current_range) 
+                         config=config_provider) # <--- AQUI
             
             time.sleep(1)
             
@@ -899,6 +1000,23 @@ def runemaker_thread():
     def on_eat_callback(item_id):
         register_food_eaten(item_id)
 
+    config_provider = lambda: {
+        'mana_req': BOT_SETTINGS['rune_mana'],
+        'hotkey': BOT_SETTINGS['rune_hotkey'],
+        'blank_id': BOT_SETTINGS['rune_blank_id'],
+        'hand_mode': BOT_SETTINGS['rune_hand'],
+        'work_pos': BOT_SETTINGS['rune_work_pos'],
+        'safe_pos': BOT_SETTINGS['rune_safe_pos'],
+        'return_delay': BOT_SETTINGS['rune_return_delay'],
+        'flee_delay': BOT_SETTINGS['rune_flee_delay'],
+        'auto_eat': BOT_SETTINGS['auto_eat'], 
+        'check_hunger': check_hunger_state, # Função passada dentro da config
+        'mana_train': BOT_SETTINGS['mana_train'],
+        'enable_movement': BOT_SETTINGS.get('rune_movement', False),
+        'human_min': BOT_SETTINGS.get('rune_human_min', 0),
+        'human_max': BOT_SETTINGS.get('rune_human_max', 0),
+    }
+
     while bot_running:
         if not should_run():
             time.sleep(1); continue
@@ -907,30 +1025,13 @@ def runemaker_thread():
 
         try:           
             
-            cfg = {
-                'mana_req': BOT_SETTINGS['rune_mana'],
-                'hotkey': BOT_SETTINGS['rune_hotkey'],
-                'blank_id': BOT_SETTINGS['rune_blank_id'],
-                'hand_mode': BOT_SETTINGS['rune_hand'],
-                'work_pos': BOT_SETTINGS['rune_work_pos'],
-                'safe_pos': BOT_SETTINGS['rune_safe_pos'],
-                'return_delay': BOT_SETTINGS['rune_return_delay'],
-                'flee_delay': BOT_SETTINGS['rune_flee_delay'],
-                'auto_eat': BOT_SETTINGS['auto_eat'], 
-                'check_hunger': check_hunger_state, 
-                'mana_train': BOT_SETTINGS['mana_train'],
-                'enable_movement': BOT_SETTINGS.get('rune_movement', False),
-                'human_min': BOT_SETTINGS.get('rune_human_min', 0),
-                'human_max': BOT_SETTINGS.get('rune_human_max', 0),
-            }
-            
             runemaker_loop(pm, base_addr, hwnd, 
                            check_running=should_run, 
-                           config=cfg,
+                           config=config_provider, # <--- MUDANÇA AQUI
                            is_safe_callback=check_safety,
                            is_gm_callback=check_gm,
                            log_callback=log,
-                           eat_callback=on_eat_callback) 
+                           eat_callback=on_eat_callback)
             
             time.sleep(1)
         except Exception as e:
@@ -2135,8 +2236,8 @@ app.after(1000, attach_window)
 app.protocol("WM_DELETE_WINDOW", on_close)
 
 # Iniciar Threads
-threading.Thread(target=trainer_loop, daemon=True).start()
-threading.Thread(target=alarm_loop, daemon=True).start()
+threading.Thread(target=start_trainer_thread, daemon=True).start()
+threading.Thread(target=start_alarm_thread, daemon=True).start()
 threading.Thread(target=auto_loot_thread, daemon=True).start()
 threading.Thread(target=skill_monitor_loop, daemon=True).start()
 threading.Thread(target=gui_updater_loop, daemon=True).start()

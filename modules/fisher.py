@@ -83,34 +83,34 @@ def probe_tile(pm, base_addr, hwnd, gv, dx, dy, abs_x, abs_y, z, logger=None):
 # ==============================================================================
 
 def fishing_loop(pm, base_addr, hwnd, check_running=None, log_callback=None, 
-                 debug_hud_callback=None, 
-                 max_attempts_range=MAX_FISHING_ATTEMPTS):
+                 debug_hud_callback=None, config=None):
     
+    # --- HELPER DE CONFIGURAÇÃO DINÂMICA ---
+    def get_cfg(key, default):
+        # Se 'config' for uma função, chama ela para pegar o dicionário atualizado
+        if callable(config):
+            return config().get(key, default)
+        return default
+
     def log_msg(text):
         timestamp = time.strftime("%H:%M:%S")
         print(f"[{timestamp}] [FISHER] {text}")
         if log_callback: log_callback(f"[FISHER] {text}")
 
-    log_msg("🎣 Iniciando Auto Fisher (Smart Error + HUD Timers)...")
+    log_msg("🎣 Iniciando Auto Fisher (Smart + RealTime Config)...")
     
     tile_id_cache = {} 
     
-    # --- HELPER 1: ATUALIZAÇÃO DE HUD EM TEMPO REAL ---
-    # Função interna para gerar a lista de timers sempre que precisarmos
     def get_updated_hud_batch(p_x, p_y, p_z):
         batch = []
-        # Varre área visual
         for c_dy in range(-6, 7):
             for c_dx in range(-8, 9):
                 if c_dx == 0 and c_dy == 0: continue
-                
                 c_abs_x = p_x + c_dx
                 c_abs_y = p_y + c_dy
-                
                 try:
                     ts_release = fishing_db.get_cooldown_timestamp(c_abs_x, c_abs_y, p_z)
-                except AttributeError:
-                    ts_release = 0 
+                except AttributeError: ts_release = 0 
                 
                 time_left = ts_release - time.time()
                 if time_left > 0:
@@ -120,26 +120,30 @@ def fishing_loop(pm, base_addr, hwnd, check_running=None, log_callback=None,
                         'text': format_cooldown(time_left)
                     })
         return batch
-    # --------------------------------------------------
 
     while True:
         if check_running and not check_running(): return
 
         # ======================================================================
-        # [NOVO] VERIFICAÇÃO DE CAP
+        # LEITURA DAS CONFIGS (AGORA DENTRO DO LOOP)
         # ======================================================================
-        if CHECK_MIN_CAP:
+        # Lemos os valores a cada ciclo. Se você mudou no GUI, muda aqui.
+        current_check_cap = get_cfg('check_cap', True)
+        current_min_cap = get_cfg('min_cap_val', 6.0)
+        min_attempts = get_cfg('min_attempts', 4)
+        max_attempts = get_cfg('max_attempts', 6)
+        
+        # ======================================================================
+        # VERIFICAÇÃO DE CAP
+        # ======================================================================
+        if current_check_cap:
             current_cap = get_player_cap(pm, base_addr)
-            
-            # Se a cap for menor que o limite, entra em espera
-            if current_cap < MIN_CAP_VALUE:
-                # log_msg(f"⛔ Cap Baixa ({current_cap} oz). Pesca pausada. Liberando espaço...")
-                
-                # Opcional: Se quiser que ele pare o script totalmente, use 'return'
-                # Se quiser que ele fique esperando você jogar itens fora, use o sleep abaixo:
-                time.sleep(5) 
-                continue # Pula todo o resto do código e volta para o inicio do While
-        # ======================================================================
+            if current_cap < current_min_cap:
+                # time.sleep(5) 
+                # continue 
+                # (Mantendo comportamento original de pausa silenciosa ou log se preferir)
+                time.sleep(2)
+                continue 
 
         rod_pos = get_rod_packet_position(pm, base_addr)
         if not rod_pos:
@@ -152,73 +156,54 @@ def fishing_loop(pm, base_addr, hwnd, check_running=None, log_callback=None,
         range_x = 7
         range_y = 5
         
-        # Listas separadas para priorização
-        priority_tiles = []   # Já sabemos que é água
-        secondary_tiles = []  # Não sabemos (Unknown)
+        priority_tiles = []
+        secondary_tiles = []
         
-        # 1. Classifica os tiles
         for dy in range(-range_y, range_y + 1):
             for dx in range(-range_x, range_x + 1):
                 if dx == 0 and dy == 0: continue
-                
                 abs_x, abs_y = px + dx, py + dy
-                
-                # Consulta o DB sem pescar, apenas para saber o status
                 status = fishing_db.is_tile_ready(abs_x, abs_y, pz)
-                
                 if status == "READY" or status == "COOLDOWN":
-                    # É água confirmada (mesmo que esteja em cooldown, é prioridade de verificação)
                     priority_tiles.append((dx, dy))
                 elif status == "UNKNOWN":
-                    # Não sabemos o que é, verificar depois
                     secondary_tiles.append((dx, dy))
-                # Se for "IGNORE", nem adicionamos na lista (otimização)
 
-        # 2. Ordena ambas as listas pela distância (mais perto primeiro)
-        # Isso garante que o movimento do mouse seja natural dentro de cada grupo
         priority_tiles.sort(key=lambda p: max(abs(p[0]), abs(p[1])))
         secondary_tiles.sort(key=lambda p: max(abs(p[0]), abs(p[1])))
         
-        # 3. Funde as listas: Água Conhecida PRIMEIRO, Desconhecidos DEPOIS
         tiles_to_check = priority_tiles + secondary_tiles
         
-        # --- ESTATÍSTICAS DO CICLO ATUAL ---
         cycle_fish_count = 0      
         cycle_tiles_fished = 0    
         cycle_tiles_cooldown = 0  
 
-        # ======================================================================
-        # 1. GERAÇÃO DO HUD EM BATCH (DESENHA TODOS OS TIMERS)
-        # ======================================================================
         hud_batch = get_updated_hud_batch(px, py, pz)
         if debug_hud_callback: debug_hud_callback(hud_batch)
 
         # ======================================================================
-        # 2. LOOP DE AÇÃO (PESCA)
+        # LOOP DE AÇÃO (TILES)
         # ======================================================================
         
         for (dx, dy) in tiles_to_check:
             if check_running and not check_running(): return
             
-            if CHECK_MIN_CAP:
+            # Re-checa cap dentro do loop interno com a config atualizada
+            if current_check_cap:
                 current_cap_loop = get_player_cap(pm, base_addr)
-                if current_cap_loop < MIN_CAP_VALUE:
-                    log_msg(f"⛔ Cap atingiu o limite durante o ciclo ({current_cap_loop} oz). Parando...")
-                    break # Sai do 'for' e volta para o topo do 'while', ativando a espera
+                if current_cap_loop < current_min_cap:
+                    log_msg(f"⛔ Cap atingiu o limite ({current_cap_loop} oz).")
+                    break 
 
-            # --- Prepara HUD do Cursor Atual ---
-            # Copia os timers de fundo e adiciona o cursor ativo por cima
             current_batch = list(hud_batch)
-            current_batch.append({'dx': dx, 'dy': dy, 'color': '#00FFFF', 'text': None}) # Azul (Verificando)
+            current_batch.append({'dx': dx, 'dy': dy, 'color': '#00FFFF', 'text': None}) 
             if debug_hud_callback: debug_hud_callback(current_batch)
 
             abs_x, abs_y = px + dx, py + dy
             status = fishing_db.is_tile_ready(abs_x, abs_y, pz)
             
-            # Contabiliza Cooldowns
             if status == "COOLDOWN":
                 cycle_tiles_cooldown += 1
-                # O tile já está no hud_batch (cinza), então não precisa fazer nada extra
             
             target_water_id = 0
             need_probe = (status == "UNKNOWN")
@@ -230,7 +215,6 @@ def fishing_loop(pm, base_addr, hwnd, check_running=None, log_callback=None,
                     need_probe = True
 
             if need_probe:
-                # Atualiza HUD para Amarelo (Probe)
                 current_batch[-1] = {'dx': dx, 'dy': dy, 'color': '#FFFF00', 'text': 'PROBE'}
                 if debug_hud_callback: debug_hud_callback(current_batch)
 
@@ -247,15 +231,16 @@ def fishing_loop(pm, base_addr, hwnd, check_running=None, log_callback=None,
                     continue 
 
             if status == "READY" and target_water_id > 0:
-                # Atualiza HUD para Verde (Ação)
                 current_batch[-1] = {'dx': dx, 'dy': dy, 'color': '#00FF00', 'text': None}
                 if debug_hud_callback: debug_hud_callback(current_batch)
                 
                 water_pos = packet.get_ground_pos(abs_x, abs_y, pz)
                 success = False
                 attempts = 0
-                try: mn, mx = max_attempts_range; limit = random.randint(mn, mx)
-                except: limit = 5
+                
+                # --- USA A CONFIG DINÂMICA PARA O LIMITE ---
+                limit = random.randint(min_attempts, max_attempts)
+                # -------------------------------------------
 
                 while attempts < limit:
                     if check_running and not check_running(): return
@@ -266,52 +251,36 @@ def fishing_loop(pm, base_addr, hwnd, check_running=None, log_callback=None,
                     wait_time = random.uniform(1.5, 3.5) 
                     time.sleep(wait_time) 
                     
-                    # --- SMART ERROR HANDLING ---
                     error_msg = get_status_message(pm, base_addr)
                     
                     if error_msg:
-                        # CASO 1: Obstrução (Parede, Magic Wall, Sem visão)
                         if "throw there" in error_msg:
                             log_msg(f"🧱 Obstrução em ({dx}, {dy}). Pulando.")
-                            # HUD Laranja (Blocked)
                             current_batch[-1] = {'dx': dx, 'dy': dy, 'color': '#FFA500', 'text': 'BLOCK'}
                             if debug_hud_callback: debug_hud_callback(current_batch)
-                            break # Sai do loop de tentativas, vai pro próximo tile
+                            break 
                         
-                        # CASO 2: Erro Ambíguo -> RE-PROBE IMEDIATO
                         elif any(x in error_msg for x in ["not possible", "cannot use", "sorry"]):
-                            log_msg(f"⚠️ Erro ambíguo em ({dx}, {dy}). Re-checando tile agora...")
-                            
-                            # HUD Roxo (Re-checking)
+                            log_msg(f"⚠️ Erro ambíguo em ({dx}, {dy}). Re-checando tile...")
                             current_batch[-1] = {'dx': dx, 'dy': dy, 'color': '#A020F0', 'text': 'CHK'}
                             if debug_hud_callback: debug_hud_callback(current_batch)
                             
                             gv = get_game_view(pm, base_addr)
                             if gv:
-                                # Faz o probe forçado agora
                                 is_still_water, new_id = probe_tile(pm, base_addr, hwnd, gv, dx, dy, abs_x, abs_y, pz)
-                                
                                 if is_still_water:
-                                    # É água! O ID mudou ou foi lag. Atualiza e TENTA DE NOVO.
-                                    log_msg(f"✅ Confirmado: Ainda é água (ID: {new_id}). Retentando...")
+                                    log_msg(f"✅ Confirmado água (ID: {new_id}). Retentando...")
                                     target_water_id = new_id
                                     tile_id_cache[(abs_x, abs_y)] = new_id
-                                    
-                                    # Volta o HUD para Verde
                                     current_batch[-1] = {'dx': dx, 'dy': dy, 'color': '#00FF00', 'text': None}
                                     if debug_hud_callback: debug_hud_callback(current_batch)
-                                    
-                                    # O 'continue' força o loop 'while attempts' a rodar de novo
-                                    # sem incrementar 'attempts', dando uma chance justa.
                                     continue 
                                 else:
-                                    # Não é mais água (alguém jogou lixo/terra)
-                                    log_msg(f"⛔ Confirmado: Não é mais água. Ignorando.")
+                                    log_msg(f"⛔ Confirmado: Não é mais água.")
                                     fishing_db.update_tile_type(abs_x, abs_y, pz, False)
                                     break
                             else:
                                 break
-                    # -----------------------------
                     
                     cap_after = get_player_cap(pm, base_addr)
                     if (cap_before - cap_after) > 4.0:
@@ -319,14 +288,10 @@ def fishing_loop(pm, base_addr, hwnd, check_running=None, log_callback=None,
                         log_msg(f"✅ Peixe! ({dx}, {dy})")
                         fishing_db.mark_fish_caught(abs_x, abs_y, pz) 
 
-                        # --- ATUALIZAÇÃO IMEDIATA DO HUD (Solução Problema 1) ---
-                        # Regenera o batch com o novo cooldown cinza incluído
                         hud_batch = get_updated_hud_batch(px, py, pz)
-                        # Atualiza a tela (mantendo cursor verde por enquanto)
                         current_batch = list(hud_batch)
                         current_batch.append({'dx': dx, 'dy': dy, 'color': '#00FF00', 'text': None})
                         if debug_hud_callback: debug_hud_callback(current_batch)
-                        # --------------------------------------------------------
 
                         success = True
                         cycle_fish_count += 1
@@ -339,34 +304,28 @@ def fishing_loop(pm, base_addr, hwnd, check_running=None, log_callback=None,
                         attempts += 1
                 
                 if not success:
-                    # Verifica mensagem final para evitar punir tiles bloqueados
                     final_msg = get_status_message(pm, base_addr)
-                    
                     if not ("throw there" in final_msg or "not possible" in final_msg):
-                        # Falha de pesca (Água vazia)
                         penalty = FISH_RESPAWN_TIME - FISH_FAIL_COOLDOWN 
                         fake_time = time.time() - penalty
                         fishing_db.mark_fish_caught(abs_x, abs_y, pz, custom_timestamp=fake_time)
                         
-                        # Atualiza HUD Imediato também na falha
                         hud_batch = get_updated_hud_batch(px, py, pz)
                         current_batch = list(hud_batch)
-                        current_batch.append({'dx': dx, 'dy': dy, 'color': '#FF0000', 'text': None}) # Vermelho momentaneo
+                        current_batch.append({'dx': dx, 'dy': dy, 'color': '#FF0000', 'text': None}) 
                         if debug_hud_callback: debug_hud_callback(current_batch)
                         
                         cycle_tiles_fished += 1
                 
                 time.sleep(random.uniform(0.1, 0.3))
 
-            # Limpa o HUD do cursor ativo ao sair do tile (volta a mostrar só o batch)
             if debug_hud_callback: debug_hud_callback(hud_batch)
 
-        # --- LOGS DE FIM DE CICLO ---
         if cycle_tiles_fished > 0:
             log_msg(f"📊 RESUMO: +{cycle_fish_count} Peixes | {cycle_tiles_fished} Locais")
         elif cycle_tiles_cooldown > 0:
             log_msg(f"⏳ Tudo em Cooldown ({cycle_tiles_cooldown})...")
-            if debug_hud_callback: debug_hud_callback(hud_batch) # Mantém os timers visíveis
+            if debug_hud_callback: debug_hud_callback(hud_batch) 
             time.sleep(5)
         else:
             time.sleep(2)
