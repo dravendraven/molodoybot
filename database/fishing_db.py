@@ -61,6 +61,8 @@ def mark_fish_caught(x, y, z, custom_timestamp=None):
     else:
         tile_data[key] = {"is_water": True, "last_caught": ts}
 
+    save_db()
+
 def is_tile_ready(x, y, z):
     """
     Verifica se o tile é água E se o cooldown já passou.

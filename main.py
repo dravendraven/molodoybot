@@ -100,6 +100,7 @@ BOT_SETTINGS = {
     "fisher_max": 6,
     "fisher_check_cap": True,   # Ativa/Desativa checagem
     "fisher_min_cap": 6.0,     # Valor da Cap mínima
+    "fisher_fatigue": True,
     
     # Runemaker
     "rune_mana": 100,
@@ -960,7 +961,8 @@ def auto_fisher_thread():
         'min_attempts': BOT_SETTINGS.get('fisher_min', 4),
         'max_attempts': BOT_SETTINGS.get('fisher_max', 6),
         'check_cap': BOT_SETTINGS.get('fisher_check_cap', True),
-        'min_cap_val': BOT_SETTINGS.get('fisher_min_cap', 6.0), # Valor padrão 6.0
+        'min_cap_val': BOT_SETTINGS.get('fisher_min_cap', 6.0),
+        'fatigue': BOT_SETTINGS.get('fisher_fatigue', True)
     }
 
     while bot_running:
@@ -1689,18 +1691,36 @@ def open_settings():
     #                              font=("Verdana", 8), text_color="#777")
     # lbl_hint_fish.grid(row=5, column=0, columnspan=2, sticky="w", padx=(20,0), pady=(0,5))
 
+    # --- SISTEMA DE FADIGA (NOVO) ---
+    frame_fatigue = ctk.CTkFrame(tab_fisher, fg_color="transparent")
+    frame_fatigue.pack(pady=(10, 0))
+
+    def toggle_fatigue(): pass 
+
+    switch_fatigue = ctk.CTkSwitch(frame_fatigue, text="Simular Fadiga Humana", command=toggle_fatigue, 
+                                   progress_color="#FFA500", font=("Verdana", 10))
+    switch_fatigue.pack(anchor="w", padx=(20,0))
+    
+    if BOT_SETTINGS.get('fisher_fatigue', True):
+        switch_fatigue.select()
+    
+    ctk.CTkLabel(frame_fatigue, text="↳ Cria pausas longas e lentidão progressiva.", 
+                 font=("Verdana", 8), text_color="#777").pack(anchor="w", padx=(40,0))
+
     def save_fish():
         try:
             mn = int(entry_fish_min.get())
             mx = int(entry_fish_max.get())
             cap_val = float(entry_fish_cap_val.get().replace(',', '.')) # Aceita virgula ou ponto
             check_cap = bool(switch_fish_cap.get())
+            fatigue_enabled = bool(switch_fatigue.get())
             if mn < 1: mn=1
             if mx < mn: mx=mn
             BOT_SETTINGS['fisher_min'] = mn
             BOT_SETTINGS['fisher_max'] = mx
             BOT_SETTINGS['fisher_min_cap'] = cap_val
             BOT_SETTINGS['fisher_check_cap'] = check_cap
+            BOT_SETTINGS['fisher_fatigue'] = fatigue_enabled
             save_config_file()
             config.CHECK_MIN_CAP = check_cap
             config.MIN_CAP_VALUE = cap_val
@@ -2099,8 +2119,14 @@ def toggle_xray():
                         for item in hud_overlay_data:
                             dx = item.get('dx')
                             dy = item.get('dy')
-                            color = item.get('color', '#FFFFFF')
+                            raw_color = item.get('color', '#FFFFFF')
                             text = item.get('text', '') 
+
+                            # CORREÇÃO 1: Tkinter não aceita Alpha (#RRGGBBAA). 
+                            # Se vier com 9 chars (ex: #00FF0022), cortamos para 7 (#00FF00).
+                            # Para simular "transparência", usamos stipple se a cor original tinha alpha.
+                            color = raw_color[:7] if len(raw_color) > 7 else raw_color
+                            is_transparent = len(raw_color) > 7
                             
                             raw_cx = gv['center'][0] + (dx * gv['sqm'])
                             raw_cy = gv['center'][1] + (dy * gv['sqm'])
@@ -2110,15 +2136,18 @@ def toggle_xray():
 
                             size = gv['sqm'] / 2 
                             
+                            # CORREÇÃO 2: Estilo "Ghost" (Pontilhado) se for transparente
+                            # stipple='gray50' faz o quadrado ficar meio invisível
+                            stipple_val = 'gray50' if is_transparent else ''
+                            width_val = 1 if is_transparent else 2
+
                             canvas.create_rectangle(cx - size, cy - size, cx + size, cy + size, 
-                                                  outline=color, width=2)
+                                                  outline=color, width=width_val, stipple=stipple_val)
                             
+                            # CORREÇÃO 3: Removemos o 'else' que forçava o texto FISHER
                             if text:
                                 canvas.create_text(cx+1, cy+1, text=text, fill="black", font=("Verdana", 8, "bold"))
                                 canvas.create_text(cx, cy, text=text, fill=color, font=("Verdana", 8, "bold"))
-                            else:
-                                canvas.create_text(cx, cy - size - 12, text=f"FISHER\n({dx}, {dy})", 
-                                                 fill=color, font=("Verdana", 7, "bold"))
 
                     current_name = get_connected_char_name()
                     first = base_addr + TARGET_ID_PTR + REL_FIRST_ID

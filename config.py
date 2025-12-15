@@ -4,13 +4,14 @@ from database import foods_db
 # ==============================================================================
 # 1. GERAIS E CONEXÃO
 # ==============================================================================
-PROCESS_NAME = "Tibia.exe"
-MY_PLAYER_NAME = "It is Molodoy"
+# PROCESS_NAME = "Tibia.exe"
+# MY_PLAYER_NAME = "It is Molodoy"
+
 OFFSET_CONNECTION = 0x31C588
 
 # Integração Telegram
-TELEGRAM_TOKEN = "YOUR_TELEGRAM_TOKEN"
-TELEGRAM_CHAT_ID = "YOUR_TELEGRAM_CHAT_ID"
+# TELEGRAM_TOKEN = "YOUR_TELEGRAM_TOKEN"
+# TELEGRAM_CHAT_ID = "YOUR_TELEGRAM_CHAT_ID"
 
 # ==============================================================================
 # 1. CONFIGURAÇÕES PADRÃO
@@ -181,12 +182,16 @@ OFFSET_STATUS_TIMER = 0x31DBDC # Int: Tempo restante da mensagem na tela
 # Pesca
 # ==============================================================================
 OFFSET_LAST_INTERACTION_ID = 0x31C630
-WATER_IDS = range(4597, 4615)
-
-# Se você já tem essa constante com outro nome, pode usar a mesma.
 OFFSET_LAST_USED_ITEM_ID = 0x31C630
-
 OFFSET_LAST_USED_ITEM_COUNT = 0x31C634
+
+VISUAL_FISH_IDS = list(range(4597, 4609)) + [618, 619]
+
+# IDs onde visualmente NÃO tem peixe (Água vazia/Cooldown)
+VISUAL_EMPTY_IDS = list(range(4609, 4615)) + [620]
+
+WATER_IDS = VISUAL_FISH_IDS + VISUAL_EMPTY_IDS
+FISH_CAUGHT_VALIDATION_BY_ID = True
 
 # Tempo máximo de regeneração acumulada (20 minutos = 1200 segundos)
 MAX_FOOD_TIME = 1200
@@ -213,6 +218,13 @@ MAX_FISHING_ATTEMPTS = (4, 6)
 # --- CONTROLE DE CAPACIDADE (CAP) ---
 CHECK_MIN_CAP = True      # Se True, o bot para de pescar se a cap estiver baixa
 MIN_CAP_VALUE = 6.0       # Valor mínimo de cap (oz) para permitir a pesca
+
+# Define quantos arremessos o bot aguenta antes de precisar descansar
+FATIGUE_ACTIONS_RANGE = (80, 150)  
+# Define quanto tempo (segundos) ele descansa quando atinge o limite
+FATIGUE_REST_RANGE = (45, 120)     
+# Porcentagem extra de delay motor quando estiver cansado (Ex: 0.3 = 30% mais lento)
+FATIGUE_MOTOR_PENALTY = 0.2
 
 # ==============================================================================
 # X-RAY
