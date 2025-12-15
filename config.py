@@ -23,6 +23,7 @@ TELEGRAM_CHAT_ID = "452514119"
 
 TARGET_MONSTERS = ["Rotworm", "Minotaur"]
 SAFE_CREATURES = ["Minotaur", "Rotworm", "Troll", "Wolf", "Deer", "Rabbit", "Spider", "Poison Spider", "Bug", "Rat", "Bear", "Wasp", "Orc"]
+HIT_LOG_ENABLED = False  # Controls writing hits to hits_monitor.txt
 
 OFFSET_PLAYER_ID = 0x1C684C
 OFFSET_PLAYER_HP = 0x1C6848
@@ -203,7 +204,7 @@ OFFSET_PLAYER_CAP = 0x1C6820  # Capacidade (Oz)
 
 # Cooldown do peixe (em segundos)
 # 32 minutos = 1920 segundos
-FISH_RESPAWN_TIME = 1920 
+FISH_RESPAWN_TIME = 2200
 FISH_FAIL_COOLDOWN = 600   # 10 min (Falha/Vazio) <--- ADICIONE ISSO
 
 # Quantidade máxima de tentativas em um mesmo SQM antes de desistir
@@ -251,5 +252,25 @@ OFFSET_LIGHT_AMOUNT = 0xBF94E
 # Bytes originais para restaurar (Jump if Less or Equal)
 LIGHT_DEFAULT_BYTES = b'\x7E\x05'
 
-# MAP
-MAP_POINTER_ADDR = 0x005D4C20
+# ==============================================================================
+# MEMORY MAP CONFIGURATION (TIBIA 7.72)
+# ==============================================================================
+# Endereço onde fica o ponteiro para a matriz do mapa
+# Blackd: 0x5D4C20 -> Offset: 0x1D4C20
+MAP_POINTER_ADDR = 0x1D4C20      
+
+# Ponteiro para calcular offsets extras
+# Blackd: 0x5D4C3C -> Offset: 0x1D4C3C
+OFFSET_POINTER_ADDR = 0x1D4C3C   
+
+# Andar do personagem (Z)
+# Blackd: 0x5D16E8 -> Offset: 0x1D16E8
+PLAYER_Z_ADDR = 0x1D16E8         
+
+# Constantes da Estrutura de Dados
+TILE_SIZE = 172 # 168 ou 172 dependendo da versão exata, vamos testar
+MAP_WIDTH = 18
+MAP_HEIGHT = 14
+MAP_FLOORS = 8
+TOTAL_TILES = MAP_WIDTH * MAP_HEIGHT * MAP_FLOORS
+MAP_DATA_SIZE = TOTAL_TILES * TILE_SIZE

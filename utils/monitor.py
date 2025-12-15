@@ -1,6 +1,8 @@
 import time
 from datetime import datetime, timedelta
+from pathlib import Path
 from database import foods_db
+from database.creatures_stats import get_creature_max_hp
 
 def get_exp_for_level(level):
     """
@@ -185,25 +187,29 @@ sword_tracker = SkillTracker("Sword")
 shield_tracker = SkillTracker("Shield")
 
 class TrainingMonitor:
-    def __init__(self, log_callback=None):
+    def __init__(self, log_callback=None, log_hits=True):
         """
         log_callback: Função para enviar mensagens para a GUI principal.
         """
         self.log = log_callback if log_callback else print
+        self.log_hits = log_hits
+        self.hit_log_path = Path("hits_monitor.txt")
         self.reset()
 
     def reset(self):
         self.target_id = 0
         self.target_name = "Unknown"
+        self.target_max_hp = None
         self.start_time = 0
         self.last_hp = 100
-        self.damage_timestamps = [] 
+        self.damage_timestamps = []
         self.active = False
 
     def start(self, tid, name, hp):
         self.reset()
         self.target_id = tid
         self.target_name = name
+        self.target_max_hp = get_creature_max_hp(name)
         self.start_time = time.time()
         self.last_hp = hp
         self.damage_timestamps = [time.time()]
@@ -223,9 +229,15 @@ class TrainingMonitor:
                 
                 # Calcula quanto de dano foi dado
                 dmg = self.last_hp - current_hp
+                raw_dmg = self._convert_percent_to_hp(dmg)
                 
                 # >>> AQUI ESTÁ O PRINT QUE VOCÊ QUERIA <<<
-                print(f"   [HIT] Dano: {dmg}%  |  Gap: {diff:.2f}s  |  HP: {current_hp}%")
+                if raw_dmg is not None:
+                    print(f"   [HIT] Dano: {raw_dmg} HP (~{dmg}%)  |  Gap: {diff:.2f}s  |  HP: {current_hp}%")
+                else:
+                    print(f"   [HIT] Dano: {dmg}%  |  Gap: {diff:.2f}s  |  HP: {current_hp}%")
+                if current_hp > 0:
+                    self._log_hit_to_file(dmg)
 
                 # Atualiza listas e estado
                 self.damage_timestamps.append(now)
@@ -276,6 +288,29 @@ class TrainingMonitor:
         print("-" * 50)
         
         self.active = False
+
+    def _log_hit_to_file(self, damage_percent):
+        if not self.log_hits:
+            return
+
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        raw_damage = self._convert_percent_to_hp(damage_percent)
+
+        if raw_damage is not None:
+            line = f"[{timestamp}] Dealt {raw_damage} damage to {self.target_name} (~{damage_percent}%).\n"
+        else:
+            line = f"[{timestamp}] Dealt {damage_percent}% damage to {self.target_name}.\n"
+
+        try:
+            with self.hit_log_path.open("a", encoding="utf-8") as log_file:
+                log_file.write(line)
+        except Exception as err:
+            print(f"[MONITOR] Failed to write hit log: {err}")
+
+    def _convert_percent_to_hp(self, percent_value):
+        if not self.target_max_hp or percent_value <= 0:
+            return None
+        return int(round(self.target_max_hp * (percent_value / 100.0)))
 
 class GoldTracker:
     def __init__(self):

@@ -72,6 +72,7 @@ BOT_SETTINGS = {
     "telegram_chat_id": TELEGRAM_CHAT_ID, # Do config.py
     "vocation": "Knight",
     "debug_mode": False,
+    "hit_log_enabled": HIT_LOG_ENABLED,
 
     #trainer
     "ignore_first": False,
@@ -86,6 +87,8 @@ BOT_SETTINGS = {
     # Alarme
     "alarm_range": 8,
     "alarm_floor": "Padrão",
+    "alarm_hp_enabled": False,
+    "alarm_hp_percent": 50,
     
     # Loot
     "loot_containers": 2,
@@ -159,7 +162,10 @@ if os.path.exists("bot_config.json"):
 # ==============================================================================
 # 3. OBJETOS DE MONITORAMENTO (INSTANCIAS)
 # ==============================================================================
-monitor = TrainingMonitor(log_callback=lambda msg: log(msg)) # Lambda para resolver escopo se necessário, ou direto
+monitor = TrainingMonitor(
+    log_callback=lambda msg: log(msg),
+    log_hits=BOT_SETTINGS.get("hit_log_enabled", True)
+) # Lambda para resolver escopo se necessário, ou direto
 # Nota: Definido como direto no original, ajustado abaixo para uso nas funções
 sword_tracker = SkillTracker("Sword")
 shield_tracker = SkillTracker("Shield")
@@ -1510,6 +1516,43 @@ def open_settings():
     combo_floor.grid(row=2, column=1, sticky="w")
     combo_floor.set(BOT_SETTINGS['alarm_floor'])
 
+    # Divisória visual
+    ctk.CTkFrame(tab_alarm, height=2, fg_color="#303030").pack(fill="x", padx=10, pady=10)
+
+    # --- NOVO: Configuração de HP Baixo (Feature 1) ---
+    frame_hp = ctk.CTkFrame(tab_alarm, fg_color="transparent")
+    frame_hp.pack(fill="x", padx=5)
+
+    ctk.CTkLabel(frame_hp, text="Monitorar Vida (HP):", font=("Verdana", 12, "bold")).pack(anchor="w", padx=10, pady=(0,5))
+
+    entry_hp_pct = None  # atribuído alguns blocos abaixo
+
+    def apply_hp_entry_state():
+        """Enable or disable HP percent entry based on switch state."""
+        if entry_hp_pct is None:
+            return
+        state = "normal" if switch_hp_alarm.get() else "disabled"
+        entry_hp_pct.configure(state=state)
+
+    def toggle_hp_alarm():
+        apply_hp_entry_state()
+
+    # Toggle
+    switch_hp_alarm = ctk.CTkSwitch(frame_hp, text="Ativar Alarme de HP Baixo", command=toggle_hp_alarm, progress_color="#FF5555")
+    switch_hp_alarm.pack(anchor="w", padx=20)
+    if BOT_SETTINGS.get('alarm_hp_enabled', False): switch_hp_alarm.select()
+
+    # Input Porcentagem
+    f_hp_val = ctk.CTkFrame(frame_hp, fg_color="transparent")
+    f_hp_val.pack(fill="x", padx=20, pady=5)
+    
+    ctk.CTkLabel(f_hp_val, text="Disparar se HP menor que (%):").pack(side="left")
+    entry_hp_pct = ctk.CTkEntry(f_hp_val, width=50, justify="center")
+    entry_hp_pct.pack(side="left", padx=10)
+    entry_hp_pct.insert(0, str(BOT_SETTINGS.get('alarm_hp_percent', 50)))
+    apply_hp_entry_state()
+
+    # Frame de notas
     frame_note = ctk.CTkFrame(tab_alarm, fg_color="transparent")
     frame_note.pack(pady=10)
     ctk.CTkLabel(frame_note, text="ℹ️ Nota: Para ignorar amigos/criaturas,", 
@@ -1518,11 +1561,23 @@ def open_settings():
                  font=("Verdana", 9, "bold"), text_color="#BBB").pack()
                  
     def save_alarm():
-        raw_range = combo_alarm.get()
-        BOT_SETTINGS['alarm_range'] = 15 if "Tela" in raw_range else int(raw_range.split()[0])
-        BOT_SETTINGS['alarm_floor'] = combo_floor.get()
-        save_config_file()
-        log(f"🔔 Alarme salvo.")
+        try:
+            # Salva Range (Existente)
+            raw_range = combo_alarm.get()
+            BOT_SETTINGS['alarm_range'] = 15 if "Tela" in raw_range else int(raw_range.split()[0])
+            BOT_SETTINGS['alarm_floor'] = combo_floor.get()
+            
+            # Salva HP (Novo)
+            BOT_SETTINGS['alarm_hp_enabled'] = bool(switch_hp_alarm.get())
+            hp_val = int(entry_hp_pct.get())
+            if hp_val < 1: hp_val = 1
+            if hp_val > 99: hp_val = 99
+            BOT_SETTINGS['alarm_hp_percent'] = hp_val
+
+            save_config_file()
+            log(f"🔔 Alarme salvo (HP < {hp_val}%: {BOT_SETTINGS['alarm_hp_enabled']}).")
+        except:
+            log("❌ Erro: Porcentagem de HP deve ser número inteiro.")
 
     ctk.CTkButton(tab_alarm, text="Salvar Alarme", command=save_alarm, fg_color="#2CC985").pack(side="bottom", pady=10, fill="x", padx=20)
 

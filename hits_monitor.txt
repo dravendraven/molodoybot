@@ -1,0 +1,43 @@
+[18:19:43] Dealt 96 damage to Wolf.
+[18:20:14] Dealt 36 damage to Wolf.
+[18:20:16] Dealt 48 damage to Wolf.
+[18:20:26] Dealt 80 damage to Wolf.
+[18:22:39] Dealt 4 damage to Wolf.
+[18:22:41] Dealt 56 damage to Wolf.
+[18:23:09] Dealt 48 damage to Wolf.
+[18:23:13] Dealt 20 damage to Wolf.
+[18:24:00] Dealt 48 damage to Wolf.
+[18:24:09] Dealt 80 damage to Wolf.
+[18:24:14] Dealt 16 damage to Wolf.
+[18:24:16] Dealt 60 damage to Wolf.
+[18:24:59] Dealt 16 damage to Troll.
+[18:25:01] Dealt 62 damage to Troll.
+[18:25:07] Dealt 54 damage to Troll.
+[18:25:51] Dealt 58 damage to Troll.
+[18:25:52] Dealt 40 damage to Troll.
+[18:25:59] Dealt 32 damage to Troll.
+[18:26:00] Dealt 14 damage to Troll.
+[18:26:02] Dealt 28 damage to Troll.
+[18:26:22] Dealt 4 damage to Troll.
+[18:26:24] Dealt 8 damage to Troll.
+[18:26:26] Dealt 36 damage to Troll.
+[18:26:28] Dealt 2 damage to Troll.
+[18:26:32] Dealt 14 damage to Troll.
+[18:26:34] Dealt 21 damage to Troll.
+[18:26:40] Dealt 74 damage to Troll.
+[18:26:42] Dealt 18 damage to Troll.
+[18:26:50] Dealt 6 damage to Troll.
+[18:26:52] Dealt 34 damage to Troll.
+[18:26:54] Dealt 42 damage to Troll.
+[18:27:00] Dealt 23 damage to Poison Spider.
+[18:27:02] Dealt 53 damage to Poison Spider.
+[18:27:08] Dealt 76 damage to Poison Spider.
+[18:27:14] Dealt 53 damage to Poison Spider.
+[18:27:15] Dealt 43 damage to Poison Spider.
+[18:27:43] Dealt 46 damage to Troll.
+[18:27:49] Dealt 26 damage to Troll.
+[18:27:50] Dealt 28 damage to Troll.
+[18:27:56] Dealt 24 damage to Troll.
+[18:27:58] Dealt 38 damage to Troll.
+[18:28:43] Dealt 40 damage to Troll.
+[18:28:47] Dealt 45 damage to Troll.
