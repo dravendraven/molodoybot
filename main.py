@@ -1002,7 +1002,7 @@ def update_stats_visibility():
     - Knights: Mostra tudo.
     """
     voc = BOT_SETTINGS['vocation']
-    is_mage = any(x in voc for x in ["Druid", "Sorcerer", "Mage", "None"])
+    is_mage = any(x in voc for x in ["Elder", "Master", "Druid", "Sorcerer", "Mage", "None"])
     
     # Precisamos da variável global para saber se o gráfico estava aberto
     global is_graph_visible
@@ -1030,7 +1030,7 @@ def update_stats_visibility():
 
         # 2. Mostra o Container do Gráfico novamente
         # Usamos 'after=frame_stats' para garantir que ele volte para o lugar certo (abaixo dos stats)
-        # Se ele já estiver visível, o pack apenas atualiza, sem duplicar.
+        # Se ele já estiver visível, o pack apenas atualiza, sem duplicar
         frame_graphs_container.pack(padx=10, pady=(5, 0), fill="x", after=frame_stats)
     
     auto_resize_window()
