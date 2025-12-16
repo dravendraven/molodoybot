@@ -20,6 +20,7 @@ matplotlib.use("TkAgg") # Define o backend para funcionar com Tkinter
 import sys
 import traceback
 import ctypes
+import tkinter as tk
 
 # arquivos do bot
 from config import *
@@ -33,7 +34,6 @@ from core.mouse_lock import acquire_mouse, release_mouse
 from core.map_core import get_game_view, get_screen_coord, get_player_pos
 from core.input_core import ctrl_right_click_at
 from core import packet
-from core.cavebot_core import *
 from database import foods_db
 from modules.trainer import trainer_loop
 from modules.alarm import alarm_loop
@@ -63,8 +63,6 @@ except Exception:
 
 toplevel_settings = None
 CONFIG_FILE = "bot_config.json"
-cavebot_manager = None
-
 
 # Estado Global do Bot
 BOT_SETTINGS = {
@@ -117,7 +115,7 @@ BOT_SETTINGS = {
     "mana_train": False,
     "rune_movement": True,
     "rune_human_min": 15,   # Segundos mínimos de espera
-    "rune_human_max": 300  # Segundos máximos de espera
+    "rune_human_max": 300,  # Segundos máximos de espera
 }
 
 # Variáveis de Controle de Execução
@@ -784,33 +782,6 @@ def skill_monitor_loop():
                 pass
         time.sleep(1)
 
-# def cavebot_thread():
-#     global cavebot_manager
-#     while bot_running:
-#         if not is_connected: 
-#             time.sleep(1); continue
-        
-#         # Inicializa se necessário
-#         if cavebot_manager is None and pm is not None:
-#             cavebot_manager = CavebotManager(pm, base_addr)
-        
-#         # Executa ciclo se manager existir
-#         if cavebot_manager:
-#             # Se estiver gravando, roda mesmo com switch desligado
-#             if cavebot_manager.is_recording:
-#                 try:
-#                     cavebot_manager.run_cycle()
-#                 except: pass
-            
-#             # Se switch ligado, roda walker
-#             elif switch_cavebot.get():
-#                 try:
-#                     cavebot_manager.run_cycle()
-#                 except Exception as e:
-#                     print(f"Cavebot: {e}")
-                    
-#         time.sleep(0.1) # 100ms para resposta rápida
-
 # ==============================================================================
 # 6. FUNÇÕES DA INTERFACE (CALLBACKS E JANELAS)
 # ==============================================================================
@@ -1049,8 +1020,6 @@ def auto_resize_window():
     
     # 3. Aplica a nova geometria
     app.geometry(f"320x{needed_height}")
-
-# ... (código anterior do main.py) ...
 
 def open_settings():
     global toplevel_settings, lbl_status
@@ -1812,8 +1781,6 @@ switch_fisher.grid(row=1, column=1, sticky="w", padx=(10, 0), pady=5)
 switch_runemaker = ctk.CTkSwitch(frame_controls, text="Runemaker", progress_color="#A54EF9", font=("Verdana", 11))
 switch_runemaker.grid(row=2, column=0, sticky="w", padx=(20, 0), pady=5)
 
-# switch_cavebot = ctk.CTkSwitch(frame_controls, text="Cavebot", progress_color="#00C000", font=("Verdana", 11))
-# switch_cavebot.grid(row=2, column=1, sticky="w", padx=(10, 0), pady=5)
 
 # STATS
 frame_stats = ctk.CTkFrame(main_frame, fg_color="transparent", border_color="#303030", border_width=1, corner_radius=6)
@@ -1948,7 +1915,6 @@ threading.Thread(target=regen_monitor_loop, daemon=True).start()
 threading.Thread(target=auto_fisher_thread, daemon=True).start()
 threading.Thread(target=runemaker_thread, daemon=True).start()
 threading.Thread(target=connection_watchdog, daemon=True).start()
-# threading.Thread(target=cavebot_thread, daemon=True).start()
 
 update_stats_visibility()
 

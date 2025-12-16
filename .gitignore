@@ -18,6 +18,7 @@ objects.srv
 Downloads.code-workspace
 app.ico
 trash/
+backup/
 
 # Ignorar o banco de dados do Fishing se ele for muito grande ou pessoal
 # fishing_map.json (já coloquei acima)
