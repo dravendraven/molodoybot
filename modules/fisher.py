@@ -86,7 +86,7 @@ def fishing_loop(pm, base_addr, hwnd, check_running=None, log_callback=None,
     session_fish_caught = 0
     session_total_casts = 0
 
-    log_msg("🎣 Fisher Iniciado (Humanização V5: Fadiga + Stats).")
+    log_msg("🎣 Fisher Iniciado.")
 
     mapper = MemoryMap(pm, base_addr)
     player_id = 0
@@ -94,12 +94,12 @@ def fishing_loop(pm, base_addr, hwnd, check_running=None, log_callback=None,
     
     current_target_coords = None
 
-    try:
-        w_len = len(WATER_IDS)
-        log_msg(f"ℹ️ Config: {w_len} IDs. Validação ID: {FISH_CAUGHT_VALIDATION_BY_ID}")
-    except NameError:
-        log_msg("❌ ERRO: IDs/Flags não configurados no config.py!")
-        return
+    # try:
+    #     w_len = len(WATER_IDS)
+    #     #log_msg(f"ℹ️ Config: {w_len} IDs. Validação ID: {FISH_CAUGHT_VALIDATION_BY_ID}")
+    # except NameError:
+    #     log_msg("❌ ERRO: IDs/Flags não configurados no config.py!")
+    #     return
 
     # --- LÓGICA DE DELAY COM MICRO-PAUSAS (FADIGA MOTOR) ---
     def calculate_human_delay(tile_dx, tile_dy, current_fatigue=0, max_fatigue=100):

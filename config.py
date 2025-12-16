@@ -220,9 +220,9 @@ CHECK_MIN_CAP = True      # Se True, o bot para de pescar se a cap estiver baixa
 MIN_CAP_VALUE = 6.0       # Valor mínimo de cap (oz) para permitir a pesca
 
 # Define quantos arremessos o bot aguenta antes de precisar descansar
-FATIGUE_ACTIONS_RANGE = (80, 150)  
+FATIGUE_ACTIONS_RANGE = (50, 100)  
 # Define quanto tempo (segundos) ele descansa quando atinge o limite
-FATIGUE_REST_RANGE = (45, 120)     
+FATIGUE_REST_RANGE = (60, 160)     
 # Porcentagem extra de delay motor quando estiver cansado (Ex: 0.3 = 30% mais lento)
 FATIGUE_MOTOR_PENALTY = 0.2
 

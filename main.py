@@ -740,7 +740,9 @@ def start_alarm_thread():
         'enabled': switch_alarm.get(),
         'safe_list': BOT_SETTINGS['safe'], # Lista de amigos
         'range': BOT_SETTINGS['alarm_range'],
-        'floor': BOT_SETTINGS['alarm_floor']
+        'floor': BOT_SETTINGS['alarm_floor'],
+        'hp_enabled': BOT_SETTINGS['alarm_hp_enabled'],
+        'hp_percent': BOT_SETTINGS['alarm_hp_percent']
     }
 
     # Checagem de execução
