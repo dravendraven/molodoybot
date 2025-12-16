@@ -89,6 +89,8 @@ BOT_SETTINGS = {
     "alarm_floor": "Padrão",
     "alarm_hp_enabled": False,
     "alarm_hp_percent": 50,
+    "alarm_chat_enabled": False,    # <--- NOVO
+    "alarm_chat_gm": True,          # <--- NOVO
     
     # Loot
     "loot_containers": 2,
@@ -133,6 +135,11 @@ full_light_enabled = False # <--- NOVO
 xray_window = None
 hud_overlay_data = [] # Lista de dicionários para Fisher HUD
 lbl_status = None 
+
+# Variáveis de Controle de Retorno (Segurança)
+resume_actions_timestamp = 0
+last_alarm_was_gm = False
+resume_type = "NONE" # "NORMAL" ou "GM"
 
 # Variáveis de Regeneração e Timing
 global_regen_seconds = 0
@@ -327,241 +334,6 @@ def connection_watchdog():
         
         time.sleep(1)
 
-# def trainer_loop():
-#     hwnd = 0
-#     current_monitored_id = 0
-#     last_target_data = None 
-#     next_attack_time = 0       
-#     waiting_for_attack = False
-
-#     while bot_running:
-#         if not is_connected: time.sleep(1); continue
-#         if not switch_trainer.get(): time.sleep(1); continue
-#         if pm is None: time.sleep(1); continue
-#         if hwnd == 0: hwnd = win32gui.FindWindow("TibiaClient", None) or win32gui.FindWindow(None, "Tibia")
-#         if not is_safe_to_bot: time.sleep(0.5); continue 
-
-#         try:  
-#             current_name = get_connected_char_name()
-#             if not current_name: 
-#                 time.sleep(0.5); continue
-            
-#             target_addr = base_addr + TARGET_ID_PTR
-#             list_start = base_addr + TARGET_ID_PTR + REL_FIRST_ID
-#             my_x, my_y, my_z = get_player_pos(pm, base_addr)
-#             if my_z == 0: 
-#                 time.sleep(0.2)
-#                 continue
-
-#             # 2. SCAN: MAPEAR O CAMPO DE BATALHA
-#             valid_candidates = []
-#             visual_line_count = 0 
-
-#             if BOT_SETTINGS['debug_mode']: print(f"\n--- INÍCIO DO SCAN (Meu Z: {my_z}) ---")
-            
-#             for i in range(MAX_CREATURES):
-#                 slot = list_start + (i * STEP_SIZE)
-#                 try:
-#                     c_id = pm.read_int(slot)
-#                     if c_id > 0:
-#                         raw = pm.read_string(slot + OFFSET_NAME, 32)
-#                         name = raw.split('\x00')[0].strip()
-#                         vis = pm.read_int(slot + OFFSET_VISIBLE)
-#                         z = pm.read_int(slot + OFFSET_Z)
-#                         cx = pm.read_int(slot + OFFSET_X)
-#                         cy = pm.read_int(slot + OFFSET_Y)
-#                         hp = pm.read_int(slot + OFFSET_HP)
-                        
-#                         dist_x = abs(my_x - cx)
-#                         dist_y = abs(my_y - cy)
-#                         is_melee = (dist_x <= 1 and dist_y <= 1)
-                
-#                         if BOT_SETTINGS['debug_mode']: print(f"Slot {i}: {name} (Vis:{vis} Z:{z} HP:{hp} Dist:({dist_x},{dist_y}))")
-
-#                         if name == current_name: continue
-
-#                         is_on_battle_list = (vis == 1 and z == my_z)
-
-#                         if is_on_battle_list:
-#                             if BOT_SETTINGS['debug_mode']: print(f"   [LINHA {visual_line_count}] -> {name} (ID: {c_id})")
-#                             current_line = visual_line_count
-#                             visual_line_count += 1 
-                            
-#                             if any(t in name for t in BOT_SETTINGS['targets']):
-#                                 if is_melee and hp > 0:
-#                                     if BOT_SETTINGS['debug_mode']: print(f"      -> CANDIDATO: HP:{hp} Dist:({dist_x},{dist_y})")
-#                                     valid_candidates.append({
-#                                         "id": c_id,
-#                                         "name": name,
-#                                         "hp": hp,
-#                                         "dist_x": dist_x,
-#                                         "dist_y": dist_y,
-#                                         "abs_x": cx,
-#                                         "abs_y": cy,
-#                                         "z": z,
-#                                         "is_melee": is_melee,
-#                                         "line": current_line
-#                                     })
-#                 except: continue
-
-#             if BOT_SETTINGS['debug_mode']:
-#                 print(f"--- FIM DO SCAN (Total Linhas: {visual_line_count}) ---\n")
-#                 print("--- CANDIDATOS VÁLIDOS ---")
-#                 print(f"Valid Candidates:")
-#                 print(f"Candidato 1: {valid_candidates[0] if len(valid_candidates) > 0 else 'Nenhum'}")
-#                 print(f"Candidato 2: {valid_candidates[1] if len(valid_candidates) > 1 else 'Nenhum'}")
-#                 print("-------------------------")
-#                 print("---- TOMADA DE DECISÃO ----")
-
-#             current_target_id = pm.read_int(target_addr)
-#             should_attack_new = False
-
-#             # Cenário A: Já estou atacando alguém
-#             if current_target_id != 0:
-#                 if BOT_SETTINGS['debug_mode']: print(f"Atacando ID: {current_target_id}")
-#                 target_data = next((c for c in valid_candidates if c["id"] == current_target_id), None)
-#                 if BOT_SETTINGS['debug_mode']: print(f"-> Target Data: {target_data}")
-                
-#                 if target_data:
-#                     waiting_for_attack = False 
-#                     next_attack_time = 0       
-#                     last_target_data = target_data.copy()
-#                     if current_target_id != current_monitored_id:
-#                         monitor.start(current_target_id, target_data["name"], target_data["hp"])
-#                         current_monitored_id = current_target_id
-#                         if BOT_SETTINGS['debug_mode']: print(f"--> Iniciando monitoramento em {target_data['name']} (ID: {current_target_id})")
-#                     else:
-#                         monitor.update(target_data["hp"])
-#                         if BOT_SETTINGS['debug_mode']: print(f"--> Atualizando monitoramento em {target_data['name']} (HP: {target_data['hp']})")
-#                 else:
-#                     if BOT_SETTINGS['debug_mode']: print("-> Alvo inválido (morto/fora de alcance).")
-#                     pass
-
-#            # --- CENÁRIO B: O ALVO SUMIU (MORREU OU PAREI DE ATACAR?) ---
-#             elif current_target_id == 0 and current_monitored_id != 0:
-#                 target_still_alive = False
-#                 if last_target_data:
-#                     for m in valid_candidates:
-#                         if m["id"] == last_target_data["id"]:
-#                             target_still_alive = True
-#                             break
-                
-#                 if target_still_alive:
-#                     log("🛑 Ataque interrompido (Monstro ainda vivo).")
-#                     monitor.stop_and_report()
-#                     current_monitored_id = 0
-#                     last_target_data = None
-#                     should_attack_new = True 
-                
-#                 else:
-#                     log("💀 Alvo eliminado (Confirmado).")
-                    
-#                     if last_target_data and switch_loot.get():
-#                         dx = last_target_data["abs_x"] - my_x
-#                         dy = last_target_data["abs_y"] - my_y
-                        
-#                         if abs(dx) <= 1 and abs(dy) <= 1 and last_target_data["z"] == my_z:
-
-#                             # # 1. Descobre o ID do corpo pelo Nome do monstro morto
-#                             # monster_name = last_target_data["name"]
-#                             # corpse_id = corpses.get_corpse_id(monster_name)
-                            
-#                             # if corpse_id > 0:
-#                             #     log(f"🔪 Abrindo corpo de {monster_name} (Packet ID: {corpse_id})...")
-                                
-#                             #     # 2. Prepara a Posição Absoluta (Mundo)
-#                             #     target_pos = {
-#                             #         'x': last_target_data["abs_x"], 
-#                             #         'y': last_target_data["abs_y"], 
-#                             #         'z': last_target_data["z"]
-#                             #     }
-                                
-#                             #     # 3. Envia o Pacote Use Item (0x82)
-#                             #     # stack_pos=1: Assume que o corpo é o primeiro item acima do chão (Stack 0 = Ground)
-#                             #     time.sleep(1.5)
-#                             #     packet.use_item(pm, target_pos, corpse_id, stack_pos=1)                              
-#                             #     # Pequena pausa para o servidor processar e abrir o container
-#                             #     # time.sleep(0.5)
-#                             #     # packet.use_item(pm, target_pos, corpse_id, stack_pos=2)
-#                             #     time.sleep(0.8)
-                                
-#                             # else:
-#                             #     log(f"⚠️ ID do corpo de '{monster_name}' não configurado em corpses.py!")
-
-#                             gv = get_game_view(pm, base_addr)
-#                             if gv:
-#                                 click_x, click_y = get_screen_coord(gv, dx, dy, hwnd)
-#                                 log(f"🔪 Abrindo corpo em ({dx}, {dy})...")
-
-#                                 acquire_mouse()
-#                                 try:
-#                                     time.sleep(1.5)
-#                                     ctrl_right_click_at(hwnd, click_x, click_y)
-#                                 finally:
-#                                     release_mouse()
-#                                 time.sleep(0.8) 
-#                             else:
-#                                 log("❌ Erro ao calcular GameView.")
-                    
-#                     elif last_target_data and not switch_loot.get():
-#                         log("ℹ️ Auto Loot desligado. Ignorando corpo.")
-
-#                     monitor.stop_and_report()
-#                     current_monitored_id = 0
-#                     last_target_data = None 
-#                     should_attack_new = True
-
-#             # Cenário C: Não estou atacando ninguém
-#             else:
-#                 if BOT_SETTINGS['debug_mode']: print("Não estou atacando ninguém.")
-#                 if current_monitored_id != 0:
-#                     monitor.stop_and_report()
-#                     current_monitored_id = 0
-#                     if BOT_SETTINGS['debug_mode']: print("--> Monitoramento finalizado.")
-#                 should_attack_new = True
-
-#             # 4. AÇÃO FINAL
-#             if should_attack_new:
-#                 final_candidates = valid_candidates
-
-#                 if BOT_SETTINGS['ignore_first']:
-#                     if len(valid_candidates) >= 2:
-#                         final_candidates = [valid_candidates[1]]
-#                     else:
-#                         final_candidates = []
-                
-#                 if BOT_SETTINGS['debug_mode']: print("Decidido: Atacar novo alvo.")
-#                 if len(final_candidates) > 0:
-
-#                     if next_attack_time == 0:
-#                         delay = random.uniform(HUMAN_DELAY_MIN, HUMAN_DELAY_MAX) 
-#                         next_attack_time = time.time() + delay 
-#                         waiting_for_attack = True
-#                         log(f"⏳ Aguardando {delay:.2f}s para atacar...")   
-
-#                     if time.time() >= next_attack_time:
-#                         best = final_candidates[0]
-#                         if BOT_SETTINGS['debug_mode']: print(f"-> Melhor Candidato: {best['name']} (ID: {best['id']})")            
-#                         if best["id"] != current_target_id:
-#                             log(f"⚔️ ATACANDO: {best['name']}")
-#                             packet.attack(pm, base_addr, best["id"])               
-#                             current_target_id = best["id"]
-#                             current_monitored_id = best["id"] 
-#                             last_target_data = best.copy()
-#                             monitor.start(best["id"], best["name"], best["hp"])
-#                             next_attack_time = 0
-#                             waiting_for_attack = False
-#                             time.sleep(0.5)
-#                     #         log(f"⚔️ ATACANDO: {best['name']} (Linha {best['line']})")
-#                         pass
-
-#             if BOT_SETTINGS['debug_mode']: print("---- FIM DA ITERAÇÃO ----")
-#             time.sleep(SCAN_DELAY)
-
-#         except Exception as e:
-#             print(f"[ERRO LOOP] {e}")
-#             time.sleep(1)
-
 def start_trainer_thread():
     """
     Thread Wrapper para o Trainer.
@@ -577,7 +349,7 @@ def start_trainer_thread():
         'enabled': switch_trainer.get(),
         
         # Lê a variável de segurança controlada pelo Alarme
-        'is_safe': is_safe_to_bot, 
+        'is_safe': is_safe_to_bot and (time.time() > resume_actions_timestamp),
         
         # Lê as configurações salvas/editadas no menu
         'targets': BOT_SETTINGS['targets'],
@@ -621,112 +393,38 @@ def start_trainer_thread():
             print(f"Trainer Thread Crash: {e}")
             time.sleep(5)
 
-# def alarm_loop():
-#     global is_safe_to_bot, is_gm_detected, gm_found
-#     last_alert = 0
-    
-#     while bot_running:
-#         if not is_connected:
-#             time.sleep(1)
-#             continue
-
-#         if not switch_alarm.get():
-#             if not is_safe_to_bot:
-#                 log("🔔 Alarme desativado manualmente. Retomando rotinas.")
-#                 is_gm_detected = False 
-#                 is_safe_to_bot = True
-#             time.sleep(1)
-#             continue
-            
-#         if pm is None:
-#             time.sleep(1); continue
-            
-#         try:
-#             current_name = get_connected_char_name()
-#             first = base_addr + TARGET_ID_PTR + REL_FIRST_ID
-#             my_x, my_y, my_z = get_player_pos(pm, base_addr)
-        
-#             danger = False
-#             d_name = ""
-            
-#             for i in range(MAX_CREATURES):
-#                 slot = first + (i * STEP_SIZE)
-#                 try:
-#                     if pm.read_int(slot) > 0:
-#                         vis = pm.read_int(slot + OFFSET_VISIBLE)
-#                         cz = pm.read_int(slot + OFFSET_Z)
-
-#                         is_z_valid = False
-#                         if BOT_SETTINGS['alarm_floor'] == "Padrão":
-#                             is_z_valid = (cz == my_z)
-#                         elif BOT_SETTINGS['alarm_floor'] == "Superior (+1)":
-#                             is_z_valid = (cz == my_z or cz == my_z - 1)
-#                         elif BOT_SETTINGS['alarm_floor'] == "Inferior (-1)":
-#                             is_z_valid = (cz == my_z or cz == my_z + 1)
-#                         elif BOT_SETTINGS['alarm_floor'] == "Todos (Raio-X)":
-#                             is_z_valid = (abs(cz - my_z) <= 1)
-#                         else: 
-#                             is_z_valid = (cz == my_z)
-
-#                         if vis != 0 and is_z_valid:
-#                             raw = pm.read_string(slot + OFFSET_NAME, 32)
-#                             name = raw.split('\x00')[0].strip()
-#                             if name == current_name: continue
-
-#                             if name.startswith("GM ") or name.startswith("CM ") or name.startswith("God "):
-#                                 danger = True
-#                                 gm_found = True
-#                                 d_name = f"GAMEMASTER {name}"
-#                                 break 
-                            
-#                             is_safe = any(s in name for s in BOT_SETTINGS['safe'])
-                            
-#                             if not is_safe:
-#                                 cx = pm.read_int(slot + OFFSET_X)
-#                                 cy = pm.read_int(slot + OFFSET_Y)
-#                                 dist = max(abs(my_x - cx), abs(my_y - cy))
-                                
-#                                 if dist <= BOT_SETTINGS['alarm_range']:
-#                                     danger = True
-#                                     d_name = f"{name} ({dist} SQM)"
-#                                     break 
-#                 except: continue
-                
-#             if danger:
-#                 is_safe_to_bot = False 
-#                 is_gm_detected = gm_found
-#                 log(f"⚠️ PERIGO: {d_name}!")
-#                 if gm_found: 
-#                     winsound.Beep(2000, 1000) 
-#                 else:
-#                     winsound.Beep(1000, 500)
-                
-#                 if (time.time() - last_alert) > 60:
-#                     send_telegram(f"PERIGO! {d_name} aproximou-se!")
-#                     last_alert = time.time()
-#             else: 
-#                 is_safe_to_bot = True 
-#                 is_gm_detected = False
-
-#             time.sleep(0.5)
-#         except Exception as e: 
-#             print(f"Erro Alarm: {e}")
-#             time.sleep(1)
-
 def start_alarm_thread():
     """
     Thread Wrapper para o Alarme.
-    Conecta o módulo independente às variáveis globais do Main.
+    Gerencia transições de Seguro/Perigo e Timers de Retorno.
     """
     
-    # Callbacks: Funções que o módulo pode chamar para alterar coisas aqui no Main
     def set_safe(val): 
-        global is_safe_to_bot
+        global is_safe_to_bot, resume_actions_timestamp, last_alarm_was_gm, resume_type
+        
+        # Detecta transição: PERIGO (False) -> SEGURO (True)
+        if val is True and is_safe_to_bot is False:
+            if last_alarm_was_gm:
+                # Caso GM: Delay Longo (Pânico)
+                delay = random.uniform(*config.RESUME_DELAY_GM)
+                resume_type = "GM"
+                log(f"👮 GM sumiu. Modo Pânico: Aguardando {int(delay)}s...")
+            else:
+                # Caso Normal: Delay Curto (Humano)
+                delay = random.uniform(*config.RESUME_DELAY_NORMAL)
+                resume_type = "NORMAL"
+                log(f"🛡️ Perigo passou. Aguardando {int(delay)}s para retomar...")
+            
+            resume_actions_timestamp = time.time() + delay
+            last_alarm_was_gm = False # Reset flag
+
         is_safe_to_bot = val
         
     def set_gm(val): 
-        global is_gm_detected
+        global is_gm_detected, last_alarm_was_gm
         is_gm_detected = val
+        if val: 
+            last_alarm_was_gm = True # Marca que este alarme foi causado por GM
     
     callbacks = {
         'set_safe': set_safe,
@@ -735,17 +433,18 @@ def start_alarm_thread():
         'log': log
     }
 
-    # Config Provider: Lê os valores da GUI a cada ciclo
+    # Config Provider
     alarm_cfg = lambda: {
         'enabled': switch_alarm.get(),
-        'safe_list': BOT_SETTINGS['safe'], # Lista de amigos
+        'safe_list': BOT_SETTINGS['safe'], 
         'range': BOT_SETTINGS['alarm_range'],
         'floor': BOT_SETTINGS['alarm_floor'],
         'hp_enabled': BOT_SETTINGS['alarm_hp_enabled'],
-        'hp_percent': BOT_SETTINGS['alarm_hp_percent']
+        'hp_percent': BOT_SETTINGS['alarm_hp_percent'],
+        'chat_enabled': BOT_SETTINGS['alarm_chat_enabled'],
+        'chat_gm': BOT_SETTINGS['alarm_chat_gm']
     }
 
-    # Checagem de execução
     check_run = lambda: bot_running and is_connected
 
     while bot_running:
@@ -753,7 +452,6 @@ def start_alarm_thread():
         if pm is None: time.sleep(1); continue
 
         try:
-            # Inicia o loop do módulo
             alarm_loop(pm, base_addr, check_run, alarm_cfg, callbacks)
         except Exception as e:
             print(f"Alarm Thread Crash: {e}")
@@ -954,7 +652,9 @@ def auto_loot_thread():
 def auto_fisher_thread():
     hwnd = 0
     def should_fish():
-        return bot_running and is_connected and switch_fisher.get() and is_safe_to_bot
+        # Verifica se o tempo de espera (Cool-off) já passou
+        is_cooldown_ok = time.time() > resume_actions_timestamp
+        return bot_running and is_connected and switch_fisher.get() and is_safe_to_bot and is_cooldown_ok
 
     # --- CONFIG PROVIDER (O SEGREDO) ---
     # Essa função "empacota" as configurações atuais do BOT_SETTINGS.
@@ -1034,6 +734,14 @@ def runemaker_thread():
         'enable_movement': BOT_SETTINGS.get('rune_movement', False),
         'human_min': BOT_SETTINGS.get('rune_human_min', 0),
         'human_max': BOT_SETTINGS.get('rune_human_max', 0),
+
+        'can_perform_actions': (
+            # Se movimento ligado E alarme foi NORMAL -> Ignora timer (True)
+            (BOT_SETTINGS.get('rune_movement', False) and resume_type == "NORMAL") 
+            or 
+            # Caso contrário (GM ou Sem Movimento) -> Respeita timer
+            (time.time() > resume_actions_timestamp)
+        )
     }
 
     while bot_running:
@@ -1342,6 +1050,8 @@ def auto_resize_window():
     # 3. Aplica a nova geometria
     app.geometry(f"320x{needed_height}")
 
+# ... (código anterior do main.py) ...
+
 def open_settings():
     global toplevel_settings, lbl_status
     
@@ -1350,9 +1060,50 @@ def open_settings():
         toplevel_settings.focus()
         return
 
+    # ==========================================================================
+    # 🎨 SISTEMA DE ESTILOS (CSS-LIKE)
+    # ==========================================================================
+    UI = {
+        # --- TIPOGRAFIA & CORES ---
+        'H1': { # Títulos de Seção
+            'font': ("Verdana", 11, "bold"),
+            'text_color': "#FFFFFF" 
+        },
+        'BODY': { # Texto padrão (Toggles, Labels de input)
+            'font': ("Verdana", 10),
+            'text_color': "#CCCCCC" # Cinza claro
+        },
+        'HINT': { # Dicas pequenas (setinhas)
+            'font': ("Verdana", 8),
+            'text_color': "#555555" # Cinza escuro (quase bg)
+        },
+        
+        # --- INPUTS & DROPDOWNS ---
+        'INPUT': {
+            'width': 50,
+            'height': 24,
+            'font': ("Verdana", 10),
+            'justify': "center"
+        },
+        'COMBO': {
+            'width': 130,
+            'height': 24,
+            'font': ("Verdana", 10),
+            'state': "readonly"
+        },
+        
+        # --- PADDINGS & LAYOUT ---
+        'PAD_SECTION': (10, 5),  # Espaço entre grupos grandes (Top, Bot)
+        'PAD_ITEM':    2,        # Espaço entre itens compactos
+        'PAD_INDENT':  20,       # Indentação para itens filhos
+    }
+
+    # ==========================================================================
+    # JANELA
+    # ==========================================================================
     toplevel_settings = ctk.CTkToplevel(app)
     toplevel_settings.title("Configurações")
-    toplevel_settings.geometry("360x500") 
+    toplevel_settings.geometry("360x520") 
     toplevel_settings.attributes("-topmost", True)
     
     def on_settings_close():
@@ -1364,6 +1115,7 @@ def open_settings():
     tabview = ctk.CTkTabview(toplevel_settings)
     tabview.pack(fill="both", expand=True, padx=10, pady=10)
     
+    # Criação das Abas
     tab_geral  = tabview.add("Geral")
     tab_trainer = tabview.add("Trainer")
     tab_alarm  = tabview.add("Alarme")
@@ -1371,31 +1123,35 @@ def open_settings():
     tab_loot   = tabview.add("Loot")
     tab_fisher = tabview.add("Fisher")
     tab_rune   = tabview.add("Rune")
-    #tab_cavebot = tabview.add("Cavebot")
 
+    # Helper para criar frames de grid (Label Esq | Input Dir)
     def create_grid_frame(parent):
         f = ctk.CTkFrame(parent, fg_color="transparent")
-        f.pack(pady=10, fill="x")
+        f.pack(pady=UI['PAD_SECTION'][0], fill="x")
         f.grid_columnconfigure(0, weight=1) 
         f.grid_columnconfigure(1, weight=2) 
         return f
 
+    # ==========================================================================
     # 1. ABA GERAL
+    # ==========================================================================
     frame_geral = create_grid_frame(tab_geral)
     
-    ctk.CTkLabel(frame_geral, text="Vocação (Regen):", text_color="gray").grid(row=0, column=0, sticky="e", padx=10, pady=5)
-    combo_voc = ctk.CTkComboBox(frame_geral, values=list(VOCATION_REGEN.keys()), width=150, state="readonly")
+    # Vocação
+    ctk.CTkLabel(frame_geral, text="Vocação (Regen):", **UI['BODY']).grid(row=0, column=0, sticky="e", padx=10, pady=UI['PAD_ITEM'])
+    combo_voc = ctk.CTkComboBox(frame_geral, values=list(VOCATION_REGEN.keys()), **UI['COMBO'])
     combo_voc.grid(row=0, column=1, sticky="w")
     combo_voc.set(BOT_SETTINGS['vocation'])
 
-    ctk.CTkLabel(frame_geral, text="Telegram Chat ID:", text_color="gray").grid(row=1, column=0, sticky="e", padx=10, pady=5)
-    entry_telegram = ctk.CTkEntry(frame_geral, width=150)
+    # Telegram
+    ctk.CTkLabel(frame_geral, text="Telegram Chat ID:", **UI['BODY']).grid(row=1, column=0, sticky="e", padx=10, pady=UI['PAD_ITEM'])
+    entry_telegram = ctk.CTkEntry(frame_geral, width=150, height=24, font=UI['BODY']['font'])
     entry_telegram.grid(row=1, column=1, sticky="w")
     entry_telegram.insert(0, str(BOT_SETTINGS['telegram_chat_id']))
     
-    ctk.CTkLabel(frame_geral, text="↳ Recebe alertas de PK e Pausa no celular.", 
-                 font=("Verdana", 8), text_color="#666").grid(row=2, column=0, columnspan=2, sticky="e", padx=60, pady=(0, 5))
+    ctk.CTkLabel(frame_geral, text="↳ Recebe alertas de PK e Pausa no celular.", **UI['HINT']).grid(row=2, column=0, columnspan=2, sticky="e", padx=60, pady=(0, 5))
 
+    # Switches
     frame_switches = ctk.CTkFrame(tab_geral, fg_color="transparent")
     frame_switches.pack(pady=10)
     
@@ -1403,20 +1159,9 @@ def open_settings():
         BOT_SETTINGS['debug_mode'] = bool(switch_debug.get())
         log(f"🔧 Debug: {BOT_SETTINGS['debug_mode']}")
     
-    switch_debug = ctk.CTkSwitch(frame_switches, text="Debug Console", command=on_debug_toggle, progress_color="#FFA500")
-    switch_debug.pack(anchor="w", pady=5)
+    switch_debug = ctk.CTkSwitch(frame_switches, text="Debug Console", command=on_debug_toggle, progress_color="#FFA500", **UI['BODY'])
+    switch_debug.pack(anchor="w", pady=UI['PAD_ITEM'])
     if BOT_SETTINGS['debug_mode']: switch_debug.select()
-
-    # def on_ignore_toggle():
-    #     BOT_SETTINGS['ignore_first'] = bool(switch_ignore.get())
-    #     log(f"🛡️ Ignorar 1º: {BOT_SETTINGS['ignore_first']}")
-
-    # switch_ignore = ctk.CTkSwitch(frame_switches, text="Ignorar 1º Monstro", command=on_ignore_toggle, progress_color="#FFA500")
-    # switch_ignore.pack(anchor="w", pady=5)
-    # if BOT_SETTINGS['ignore_first']: switch_ignore.select()
-
-    # ctk.CTkLabel(frame_switches, text="   ↳ Ignora o primeiro alvo do battle ao atacar.", 
-    #              font=("Verdana", 8), text_color="#777", justify="left").pack(anchor="w", pady=(0, 10))
     
     def on_light_toggle():
         global full_light_enabled
@@ -1424,8 +1169,8 @@ def open_settings():
         apply_full_light(full_light_enabled)
         log(f"💡 Full Light: {full_light_enabled}")
 
-    switch_light = ctk.CTkSwitch(frame_switches, text="Full Light", command=on_light_toggle, progress_color="#FFA500")
-    switch_light.pack(anchor="w", pady=5)
+    switch_light = ctk.CTkSwitch(frame_switches, text="Full Light (Hack)", command=on_light_toggle, progress_color="#FFA500", **UI['BODY'])
+    switch_light.pack(anchor="w", pady=UI['PAD_ITEM'])
     if full_light_enabled: switch_light.select()
 
     def save_geral():
@@ -1435,164 +1180,168 @@ def open_settings():
         save_config_file()
         log(f"⚙️ Geral salvo.")
 
-    ctk.CTkButton(tab_geral, text="Salvar Geral", command=save_geral, fg_color="#2CC985").pack(side="bottom", pady=10, fill="x", padx=20)
+    ctk.CTkButton(tab_geral, text="Salvar Geral", command=save_geral, fg_color="#2CC985", height=32).pack(side="bottom", pady=10, fill="x", padx=20)
 
-    # ABA TRAINER
+    # ==========================================================================
+    # 2. ABA TRAINER
+    # ==========================================================================
     frame_tr = ctk.CTkFrame(tab_trainer, fg_color="transparent")
-    frame_tr.pack(fill="x", pady=10)
+    frame_tr.pack(fill="x", pady=UI['PAD_SECTION'][0])
     
     # Delay
-    ctk.CTkLabel(frame_tr, text="Delay de Ataque (s):", font=("Verdana", 12, "bold")).pack(anchor="w", padx=10)
+    ctk.CTkLabel(frame_tr, text="Delay de Ataque (s):", **UI['H1']).pack(anchor="w", padx=10)
     
     f_dely = ctk.CTkFrame(frame_tr, fg_color="transparent")
-    f_dely.pack(fill="x", padx=10, pady=5)
+    f_dely.pack(fill="x", padx=10, pady=UI['PAD_ITEM'])
     
-    ctk.CTkLabel(f_dely, text="Min:").pack(side="left")
-    entry_tr_min = ctk.CTkEntry(f_dely, width=50)
+    ctk.CTkLabel(f_dely, text="Min:", **UI['BODY']).pack(side="left")
+    entry_tr_min = ctk.CTkEntry(f_dely, **UI['INPUT'])
     entry_tr_min.pack(side="left", padx=5)
     entry_tr_min.insert(0, str(BOT_SETTINGS.get('trainer_min_delay', 1.0)))
     
-    ctk.CTkLabel(f_dely, text="Max:").pack(side="left", padx=(10,0))
-    entry_tr_max = ctk.CTkEntry(f_dely, width=50)
+    ctk.CTkLabel(f_dely, text="Max:", **UI['BODY']).pack(side="left", padx=(10,0))
+    entry_tr_max = ctk.CTkEntry(f_dely, **UI['INPUT'])
     entry_tr_max.pack(side="left", padx=5)
     entry_tr_max.insert(0, str(BOT_SETTINGS.get('trainer_max_delay', 2.0)))
     
     # Range
-    ctk.CTkLabel(frame_tr, text="Distância de Ataque (SQM):", font=("Verdana", 12, "bold")).pack(anchor="w", padx=10, pady=(15,0))
+    ctk.CTkLabel(frame_tr, text="Distância (SQM):", **UI['H1']).pack(anchor="w", padx=10, pady=(15,0))
     
     f_rng = ctk.CTkFrame(frame_tr, fg_color="transparent")
-    f_rng.pack(fill="x", padx=10, pady=5)
+    f_rng.pack(fill="x", padx=10, pady=UI['PAD_ITEM'])
     
-    entry_tr_range = ctk.CTkEntry(f_rng, width=50)
+    entry_tr_range = ctk.CTkEntry(f_rng, **UI['INPUT'])
     entry_tr_range.pack(side="left")
     entry_tr_range.insert(0, str(BOT_SETTINGS.get('trainer_range', 1)))
     
-    ctk.CTkLabel(f_rng, text="(1 = Melee / 3+ = Distance)", text_color="gray", font=("Verdana", 10)).pack(side="left", padx=10)
+    ctk.CTkLabel(f_rng, text="(1 = Melee / 3+ = Distance)", **UI['HINT']).pack(side="left", padx=10)
 
-    # --- IGNORAR 1º MONSTRO (MOVIDO DA GERAL) ---
-    ctk.CTkLabel(frame_tr, text="Lógica de Alvo:", font=("Verdana", 12, "bold")).pack(anchor="w", padx=10, pady=(15,0))
+    # Lógica de Alvo
+    ctk.CTkLabel(frame_tr, text="Lógica de Alvo:", **UI['H1']).pack(anchor="w", padx=10, pady=(15,0))
     
     frame_tr_ignore = ctk.CTkFrame(tab_trainer, fg_color="transparent")
-    frame_tr_ignore.pack(fill="x", padx=10, pady=10)
+    frame_tr_ignore.pack(fill="x", padx=10, pady=5)
 
     def on_ignore_toggle():
         BOT_SETTINGS['ignore_first'] = bool(switch_ignore.get())
         log(f"🛡️ Ignorar 1º: {BOT_SETTINGS['ignore_first']}")
 
-    switch_ignore = ctk.CTkSwitch(frame_tr_ignore, text="Ignorar 1º Monstro", command=on_ignore_toggle, progress_color="#FFA500")
+    switch_ignore = ctk.CTkSwitch(frame_tr_ignore, text="Ignorar 1º Monstro", command=on_ignore_toggle, progress_color="#FFA500", **UI['BODY'])
     switch_ignore.pack(anchor="w")
-    
-    if BOT_SETTINGS.get('ignore_first', False):
-        switch_ignore.select()
+    if BOT_SETTINGS.get('ignore_first', False): switch_ignore.select()
 
-    ctk.CTkLabel(frame_tr_ignore, text="   ↳ Ignora o primeiro alvo da lista (útil para Monk/Treino)", 
-                 font=("Verdana", 8), text_color="#777", justify="left").pack(anchor="w")
+    ctk.CTkLabel(frame_tr_ignore, text="↳ Ignora o primeiro alvo (útil para Monk).", **UI['HINT']).pack(anchor="w", padx=40)
 
-    # Função de Salvar Específica (ou adicione na save_geral se preferir)
     def save_trainer():
         try:
             BOT_SETTINGS['trainer_min_delay'] = float(entry_tr_min.get().replace(',', '.'))
             BOT_SETTINGS['trainer_max_delay'] = float(entry_tr_max.get().replace(',', '.'))
             BOT_SETTINGS['trainer_range'] = int(entry_tr_range.get())
             save_config_file()
-            log("⚔️ Configurações do Trainer salvas!")
-        except:
-            log("❌ Erro nos valores do Trainer.")
+            log("⚔️ Trainer salvo!")
+        except: log("❌ Erro nos valores.")
 
-    ctk.CTkButton(tab_trainer, text="Salvar Trainer", command=save_trainer, fg_color="#2CC985").pack(side="bottom", pady=10, fill="x", padx=20)
+    ctk.CTkButton(tab_trainer, text="Salvar Trainer", command=save_trainer, fg_color="#2CC985", height=32).pack(side="bottom", pady=10, fill="x", padx=20)
 
-    # 2. ABA ALARME
+    # ==========================================================================
+    # 3. ABA ALARME
+    # ==========================================================================
     frame_alarm = create_grid_frame(tab_alarm)
 
-    ctk.CTkLabel(frame_alarm, text="Distância (SQM):", text_color="gray").grid(row=0, column=0, sticky="e", padx=10, pady=5)
+    # Distância
+    ctk.CTkLabel(frame_alarm, text="Distância (SQM):", **UI['BODY']).grid(row=0, column=0, sticky="e", padx=10, pady=UI['PAD_ITEM'])
     dist_vals = ["1 SQM", "3 SQM", "5 SQM", "8 SQM (Padrão)", "Tela Toda"]
-    combo_alarm = ctk.CTkComboBox(frame_alarm, values=dist_vals, width=150, state="readonly")
+    combo_alarm = ctk.CTkComboBox(frame_alarm, values=dist_vals, **UI['COMBO'])
     combo_alarm.grid(row=0, column=1, sticky="w")
     
     curr_vis = "Tela Toda" if BOT_SETTINGS['alarm_range'] >= 15 else f"{BOT_SETTINGS['alarm_range']} SQM" if BOT_SETTINGS['alarm_range'] in [1,3,5] else "8 SQM (Padrão)"
     combo_alarm.set(curr_vis)
 
-    ctk.CTkLabel(frame_alarm, text="↳ Raio de detecção ao redor do personagem.", 
-                 font=("Verdana", 8), text_color="#777").grid(row=1, column=0, columnspan=2, sticky="w", padx=40, pady=(0, 5))
-
-    ctk.CTkLabel(frame_alarm, text="Monitorar Andares:", text_color="gray").grid(row=2, column=0, sticky="e", padx=10, pady=5)
-    combo_floor = ctk.CTkComboBox(frame_alarm, values=["Padrão", "Superior (+1)", "Inferior (-1)", "Todos (Raio-X)"], width=150, state="readonly")
+    # Andares
+    ctk.CTkLabel(frame_alarm, text="Monitorar Andares:", **UI['BODY']).grid(row=2, column=0, sticky="e", padx=10, pady=UI['PAD_ITEM'])
+    combo_floor = ctk.CTkComboBox(frame_alarm, values=["Padrão", "Superior (+1)", "Inferior (-1)", "Todos (Raio-X)"], **UI['COMBO'])
     combo_floor.grid(row=2, column=1, sticky="w")
     combo_floor.set(BOT_SETTINGS['alarm_floor'])
 
-    # Divisória visual
-    ctk.CTkFrame(tab_alarm, height=2, fg_color="#303030").pack(fill="x", padx=10, pady=10)
+    # Divisória
+    ctk.CTkFrame(tab_alarm, height=1, fg_color="#444").pack(fill="x", padx=10, pady=10)
 
-    # --- NOVO: Configuração de HP Baixo (Feature 1) ---
+    # --- HP ALARM ---
     frame_hp = ctk.CTkFrame(tab_alarm, fg_color="transparent")
     frame_hp.pack(fill="x", padx=5)
 
-    ctk.CTkLabel(frame_hp, text="Monitorar Vida (HP):", font=("Verdana", 12, "bold")).pack(anchor="w", padx=10, pady=(0,5))
+    ctk.CTkLabel(frame_hp, text="Monitorar Vida (HP):", **UI['H1']).pack(anchor="w", padx=10, pady=(0,5))
 
-    entry_hp_pct = None  # atribuído alguns blocos abaixo
-
-    def apply_hp_entry_state():
-        """Enable or disable HP percent entry based on switch state."""
-        if entry_hp_pct is None:
-            return
-        state = "normal" if switch_hp_alarm.get() else "disabled"
-        entry_hp_pct.configure(state=state)
-
+    entry_hp_pct = None 
     def toggle_hp_alarm():
-        apply_hp_entry_state()
+        state = "normal" if switch_hp_alarm.get() else "disabled"
+        if entry_hp_pct: entry_hp_pct.configure(state=state)
 
-    # Toggle
-    switch_hp_alarm = ctk.CTkSwitch(frame_hp, text="Ativar Alarme de HP Baixo", command=toggle_hp_alarm, progress_color="#FF5555")
-    switch_hp_alarm.pack(anchor="w", padx=20)
+    switch_hp_alarm = ctk.CTkSwitch(frame_hp, text="Alarme de HP Baixo", command=toggle_hp_alarm, progress_color="#FF5555", **UI['BODY'])
+    switch_hp_alarm.pack(anchor="w", padx=UI['PAD_INDENT'])
     if BOT_SETTINGS.get('alarm_hp_enabled', False): switch_hp_alarm.select()
 
-    # Input Porcentagem
     f_hp_val = ctk.CTkFrame(frame_hp, fg_color="transparent")
-    f_hp_val.pack(fill="x", padx=20, pady=5)
+    f_hp_val.pack(fill="x", padx=UI['PAD_INDENT'], pady=2)
     
-    ctk.CTkLabel(f_hp_val, text="Disparar se HP menor que (%):").pack(side="left")
-    entry_hp_pct = ctk.CTkEntry(f_hp_val, width=50, justify="center")
-    entry_hp_pct.pack(side="left", padx=10)
+    ctk.CTkLabel(f_hp_val, text="Disparar se <", **UI['BODY']).pack(side="left")
+    entry_hp_pct = ctk.CTkEntry(f_hp_val, **UI['INPUT'])
+    entry_hp_pct.pack(side="left", padx=5)
     entry_hp_pct.insert(0, str(BOT_SETTINGS.get('alarm_hp_percent', 50)))
-    apply_hp_entry_state()
+    ctk.CTkLabel(f_hp_val, text="%", **UI['BODY']).pack(side="left")
+    
+    toggle_hp_alarm() # Aplica estado inicial
 
-    # Frame de notas
-    frame_note = ctk.CTkFrame(tab_alarm, fg_color="transparent")
-    frame_note.pack(pady=10)
-    ctk.CTkLabel(frame_note, text="ℹ️ Nota: Para ignorar amigos/criaturas,", 
-                 font=("Verdana", 9), text_color="#BBB").pack()
-    ctk.CTkLabel(frame_note, text="adicione os nomes na 'Safe List' (Aba Alvos).", 
-                 font=("Verdana", 9, "bold"), text_color="#BBB").pack()
-                 
+    # Divisória
+    ctk.CTkFrame(tab_alarm, height=1, fg_color="#444").pack(fill="x", padx=10, pady=10)
+
+    # --- CHAT ALARM ---
+    ctk.CTkLabel(tab_alarm, text="Monitorar Chat (Default):", **UI['H1']).pack(anchor="w", padx=10, pady=(0,5))
+
+    def toggle_chat_opts(): pass
+
+    switch_chat = ctk.CTkSwitch(tab_alarm, text="Alarme de Msg Nova", command=toggle_chat_opts, progress_color="#FFA500", **UI['BODY'])
+    switch_chat.pack(anchor="w", padx=UI['PAD_INDENT'], pady=2)
+    if BOT_SETTINGS.get('alarm_chat_enabled', False): switch_chat.select()
+
+    switch_gm_chat = ctk.CTkSwitch(tab_alarm, text="Pausar se GM falar", command=toggle_chat_opts, progress_color="#FF0000", **UI['BODY'])
+    switch_gm_chat.pack(anchor="w", padx=UI['PAD_INDENT'], pady=2)
+    if BOT_SETTINGS.get('alarm_chat_gm', True): switch_gm_chat.select()
+
+    ctk.CTkLabel(tab_alarm, text="↳ Ignora suas próprias mensagens.", **UI['HINT']).pack(anchor="w", padx=45)
+
     def save_alarm():
         try:
-            # Salva Range (Existente)
+            # Range
             raw_range = combo_alarm.get()
             BOT_SETTINGS['alarm_range'] = 15 if "Tela" in raw_range else int(raw_range.split()[0])
             BOT_SETTINGS['alarm_floor'] = combo_floor.get()
             
-            # Salva HP (Novo)
+            # HP
             BOT_SETTINGS['alarm_hp_enabled'] = bool(switch_hp_alarm.get())
             hp_val = int(entry_hp_pct.get())
-            if hp_val < 1: hp_val = 1
-            if hp_val > 99: hp_val = 99
             BOT_SETTINGS['alarm_hp_percent'] = hp_val
 
+            # Chat
+            BOT_SETTINGS['alarm_chat_enabled'] = bool(switch_chat.get())
+            BOT_SETTINGS['alarm_chat_gm'] = bool(switch_gm_chat.get())
+
             save_config_file()
-            log(f"🔔 Alarme salvo (HP < {hp_val}%: {BOT_SETTINGS['alarm_hp_enabled']}).")
-        except:
-            log("❌ Erro: Porcentagem de HP deve ser número inteiro.")
+            log(f"🔔 Alarme salvo.")
+        except: log("❌ Erro nos valores.")
 
-    ctk.CTkButton(tab_alarm, text="Salvar Alarme", command=save_alarm, fg_color="#2CC985").pack(side="bottom", pady=10, fill="x", padx=20)
+    ctk.CTkButton(tab_alarm, text="Salvar Alarme", command=save_alarm, fg_color="#2CC985", height=32).pack(side="bottom", pady=10, fill="x", padx=20)
 
-    # 3. ABA ALVOS
-    ctk.CTkLabel(tab_alvos, text="Alvos (Target List):", font=("Verdana", 11, "bold")).pack(pady=(5,0))
-    txt_targets = ctk.CTkTextbox(tab_alvos, height=100)
+    # ==========================================================================
+    # 4. ABA ALVOS
+    # ==========================================================================
+    ctk.CTkLabel(tab_alvos, text="Alvos (Target List):", **UI['H1']).pack(pady=(5,0))
+    txt_targets = ctk.CTkTextbox(tab_alvos, height=100, font=("Consolas", 10))
     txt_targets.pack(fill="x", padx=5, pady=5)
     txt_targets.insert("0.0", "\n".join(BOT_SETTINGS['targets']))
 
-    ctk.CTkLabel(tab_alvos, text="Segura (Safe List):", font=("Verdana", 11, "bold")).pack(pady=(5,0))
-    txt_safe = ctk.CTkTextbox(tab_alvos, height=140)
+    ctk.CTkLabel(tab_alvos, text="Segura (Safe List):", **UI['H1']).pack(pady=(5,0))
+    txt_safe = ctk.CTkTextbox(tab_alvos, height=140, font=("Consolas", 10))
     txt_safe.pack(fill="x", padx=5, pady=5)
     txt_safe.insert("0.0", "\n".join(BOT_SETTINGS['safe']))
 
@@ -1602,122 +1351,96 @@ def open_settings():
         save_config_file()
         log(f"🎯 Listas salvas.")
 
-    ctk.CTkButton(tab_alvos, text="Salvar Listas", command=save_lists, fg_color="#2CC985").pack(side="bottom", pady=10, fill="x", padx=20)
+    ctk.CTkButton(tab_alvos, text="Salvar Listas", command=save_lists, fg_color="#2CC985", height=32).pack(side="bottom", pady=10, fill="x", padx=20)
 
-    # 4. ABA LOOT
-    ctk.CTkLabel(tab_loot, text="Quantas BPs são suas?", text_color="gray", font=("Verdana", 10)).pack()
-    entry_cont_count = ctk.CTkEntry(tab_loot, width=50)
-    entry_cont_count.pack(pady=5)
+    # ==========================================================================
+    # 5. ABA LOOT
+    # ==========================================================================
+    ctk.CTkLabel(tab_loot, text="Configuração de BPs:", **UI['H1']).pack(pady=(10,5))
+    
+    ctk.CTkLabel(tab_loot, text="Minhas BPs (Não lootear):", **UI['BODY']).pack()
+    entry_cont_count = ctk.CTkEntry(tab_loot, **UI['INPUT'])
+    entry_cont_count.pack(pady=2)
     entry_cont_count.insert(0, str(BOT_SETTINGS['loot_containers'])) 
     
-    ctk.CTkLabel(tab_loot, text="(O resto será considerado Corpo)", font=("Verdana", 9), text_color="#555555").pack(pady=(0, 10))
-
-    ctk.CTkLabel(tab_loot, text="Índice da BP de Destino:", text_color="gray", font=("Verdana", 10)).pack()
-    entry_dest_idx = ctk.CTkEntry(tab_loot, width=50)
-    entry_dest_idx.pack(pady=5)
+    ctk.CTkLabel(tab_loot, text="Índice Destino (0=Primeira):", **UI['BODY']).pack(pady=(10,0))
+    entry_dest_idx = ctk.CTkEntry(tab_loot, **UI['INPUT'])
+    entry_dest_idx.pack(pady=2)
     entry_dest_idx.insert(0, str(BOT_SETTINGS['loot_dest'])) 
-    
-    ctk.CTkLabel(tab_loot, text="(0 = Primeira BP, 1 = Segunda...)", font=("Verdana", 9), text_color="#555555").pack(pady=(0, 20))
 
-    # --- NOVO: SWITCH DROP FOOD ---
+    # Options
     frame_loot_opts = ctk.CTkFrame(tab_loot, fg_color="transparent")
-    frame_loot_opts.pack(fill="x", padx=10, pady=5)
+    frame_loot_opts.pack(fill="x", padx=10, pady=15)
 
-    def toggle_drop_food(): pass # O valor é lido no save
+    def toggle_drop_food(): pass
     
-    switch_drop_food = ctk.CTkSwitch(frame_loot_opts, text="Jogar Food no chão se Full", 
-                                     command=toggle_drop_food, font=("Verdana", 10), progress_color="#FFA500")
+    switch_drop_food = ctk.CTkSwitch(frame_loot_opts, text="Jogar Food no chão se Full", command=toggle_drop_food, progress_color="#FFA500", **UI['BODY'])
     switch_drop_food.pack(anchor="center")
-    
-    # Carrega estado atual
-    if BOT_SETTINGS.get('loot_drop_food', False):
-        switch_drop_food.select()
+    if BOT_SETTINGS.get('loot_drop_food', False): switch_drop_food.select()
 
     def save_loot():
         try:
             BOT_SETTINGS['loot_containers'] = int(entry_cont_count.get())
             BOT_SETTINGS['loot_dest'] = int(entry_dest_idx.get())
             BOT_SETTINGS['loot_drop_food'] = bool(switch_drop_food.get())
-            
             save_config_file()
-            log(f"💰 Loot salvo: {BOT_SETTINGS['loot_containers']} BPs | Dest: {BOT_SETTINGS['loot_dest']} | Drop: {BOT_SETTINGS['loot_drop_food']}")
+            log(f"💰 Loot salvo.")
         except: log("❌ Use números inteiros.")
 
-    ctk.CTkButton(tab_loot, text="Salvar Loot", command=save_loot, fg_color="#2CC985").pack(side="bottom", pady=10, fill="x", padx=20)
+    ctk.CTkButton(tab_loot, text="Salvar Loot", command=save_loot, fg_color="#2CC985", height=32).pack(side="bottom", pady=10, fill="x", padx=20)
 
-    # 5. ABA FISHER
+    # ==========================================================================
+    # 6. ABA FISHER
+    # ==========================================================================
     frame_fish = create_grid_frame(tab_fisher)
 
-    ctk.CTkLabel(frame_fish, text="Min Tentativas:", text_color="gray").grid(row=0, column=0, sticky="e", padx=10, pady=5)
-    entry_fish_min = ctk.CTkEntry(frame_fish, width=50, justify="center")
-    entry_fish_min.grid(row=0, column=1, sticky="w")
+    ctk.CTkLabel(frame_fish, text="Tentativas:", **UI['BODY']).grid(row=0, column=0, sticky="e", padx=10, pady=2)
+    f_att = ctk.CTkFrame(frame_fish, fg_color="transparent")
+    f_att.grid(row=0, column=1, sticky="w")
+    
+    entry_fish_min = ctk.CTkEntry(f_att, **UI['INPUT'])
+    entry_fish_min.pack(side="left")
     entry_fish_min.insert(0, str(BOT_SETTINGS['fisher_min']))
-
-    ctk.CTkLabel(frame_fish, text="Max Tentativas:", text_color="gray").grid(row=1, column=0, sticky="e", padx=10, pady=5)
-    entry_fish_max = ctk.CTkEntry(frame_fish, width=50, justify="center")
-    entry_fish_max.grid(row=1, column=1, sticky="w")
+    
+    ctk.CTkLabel(f_att, text="a", **UI['BODY']).pack(side="left", padx=5)
+    
+    entry_fish_max = ctk.CTkEntry(f_att, **UI['INPUT'])
+    entry_fish_max.pack(side="left")
     entry_fish_max.insert(0, str(BOT_SETTINGS['fisher_max']))
 
-    lbl_hint_fish = ctk.CTkLabel(frame_fish, text="↳ O bot escolherá um número aleatório entre Min e Max\n para pescar em cada quadrado.", 
-                                 font=("Verdana", 8), text_color="#777", justify="left")
-    lbl_hint_fish.grid(row=2, column=0, columnspan=2, sticky="w", padx=(20,0), pady=(0,5))
-
-    # --- NOVO: Configurações de CAP (Save Cap) ---
-    ctk.CTkLabel(frame_fish, text="Min Cap (oz):", text_color="gray").grid(row=3, column=0, sticky="e", padx=10, pady=5)
-    entry_fish_cap_val = ctk.CTkEntry(frame_fish, width=50, justify="center")
-    entry_fish_cap_val.grid(row=3, column=1, sticky="w")
-    # Usa .get() para evitar erro se a chave não existir em configs antigas
+    # Cap Control
+    ctk.CTkLabel(frame_fish, text="Min Cap:", **UI['BODY']).grid(row=1, column=0, sticky="e", padx=10, pady=5)
+    entry_fish_cap_val = ctk.CTkEntry(frame_fish, **UI['INPUT'])
+    entry_fish_cap_val.grid(row=1, column=1, sticky="w")
     entry_fish_cap_val.insert(0, str(BOT_SETTINGS.get('fisher_min_cap', 10.0)))
 
-    # Frame auxiliar para o Switch ficar alinhado
+    # Switches Fisher
     frame_fish_opts = ctk.CTkFrame(tab_fisher, fg_color="transparent")
     frame_fish_opts.pack(pady=10)
 
-    def toggle_fish_cap():
-        # Apenas visual ou log, o valor real é salvo no botão "Salvar Fisher"
-        pass
+    def toggle_dummy(): pass
 
-    switch_fish_cap = ctk.CTkSwitch(frame_fish_opts, text="Pausar se Cap Baixa", command=toggle_fish_cap, 
-                                    progress_color="#FFA500", font=("Verdana", 10))
-    switch_fish_cap.grid(row=4, column=0, columnspan=2, sticky="w", padx=(20,0), pady=(0,5))
-    switch_fish_cap.pack()
+    switch_fish_cap = ctk.CTkSwitch(frame_fish_opts, text="Pausar se Cap Baixa", command=toggle_dummy, progress_color="#FFA500", **UI['BODY'])
+    switch_fish_cap.pack(anchor="w", padx=UI['PAD_INDENT'], pady=2)
+    if BOT_SETTINGS.get('fisher_check_cap', True): switch_fish_cap.select()
+
+    switch_fatigue = ctk.CTkSwitch(frame_fish_opts, text="Simular Fadiga Humana", command=toggle_dummy, progress_color="#FFA500", **UI['BODY'])
+    switch_fatigue.pack(anchor="w", padx=UI['PAD_INDENT'], pady=2)
+    if BOT_SETTINGS.get('fisher_fatigue', True): switch_fatigue.select()
     
-    # Carrega o estado atual
-    if BOT_SETTINGS.get('fisher_check_cap', True):
-        switch_fish_cap.select()
-    else:
-        switch_fish_cap.deselect()
-
-    # Dica Visual
-    # lbl_hint_fish = ctk.CTkLabel(tab_fisher, text="↳ Se ativado, o bot para de pescar quando\na Cap estiver abaixo do limite configurado.", 
-    #                              font=("Verdana", 8), text_color="#777")
-    # lbl_hint_fish.grid(row=5, column=0, columnspan=2, sticky="w", padx=(20,0), pady=(0,5))
-
-    # --- SISTEMA DE FADIGA (NOVO) ---
-    frame_fatigue = ctk.CTkFrame(tab_fisher, fg_color="transparent")
-    frame_fatigue.pack(pady=(10, 0))
-
-    def toggle_fatigue(): pass 
-
-    switch_fatigue = ctk.CTkSwitch(frame_fatigue, text="Simular Fadiga Humana", command=toggle_fatigue, 
-                                   progress_color="#FFA500", font=("Verdana", 10))
-    switch_fatigue.pack(anchor="w", padx=(20,0))
-    
-    if BOT_SETTINGS.get('fisher_fatigue', True):
-        switch_fatigue.select()
-    
-    ctk.CTkLabel(frame_fatigue, text="↳ Cria pausas longas e lentidão progressiva.", 
-                 font=("Verdana", 8), text_color="#777").pack(anchor="w", padx=(40,0))
+    ctk.CTkLabel(frame_fish_opts, text="↳ Cria pausas e lentidão progressiva.", **UI['HINT']).pack(anchor="w", padx=45)
 
     def save_fish():
         try:
             mn = int(entry_fish_min.get())
             mx = int(entry_fish_max.get())
-            cap_val = float(entry_fish_cap_val.get().replace(',', '.')) # Aceita virgula ou ponto
+            cap_val = float(entry_fish_cap_val.get().replace(',', '.'))
             check_cap = bool(switch_fish_cap.get())
             fatigue_enabled = bool(switch_fatigue.get())
+            
             if mn < 1: mn=1
             if mx < mn: mx=mn
+            
             BOT_SETTINGS['fisher_min'] = mn
             BOT_SETTINGS['fisher_max'] = mx
             BOT_SETTINGS['fisher_min_cap'] = cap_val
@@ -1726,22 +1449,21 @@ def open_settings():
             save_config_file()
             config.CHECK_MIN_CAP = check_cap
             config.MIN_CAP_VALUE = cap_val
-            log(f"🎣 Fisher salvo: {mn} a {mx}")
-        except: log("❌ Use números inteiros.")
+            log(f"🎣 Fisher salvo.")
+        except: log("❌ Erro nos valores.")
 
-    ctk.CTkButton(tab_fisher, text="Salvar Fisher", command=save_fish, fg_color="#2CC985").pack(side="bottom", pady=10, fill="x", padx=20)
+    ctk.CTkButton(tab_fisher, text="Salvar Fisher", command=save_fish, fg_color="#2CC985", height=32).pack(side="bottom", pady=10, fill="x", padx=20)
 
-    # ==============================================================================
-    # 6. ABA RUNE (LAYOUT ULTRA-COMPACTO)
-    # ==============================================================================
+    # ==========================================================================
+    # 7. ABA RUNE (ESTILO COMPACTO)
+    # ==========================================================================
     
-    # Helper para atualizar labels de posição (definido aqui para ter acesso aos widgets)
+    # Helper Label Update
     def update_rune_pos_labels():
         lbl_work_pos.configure(text=str(BOT_SETTINGS.get('rune_work_pos', (0,0,0))))
         lbl_safe_pos.configure(text=str(BOT_SETTINGS.get('rune_safe_pos', (0,0,0))))
 
     def set_rune_pos(type_pos):
-        # Pega posição atual do player e salva
         if pm:
             try:
                 x = pm.read_int(base_addr + 0x1D16F0) # OFFSET_PLAYER_X
@@ -1752,130 +1474,116 @@ def open_settings():
                 BOT_SETTINGS[key] = (x, y, z)
                 update_rune_pos_labels()
                 log(f"📍 {type_pos} definido: {x}, {y}, {z}")
-            except:
-                log("❌ Erro ao ler posição. Logue no char.")
+            except: log("❌ Logue no char.")
 
-    # --- SEÇÃO 1: CRAFT (Tudo em 2 linhas) ---
+    # Frame Craft
     frame_craft = ctk.CTkFrame(tab_rune, fg_color="#2b2b2b")
     frame_craft.pack(fill="x", padx=5, pady=2)
     
-    ctk.CTkLabel(frame_craft, text="⚙️ Crafting", font=("Verdana", 11, "bold"), height=18).pack(anchor="w", padx=5, pady=(10,10))
+    ctk.CTkLabel(frame_craft, text="⚙️ Crafting", **UI['H1']).pack(anchor="w", padx=5, pady=(5,5))
     
     f_c1 = ctk.CTkFrame(frame_craft, fg_color="transparent")
     f_c1.pack(fill="x", padx=2, pady=2)
     
-    # Linha compacta: Ma| Hotkey | Mão
-    ctk.CTkLabel(f_c1, text="Mana:", font=("Verdana", 10)).pack(side="left", padx=5)
-    entry_mana = ctk.CTkEntry(f_c1, width=45, height=22, font=("Verdana", 10), justify="center")
-    entry_mana.pack(side="left", padx=5)
+    ctk.CTkLabel(f_c1, text="Mana:", **UI['BODY']).pack(side="left", padx=5)
+    entry_mana = ctk.CTkEntry(f_c1, **UI['INPUT'])
+    entry_mana.configure(width=45)
+    entry_mana.pack(side="left", padx=2)
     entry_mana.insert(0, str(BOT_SETTINGS['rune_mana']))
     
-    ctk.CTkLabel(f_c1, text="Key:", font=("Verdana", 10)).pack(side="left", padx=5)
-    entry_hk = ctk.CTkEntry(f_c1, width=35, height=22, font=("Verdana", 10), justify="center")
-    entry_hk.pack(side="left", padx=5)
+    ctk.CTkLabel(f_c1, text="Key:", **UI['BODY']).pack(side="left", padx=5)
+    entry_hk = ctk.CTkEntry(f_c1, **UI['INPUT'])
+    entry_hk.configure(width=35)
+    entry_hk.pack(side="left", padx=2)
     entry_hk.insert(0, BOT_SETTINGS['rune_hotkey'])
     
-    ctk.CTkLabel(f_c1, text="Hand:", font=("Verdana", 10)).pack(side="left", padx=5)
-    combo_hand = ctk.CTkComboBox(f_c1, values=["RIGHT", "LEFT", "BOTH"], width=65, height=22, font=("Verdana", 10), state="readonly")
-    combo_hand.pack(side="left", padx=5)
+    ctk.CTkLabel(f_c1, text="Hand:", **UI['BODY']).pack(side="left", padx=5)
+    combo_hand = ctk.CTkComboBox(f_c1, values=["RIGHT", "LEFT", "BOTH"], **UI['COMBO'])
+    combo_hand.configure(width=70)
+    combo_hand.pack(side="left", padx=2)
     combo_hand.set(BOT_SETTINGS['rune_hand'])
 
-    # --- SEÇÃO 2: HUMANIZAÇÃO ---
+    # Frame Human
     frame_human = ctk.CTkFrame(tab_rune, fg_color="#2b2b2b")
     frame_human.pack(fill="x", padx=5, pady=2)
     
     f_h1 = ctk.CTkFrame(frame_human, fg_color="transparent")
-    f_h1.pack(fill="x", padx=2, pady=2)
+    f_h1.pack(fill="x", padx=2, pady=5)
     
-    ctk.CTkLabel(f_h1, text="Esperar entre", font=("Verdana", 9)).pack(side="left", padx=5)
-    
-    entry_human_min = ctk.CTkEntry(f_h1, width=35, height=22, font=("Verdana", 10), justify="center")
+    ctk.CTkLabel(f_h1, text="Wait:", **UI['BODY']).pack(side="left", padx=5)
+    entry_human_min = ctk.CTkEntry(f_h1, **UI['INPUT'])
+    entry_human_min.configure(width=35)
     entry_human_min.pack(side="left", padx=2)
     entry_human_min.insert(0, str(BOT_SETTINGS.get('rune_human_min', 5)))
     
-    ctk.CTkLabel(f_h1, text="e", font=("Verdana", 9)).pack(side="left", padx=5)
-    
-    entry_human_max = ctk.CTkEntry(f_h1, width=35, height=22, font=("Verdana", 10), justify="center")
+    ctk.CTkLabel(f_h1, text="to", **UI['BODY']).pack(side="left", padx=2)
+    entry_human_max = ctk.CTkEntry(f_h1, **UI['INPUT'])
+    entry_human_max.configure(width=35)
     entry_human_max.pack(side="left", padx=2)
     entry_human_max.insert(0, str(BOT_SETTINGS.get('rune_human_max', 30)))
+    ctk.CTkLabel(f_h1, text="sec (action)", **UI['BODY']).pack(side="left", padx=2)
 
-    ctk.CTkLabel(f_h1, text="segundos para conjurar", font=("Verdana", 9)).pack(side="left", padx=2)
-
-    # --- SEÇÃO 3: SEGURANÇA & MOVIMENTO ---
+    # Frame Move
     frame_move = ctk.CTkFrame(tab_rune, fg_color="#2b2b2b")
-    frame_move.pack(fill="x", padx=5, pady=10)
-    
-    ctk.CTkLabel(frame_move, text="🚨 Anti-PK / Movimento", font=("Verdana", 11, "bold"), height=18).pack(anchor="w", padx=5, pady=(10,10))
+    frame_move.pack(fill="x", padx=5, pady=5)
+    ctk.CTkLabel(frame_move, text="🚨 Anti-PK / Movimento", **UI['H1']).pack(anchor="w", padx=5, pady=(5,5))
 
-    # Toggle Flee + Delays
+    # Toggle
     f_m1 = ctk.CTkFrame(frame_move, fg_color="transparent")
-    f_m1.pack(fill="x", padx=2, pady=5)
-    
-    switch_movement = ctk.CTkSwitch(f_m1, text="Fugir para safe (alarme)", font=("Verdana", 10), width=50, height=20)
-    switch_movement.pack(side="left", padx=2)
+    f_m1.pack(fill="x", padx=2, pady=2)
+    switch_movement = ctk.CTkSwitch(f_m1, text="Fugir para Safe", width=50, height=20, font=UI['BODY']['font'])
+    switch_movement.pack(side="left", padx=5)
     if BOT_SETTINGS.get('rune_movement', False): switch_movement.select()
 
-    f_m2 = ctk.CTkFrame(frame_move, fg_color="transparent")
-    f_m2.pack(fill="x", padx=2, pady=2)
-    
-    ctk.CTkLabel(f_m2, text="Reação(s):", font=("Verdana", 10)).pack(side="left", padx=(2,2))
-    entry_flee = ctk.CTkEntry(f_m2, width=35, height=22, font=("Verdana", 10), justify="center")
-    entry_flee.pack(side="left")
-    entry_flee.insert(0, str(BOT_SETTINGS.get('rune_flee_delay', 0.5)))
-
-    ctk.CTkLabel(f_m2, text="Retorno(s):", font=("Verdana", 10)).pack(side="left", padx=(10,2))
-    entry_ret_delay = ctk.CTkEntry(f_m2, width=35, height=22, font=("Verdana", 10), justify="center")
-    entry_ret_delay.pack(side="left")
-    entry_ret_delay.insert(0, str(BOT_SETTINGS.get('rune_return_delay', 300)))
-
-    # Coordenadas (Linhas finas)
-    f_coords = ctk.CTkFrame(frame_move, fg_color="transparent")
-    f_coords.pack(fill="x", padx=2, pady=2)
-    
-    # Work
-    f_wk = ctk.CTkFrame(f_coords, fg_color="transparent", height=25)
-    f_wk.pack(fill="x")
-    ctk.CTkButton(f_wk, text="Set Work", width=60, height=20, font=("Verdana", 9), fg_color="#444", 
-                  command=lambda: set_rune_pos("WORK")).pack(side="left", padx=2)
-    lbl_work_pos = ctk.CTkLabel(f_wk, text=str(BOT_SETTINGS.get('rune_work_pos', (0,0,0))), font=("Verdana", 10), text_color="gray")
+    # Coords
+    f_wk = ctk.CTkFrame(frame_move, fg_color="transparent")
+    f_wk.pack(fill="x", pady=2)
+    ctk.CTkButton(f_wk, text="Set Work", width=60, height=20, font=("Verdana", 9), fg_color="#444", command=lambda: set_rune_pos("WORK")).pack(side="left", padx=5)
+    lbl_work_pos = ctk.CTkLabel(f_wk, text=str(BOT_SETTINGS.get('rune_work_pos', (0,0,0))), **UI['HINT'])
     lbl_work_pos.pack(side="left", padx=5)
 
-    # Safe
-    f_sf = ctk.CTkFrame(f_coords, fg_color="transparent", height=25)
-    f_sf.pack(fill="x")
-    ctk.CTkButton(f_sf, text="Set Safe", width=60, height=20, font=("Verdana", 9), fg_color="#444", 
-                  command=lambda: set_rune_pos("SAFE")).pack(side="left", padx=2)
-    lbl_safe_pos = ctk.CTkLabel(f_sf, text=str(BOT_SETTINGS.get('rune_safe_pos', (0,0,0))), font=("Verdana", 10), text_color="gray")
+    f_sf = ctk.CTkFrame(frame_move, fg_color="transparent")
+    f_sf.pack(fill="x", pady=2)
+    ctk.CTkButton(f_sf, text="Set Safe", width=60, height=20, font=("Verdana", 9), fg_color="#444", command=lambda: set_rune_pos("SAFE")).pack(side="left", padx=5)
+    lbl_safe_pos = ctk.CTkLabel(f_sf, text=str(BOT_SETTINGS.get('rune_safe_pos', (0,0,0))), **UI['HINT'])
     lbl_safe_pos.pack(side="left", padx=5)
 
-    # --- SEÇÃO 4: EXTRAS ---
+    # Delays
+    f_m2 = ctk.CTkFrame(frame_move, fg_color="transparent")
+    f_m2.pack(fill="x", padx=5, pady=5)
+    ctk.CTkLabel(f_m2, text="React:", **UI['BODY']).pack(side="left")
+    entry_flee = ctk.CTkEntry(f_m2, **UI['INPUT'])
+    entry_flee.configure(width=35)
+    entry_flee.pack(side="left", padx=2)
+    entry_flee.insert(0, str(BOT_SETTINGS.get('rune_flee_delay', 0.5)))
+    
+    ctk.CTkLabel(f_m2, text="Ret:", **UI['BODY']).pack(side="left", padx=5)
+    entry_ret_delay = ctk.CTkEntry(f_m2, **UI['INPUT'])
+    entry_ret_delay.configure(width=35)
+    entry_ret_delay.pack(side="left", padx=2)
+    entry_ret_delay.insert(0, str(BOT_SETTINGS.get('rune_return_delay', 300)))
+
+    # Frame Extras
     frame_extras = ctk.CTkFrame(tab_rune, fg_color="#2b2b2b")
     frame_extras.pack(fill="x", padx=5, pady=2)
-
-    ctk.CTkLabel(frame_extras, text="Outros", font=("Verdana", 11, "bold"), height=18).pack(anchor="w", padx=5, pady=(10,10))
+    ctk.CTkLabel(frame_extras, text="Outros", **UI['H1']).pack(anchor="w", padx=5, pady=5)
     
-    f_ex = ctk.CTkFrame(frame_extras, fg_color="transparent")
-    f_ex.pack(fill="x", padx=2, pady=5)
-    
-    switch_eat = ctk.CTkSwitch(f_ex, text="Auto Eat", font=("Verdana", 10), width=60, height=20)
-    switch_eat.pack(side="left", padx=10)
+    switch_eat = ctk.CTkSwitch(frame_extras, text="Auto Eat", width=60, height=20, font=UI['BODY']['font'])
+    switch_eat.pack(anchor="w", padx=10, pady=2)
     if BOT_SETTINGS['auto_eat']: switch_eat.select()
 
-    switch_train = ctk.CTkSwitch(f_ex, text="Mana Train (No rune)", font=("Verdana", 10), width=60, height=20)
-    switch_train.pack(side="left", padx=20)
+    switch_train = ctk.CTkSwitch(frame_extras, text="Mana Train (No rune)", width=60, height=20, font=UI['BODY']['font'])
+    switch_train.pack(anchor="w", padx=10, pady=2)
     if BOT_SETTINGS['mana_train']: switch_train.select()
 
-    # --- SAVE ---
     def save_rune():
         try:
             BOT_SETTINGS['rune_mana'] = int(entry_mana.get())
             BOT_SETTINGS['rune_hotkey'] = entry_hk.get().upper()
             BOT_SETTINGS['rune_hand'] = combo_hand.get()
             BOT_SETTINGS['rune_blank_id'] = 3147
-            
             BOT_SETTINGS['rune_human_min'] = int(entry_human_min.get())
             BOT_SETTINGS['rune_human_max'] = int(entry_human_max.get())
-            
             BOT_SETTINGS['rune_flee_delay'] = float(entry_flee.get())
             BOT_SETTINGS['rune_return_delay'] = int(entry_ret_delay.get())
             BOT_SETTINGS['rune_movement'] = bool(switch_movement.get())
@@ -1884,173 +1592,9 @@ def open_settings():
             
             save_config_file()
             log("🔮 Rune Config salva!")
-        except:
-            log("❌ Erro ao salvar Rune.")
+        except: log("❌ Erro Rune.")
 
     ctk.CTkButton(tab_rune, text="Salvar Rune", command=save_rune, height=32, fg_color="#00A86B", hover_color="#008f5b").pack(side="bottom", fill="x", padx=20, pady=5)
-    
-    # ==========================================================================
-    # 7. ABA CAVEBOT (INTERFACE COMPLETA)
-    # ==========================================================================
-    
-    # # --- 1. CONTROLES DE GRAVAÇÃO ---
-    # frame_cv_actions = ctk.CTkFrame(tab_cavebot, fg_color="transparent")
-    # frame_cv_actions.pack(fill="x", pady=(5, 0), padx=5)
-
-    # def refresh_waypoints_visual():
-    #     if not cavebot_manager: return
-    #     txt_waypoints.configure(state="normal")
-    #     txt_waypoints.delete("0.0", "end")
-    #     for i, wp in enumerate(cavebot_manager.waypoints):
-    #         # Mostra o tipo e a coordenada
-    #         line = f"{i:03d}: [{wp['type']}] {wp['x']}, {wp['y']}, {wp['z']}\n"
-    #         txt_waypoints.insert("end", line)
-    #     txt_waypoints.configure(state="disabled")
-    #     txt_waypoints.see("end")
-
-    # def toggle_rec():
-    #     if not cavebot_manager: return
-    #     if cavebot_manager.is_recording:
-    #         cavebot_manager.stop_recording()
-    #         btn_rec.configure(text="● REC", fg_color="#303030", border_color="gray", border_width=1)
-    #         refresh_waypoints_visual()
-    #     else:
-    #         cavebot_manager.start_recording()
-    #         btn_rec.configure(text="■ STOP", fg_color="#FF5555", text_color="white", border_width=0)
-
-    # def clear_wp():
-    #     if cavebot_manager:
-    #         cavebot_manager.clear()
-    #         refresh_waypoints_visual()
-            
-    # # Botões Principais (REC / LIMPAR)
-    # btn_rec = ctk.CTkButton(frame_cv_actions, text="● REC", command=toggle_rec, 
-    #                         width=60, fg_color="#303030", border_color="gray", border_width=1)
-    # btn_rec.pack(side="left", padx=2)
-
-    # ctk.CTkButton(frame_cv_actions, text="Limpar", command=clear_wp, 
-    #               width=50, fg_color="#404040").pack(side="right", padx=2)
-
-    # # --- 2. BOTÕES DE TIPOS ESPECIAIS (NOVO) ---
-    # frame_cv_types = ctk.CTkFrame(tab_cavebot, fg_color="transparent")
-    # frame_cv_types.pack(fill="x", pady=2, padx=5)
-
-    # def add_special_wp(wp_type):
-    #     if not pm or not cavebot_manager: return
-    #     x, y, z = get_player_pos(pm, base_addr)
-    #     if x == 0: return
-        
-    #     # Adiciona o ponto na posição atual do jogador
-    #     cavebot_manager.add_waypoint(wp_type, x, y, z)
-    #     refresh_waypoints_visual()
-        
-    #     # Feedback visual rápido (pisca o botão ou log)
-    #     log(f"➕ {wp_type} adicionado em {x},{y},{z}")
-
-    # # Botões pequenos para inserir ações manuais
-    # ctk.CTkButton(frame_cv_types, text="+ Node", width=60, height=20, fg_color="#404040", 
-    #               command=lambda: add_special_wp("NODE")).pack(side="left", padx=2)
-                  
-    # ctk.CTkButton(frame_cv_types, text="+ Rope", width=60, height=20, fg_color="#A54EF9", 
-    #               command=lambda: add_special_wp("ROPE")).pack(side="left", padx=2)
-                  
-    # ctk.CTkButton(frame_cv_types, text="+ Ladder", width=60, height=20, fg_color="#E0E000", text_color="black",
-    #               command=lambda: add_special_wp("LADDER")).pack(side="left", padx=2)
-
-    # # --- 3. LISTA VISUAL ---
-    # frame_list = ctk.CTkFrame(tab_cavebot)
-    # frame_list.pack(fill="both", expand=True, padx=5, pady=5)
-    
-    # txt_waypoints = ctk.CTkTextbox(frame_list, font=("Consolas", 10), activate_scrollbars=True)
-    # txt_waypoints.pack(fill="both", expand=True)
-    # txt_waypoints.configure(state="disabled")
-
-    # # --- 4. GERENCIADOR DE ARQUIVOS ---
-    # ctk.CTkLabel(tab_cavebot, text="Salvar/Carregar", font=("Verdana", 9, "bold")).pack(pady=(5, 0))
-
-    # frame_cv_file = ctk.CTkFrame(tab_cavebot, fg_color="transparent")
-    # frame_cv_file.pack(fill="x", padx=5)
-
-    # entry_filename = ctk.CTkEntry(frame_cv_file, placeholder_text="nome_script", height=25)
-    # entry_filename.pack(side="left", fill="x", expand=True, padx=(0, 5))
-
-    # # Funções de Arquivo
-    # def refresh_script_list_ui():
-    #     # Limpa lista visual de arquivos
-    #     for widget in scroll_scripts.winfo_children():
-    #         widget.destroy()
-        
-    #     # Cria pasta se não existir
-    #     directory = "cavebot_scripts"
-    #     if not os.path.exists(directory): os.makedirs(directory)
-        
-    #     files = [f for f in os.listdir(directory) if f.endswith(".json")]
-        
-    #     if not files:
-    #         ctk.CTkLabel(scroll_scripts, text="Nenhum script salvo.", text_color="gray").pack(pady=5)
-    #         return
-
-    #     for f in files:
-    #         display_name = f.replace(".json", "")
-    #         # Botão para selecionar o script
-    #         btn = ctk.CTkButton(scroll_scripts, text=f"📄 {display_name}", 
-    #                             fg_color="#303030", hover_color="#404040",
-    #                             height=25, anchor="w",
-    #                             command=lambda name=display_name: select_script(name))
-    #         btn.pack(fill="x", pady=1, padx=2)
-
-    # def select_script(name):
-    #     entry_filename.delete(0, "end")
-    #     entry_filename.insert(0, name)
-
-    # def save_cv():
-    #     if not cavebot_manager: return
-    #     fname = entry_filename.get().strip()
-    #     if not fname: 
-    #         log("⚠️ Digite um nome para salvar.")
-    #         return
-            
-    #     if cavebot_manager.save_waypoints(fname):
-    #         log(f"💾 Script '{fname}' salvo!")
-    #         refresh_script_list_ui()
-
-    # def load_cv():
-    #     if not cavebot_manager: return
-    #     fname = entry_filename.get().strip()
-    #     if not fname: return
-        
-    #     if cavebot_manager.load_waypoints(fname):
-    #         refresh_waypoints_visual() # <--- Função que estava faltando, agora existe!
-    #         log(f"📂 Carregado: {fname}")
-
-    # def delete_cv():
-    #     fname = entry_filename.get().strip()
-    #     if not fname: return
-    #     path = os.path.join("cavebot_scripts", fname + ".json")
-    #     try:
-    #         if os.path.exists(path):
-    #             os.remove(path)
-    #             log(f"🗑️ Script '{fname}' deletado.")
-    #             entry_filename.delete(0, "end")
-    #             refresh_script_list_ui()
-    #     except: pass
-
-    # # Botões Save/Load
-    # ctk.CTkButton(frame_cv_file, text="Salvar", command=save_cv, width=60, fg_color="#2CC985").pack(side="right", padx=2)
-    # ctk.CTkButton(frame_cv_file, text="Carregar", command=load_cv, width=60, fg_color="#4EA5F9").pack(side="right", padx=2)
-
-    # # --- 4. LISTA DE ARQUIVOS SALVOS ---
-    # ctk.CTkLabel(tab_cavebot, text="Scripts Disponíveis:", text_color="gray", font=("Verdana", 9)).pack(anchor="w", padx=5, pady=(5,0))
-    
-    # scroll_scripts = ctk.CTkScrollableFrame(tab_cavebot, height=100, fg_color="#1A1A1A")
-    # scroll_scripts.pack(fill="x", padx=5, pady=5)
-
-    # # Botão Delete
-    # ctk.CTkButton(tab_cavebot, text="Apagar Selecionado", command=delete_cv, 
-    #               fg_color="#FF5555", hover_color="#990000", height=20, font=("Verdana", 9)).pack(pady=2)
-
-    # # Inicializa a lista de arquivos ao abrir a aba
-    # refresh_script_list_ui()
 
 def toggle_graph():
     global is_graph_visible

@@ -286,3 +286,26 @@ MAP_HEIGHT = 14
 MAP_FLOORS = 8
 TOTAL_TILES = MAP_WIDTH * MAP_HEIGHT * MAP_FLOORS
 MAP_DATA_SIZE = TOTAL_TILES * TILE_SIZE
+
+# ==============================================================================
+# ALARME DE CHAT (CONSOLE)
+# ==============================================================================
+# Endereço base do console (Calculado: 0x0071DD18 - 0x400000)
+OFFSET_CONSOLE_PTR = 0x31DD18 
+
+# Offsets relativos ao ponteiro do console
+OFFSET_CONSOLE_MSG = 0x118    # A mensagem em si
+OFFSET_CONSOLE_AUTHOR = 0xF0  # O log/autor ("Fulano says:")
+
+# ==============================================================================
+# SEGURANÇA: RETORNO HUMANIZADO (COOL-OFF)
+# ==============================================================================
+# Tempo de espera (segundos) para voltar a agir após um alarme comum (Monstro/PK)
+RESUME_DELAY_NORMAL = (10, 25)
+
+# Tempo de espera (segundos) para voltar a agir após detecção de GM (Visual ou Chat)
+RESUME_DELAY_GM = (120, 300) 
+
+# Intervalo entre alertas no Telegram (Segundos)
+TELEGRAM_INTERVAL_NORMAL = 60
+TELEGRAM_INTERVAL_GM = 10  # Alerta frenético se for GM

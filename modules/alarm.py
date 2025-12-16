@@ -3,6 +3,10 @@ import winsound
 from config import *
 from core.map_core import get_player_pos
 
+# Definição de intervalos de alerta (Fallback caso não esteja no config)
+TELEGRAM_INTERVAL_NORMAL = 60
+TELEGRAM_INTERVAL_GM = 10
+
 def get_connected_char_name(pm, base_addr):
     """Lê o nome do próprio personagem para evitar alarme falso."""
     try:
@@ -20,21 +24,41 @@ def get_connected_char_name(pm, base_addr):
     except: pass
     return ""
 
+def get_last_chat_entry(pm, base_addr):
+    """
+    Lê a última entrada do canal Default.
+    Retorna: (autor_string, mensagem_string)
+    """
+    try:
+        # Lê o ponteiro do console
+        console_ptr = pm.read_int(base_addr + OFFSET_CONSOLE_PTR)
+        if console_ptr == 0: return None, None
+        
+        # Lê as strings nos offsets
+        author_str = pm.read_string(console_ptr + OFFSET_CONSOLE_AUTHOR, 128)
+        msg_str = pm.read_string(console_ptr + OFFSET_CONSOLE_MSG, 128)
+        
+        return author_str, msg_str
+    except:
+        return None, None
+
 def alarm_loop(pm, base_addr, check_running, config, callbacks):
     
     # --- HELPER: LER CONFIGURAÇÃO EM TEMPO REAL ---
-    # Usamos esta função interna para puxar dados do lambda no main.py
     def get_cfg(key, default):
         return config().get(key, default) if callable(config) else default
 
-    # Callbacks
+    # Recupera callbacks
     set_safe_state = callbacks.get('set_safe', lambda x: None)
     set_gm_state = callbacks.get('set_gm', lambda x: None)
     send_telegram = callbacks.get('telegram', lambda x: None)
     log_msg = callbacks.get('log', print)
 
-    last_alert_time = 0
-    last_hp_alert = 0 # Controle de spam do beep de vida
+    last_telegram_time = 0
+    last_hp_alert = 0 
+    
+    last_seen_msg = ""
+    last_seen_author = ""
     
     log_msg("🔔 Módulo de Alarme Iniciado.")
 
@@ -56,40 +80,80 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks):
         alarm_range = get_cfg('range', 8)
         floor_mode = get_cfg('floor', "Padrão")
         
-        # Lê configs de HP (Novas)
         hp_check_enabled = get_cfg('hp_enabled', False)
         hp_threshold = get_cfg('hp_percent', 50)
+        
+        chat_enabled = get_cfg('chat_enabled', False)
+        chat_gm_enabled = get_cfg('chat_gm', True)
 
         try:
+            current_name = get_connected_char_name(pm, base_addr)
+            
             # =================================================================
             # A. VERIFICAÇÃO DE HP BAIXO
             # =================================================================
             if hp_check_enabled:
-                curr_hp = pm.read_int(base_addr + OFFSET_PLAYER_HP)
-                max_hp = pm.read_int(base_addr + OFFSET_PLAYER_HP_MAX)
-                
-                if max_hp > 0 and curr_hp > 0:
-                    pct = (curr_hp / max_hp) * 100
+                try:
+                    curr_hp = pm.read_int(base_addr + OFFSET_PLAYER_HP)
+                    max_hp = pm.read_int(base_addr + OFFSET_PLAYER_HP_MAX)
                     
-                    if pct < hp_threshold:
-                        # Limita o alerta a cada 2 segundos para não travar
-                        if (time.time() - last_hp_alert) > 2.0:
-                            log_msg(f"🩸 ALARME DE VIDA: {pct:.1f}% (Abaixo de {hp_threshold}%)")
-                            # Som mais agudo e rápido para diferenciar
-                            winsound.Beep(2000, 200) 
-                            winsound.Beep(2000, 200)
-                            last_hp_alert = time.time()
+                    if max_hp > 0 and curr_hp > 0:
+                        pct = (curr_hp / max_hp) * 100
+                        if pct < hp_threshold:
+                            # Limita o alerta a cada 2 segundos
+                            if (time.time() - last_hp_alert) > 2.0:
+                                log_msg(f"🩸 ALARME DE VIDA: {pct:.1f}% (Abaixo de {hp_threshold}%)")
+                                winsound.Beep(2500, 200) 
+                                winsound.Beep(2500, 200)
+                                last_hp_alert = time.time()
+                except: pass
 
             # =================================================================
-            # B. VERIFICAÇÃO DE CRIATURAS/GM
+            # B. VERIFICAÇÃO DE CHAT (DEFAULT)
             # =================================================================
-            current_name = get_connected_char_name(pm, base_addr)
+            chat_danger = False
+            
+            if chat_enabled or chat_gm_enabled:
+                author, msg = get_last_chat_entry(pm, base_addr)
+                
+                # Se mensagem é nova
+                if author and msg and (msg != last_seen_msg or author != last_seen_author):
+                    last_seen_msg = msg
+                    last_seen_author = author
+                    
+                    # Ignora a mim mesmo
+                    if not (current_name and current_name in author):
+                        is_gm_talk = "GM " in author or "CM " in author or "God " in author
+                        
+                        # 1. Alarme GM no Chat
+                        if chat_gm_enabled and is_gm_talk:
+                            log_msg(f"👮 GM NO CHAT: {author} {msg}")
+                            chat_danger = True
+                            
+                            # Ações Imediatas
+                            set_gm_state(True)
+                            set_safe_state(False)
+                            winsound.Beep(2000, 1000)
+                            
+                            if (time.time() - last_telegram_time) > TELEGRAM_INTERVAL_GM:
+                                send_telegram(f"GM FALOU NO CHAT: {author} {msg}")
+                                last_telegram_time = time.time()
+
+                        # 2. Alarme Chat Comum
+                        elif chat_enabled:
+                            if "says:" in author or "whispers:" in author or "yells:" in author:
+                                log_msg(f"💬 Chat: {author} {msg}")
+                                winsound.Beep(800, 300)
+
+            # =================================================================
+            # C. VERIFICAÇÃO VISUAL (CRIATURAS)
+            # =================================================================
             list_start = base_addr + TARGET_ID_PTR + REL_FIRST_ID
             my_x, my_y, my_z = get_player_pos(pm, base_addr)
             
-            danger = False
-            danger_name = ""
-            is_gm_cycle = False
+            visual_danger = False
+            visual_danger_name = ""
+            is_visual_gm = False
 
             for i in range(MAX_CREATURES):
                 slot = list_start + (i * STEP_SIZE)
@@ -110,44 +174,55 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks):
                         else: valid_floor = (abs(cz - my_z) <= 1)
 
                         if vis != 0 and valid_floor:
+                            # Detecta GM Visualmente
                             if name.startswith("GM ") or name.startswith("CM ") or name.startswith("God "):
-                                danger = True
-                                is_gm_cycle = True
-                                danger_name = f"GAMEMASTER {name}"
+                                visual_danger = True
+                                is_visual_gm = True
+                                visual_danger_name = f"GAMEMASTER {name}"
                                 break
                             
+                            # Detecta Monstro/Player
                             is_safe_creature = any(s in name for s in safe_list)
-                            
                             if not is_safe_creature:
                                 cx = pm.read_int(slot + OFFSET_X)
                                 cy = pm.read_int(slot + OFFSET_Y)
                                 dist = max(abs(my_x - cx), abs(my_y - cy))
                                 
                                 if dist <= alarm_range:
-                                    danger = True
-                                    danger_name = f"{name} ({dist} sqm)"
+                                    visual_danger = True
+                                    visual_danger_name = f"{name} ({dist} sqm)"
                                     break
                 except: continue
 
-            # Atualiza Main
-            if danger:
+            # =================================================================
+            # D. CONSOLIDAÇÃO DE ESTADO
+            # =================================================================
+            final_danger = visual_danger or chat_danger
+            final_is_gm = is_visual_gm or chat_danger # Se viu ou ouviu GM
+            
+            if final_danger:
                 set_safe_state(False)
-            else:
+                if final_is_gm: set_gm_state(True)
+                
+                # Se detectou visualmente (chat já logou o dele)
+                if visual_danger:
+                    log_msg(f"⚠️ PERIGO: {visual_danger_name}!")
+                    
+                    freq = 2500 if final_is_gm else 1000
+                    winsound.Beep(freq, 500)
+                    
+                    interval = TELEGRAM_INTERVAL_GM if final_is_gm else TELEGRAM_INTERVAL_NORMAL
+                    
+                    if (time.time() - last_telegram_time) > interval:
+                        prefix = "👮 GM DETECTADO" if final_is_gm else "⚠️ PERIGO"
+                        send_telegram(f"{prefix}: {visual_danger_name}!")
+                        last_telegram_time = time.time()
+            
+            elif not chat_danger: 
+                # Se visual está limpo E chat está limpo -> Seguro
                 set_safe_state(True)
-            
-            set_gm_state(is_gm_cycle)
+                set_gm_state(False)
 
-            if danger:
-                log_msg(f"⚠️ PERIGO: {danger_name}!")
-                
-                # Som grave para monstros
-                freq = 2500 if is_gm_cycle else 1000
-                winsound.Beep(freq, 500)
-                
-                if (time.time() - last_alert_time) > 60:
-                    send_telegram(f"PERIGO! {danger_name} detectado!")
-                    last_alert_time = time.time()
-            
             time.sleep(0.5)
 
         except Exception as e:

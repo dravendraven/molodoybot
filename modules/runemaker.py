@@ -8,7 +8,7 @@ from core.inventory_core import find_item_in_containers
 from core.map_core import get_player_pos, get_game_view, get_screen_coord
 from modules.eater import attempt_eat
 from core.input_core import press_hotkey, left_click_at
-from database import foods_db # Importante para os logs de comida
+from database import foods_db
 from core.inventory_core import find_item_in_containers
 
 # Slots do Inventário
@@ -42,13 +42,11 @@ def move_to_coord_hybrid(pm, base_addr, hwnd, target_pos, log_func=print):
     if dist_sqm == 1:
         op_code = None
         
-        # --- PRIORIDADE 1: DIAGONAIS ---
         if dy < 0 and dx > 0:   op_code = packet.OP_WALK_NORTH_EAST
         elif dy > 0 and dx > 0: op_code = packet.OP_WALK_SOUTH_EAST
         elif dy > 0 and dx < 0: op_code = packet.OP_WALK_SOUTH_WEST
         elif dy < 0 and dx < 0: op_code = packet.OP_WALK_NORTH_WEST
         
-        # --- PRIORIDADE 2: ORTOGONAIS (Retas) ---
         elif dy < 0: op_code = packet.OP_WALK_NORTH
         elif dy > 0: op_code = packet.OP_WALK_SOUTH
         elif dx < 0: op_code = packet.OP_WALK_WEST
@@ -59,7 +57,7 @@ def move_to_coord_hybrid(pm, base_addr, hwnd, target_pos, log_func=print):
             time.sleep(0.5 + random.uniform(0.05, 0.15)) 
             return False 
 
-    # 2. SE ESTIVER LONGE (> 1 SQM) -> USA MOUSE (CLIENT PATHFINDER)
+    # 2. SE ESTIVER LONGE (> 1 SQM) -> USA MOUSE
     gv = get_game_view(pm, base_addr)
     if gv:
         screen_x, screen_y = get_screen_coord(gv, dx, dy, hwnd)
@@ -101,17 +99,13 @@ def reequip_hand(pm, base_addr, item_id, target_slot_enum, container_idx=0):
         time.sleep(0.4)
 
 def get_target_id(pm, base_addr):
-    """Lê o ID do alvo atual na memória."""
     try:
-        # Usa o OFFSET definido no config.py
         return pm.read_int(base_addr + TARGET_ID_PTR)
     except:
         return 0
     
 def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe_callback=None, is_gm_callback=None, log_callback=None, eat_callback=None):
     
-    #if config is None: config = {}
-
     def get_cfg(key, default=None):
         if callable(config):
             return config().get(key, default)
@@ -122,199 +116,185 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
         print(f"[{timestamp}] [RUNEMAKER] {text}")
         if log_callback: log_callback(f"[RUNE] {text}")
 
-    log_msg(f"Iniciado.")
+    # Variáveis de Estado
+    STATE_IDLE = 0
+    STATE_FLEEING = 1
+    STATE_RETURNING = 2
+    STATE_WORKING = 3
     
-    # hotkey_str = config.get('hotkey', 'F3')
-    # vk_hotkey = get_vk_code(hotkey_str)
-    last_danger_time = 0 
-    # return_delay = config.get('return_delay', 300)
-    is_fleeing_active = False 
-    last_mana_log = 0
-    # CONTROLE DE "BARRIGA CHEIA"
+    current_state = STATE_IDLE
+    
+    last_log_wait = 0
+    return_timer_start = 0
+    next_cast_time = 0
+    
+    # Controle de "Barriga Cheia"
     is_full_lock = False
     full_lock_time = 0
     FULL_COOLDOWN_SECONDS = 60 
+    
+    # Controle de Combate
     last_combat_time = 0
     COMBAT_COOLDOWN = 5
 
-    # CONTROLE DE HUMANIZAÇÃO (DELAY)
-    next_cast_time = 0
+    log_msg(f"Iniciado (Modo Segurança Avançada).")
 
     while True:
         if check_running and not check_running(): return
 
-        # Agora lemos as configs DENTRO do loop
+        # Configs em Tempo Real
         hotkey_str = get_cfg('hotkey', 'F3')
         vk_hotkey = get_vk_code(hotkey_str)
         mana_req = get_cfg('mana_req', 100)
         return_delay = get_cfg('return_delay', 300)
-        flee_delay = get_cfg('flee_delay', 0)
-        # ----------------------------------------
+        work_pos = get_cfg('work_pos', (0,0,0))
+        safe_pos = get_cfg('safe_pos', (0,0,0))
+        enable_move = get_cfg('enable_movement', False)
         
+        # Flag especial vinda do Main (Controla Cool-off)
+        can_act = get_cfg('can_perform_actions', True)
+
+        # Checagem de Segurança
         is_safe = is_safe_callback() if is_safe_callback else True
         is_gm = is_gm_callback() if is_gm_callback else False
         
+        # ======================================================================
+        # PRIORIDADE 1: GM DETECTADO (PÂNICO TOTAL)
+        # ======================================================================
         if is_gm:
-            log_msg("👮 GM DETECTADO! Parando...")
-            packet.stop(pm) 
-            time.sleep(2)
+            # Se for GM, paramos TUDO. Não movemos.
+            # O estado de movimento também é ignorado.
+            if time.time() - last_log_wait > 5:
+                log_msg("👮 GM DETECTADO! Congelando ações...")
+                packet.stop(pm)
+                last_log_wait = time.time()
+            time.sleep(1)
+            continue 
+
+        # ======================================================================
+        # PRIORIDADE 2: FUGA (MONSTRO/PK)
+        # ======================================================================
+        if not is_safe and enable_move:
+            if current_state != STATE_FLEEING:
+                flee_delay = get_cfg('flee_delay', 0)
+                if flee_delay > 0:
+                    wait = random.uniform(flee_delay, flee_delay * 1.2)
+                    log_msg(f"🚨 PERIGO! Reagindo em {wait:.1f}s...")
+                    time.sleep(wait)
+                
+                log_msg("🏃 Fugindo para Safe Spot...")
+                current_state = STATE_FLEEING
+            
+            # Movimento para Safe
+            move_to_coord_hybrid(pm, base_addr, hwnd, safe_pos, log_func=None)
+            time.sleep(0.5)
+            continue 
+
+        # ======================================================================
+        # PRIORIDADE 3: RETORNO
+        # ======================================================================
+        if is_safe and current_state == STATE_FLEEING:
+            current_state = STATE_RETURNING
+            return_timer_start = time.time() + return_delay
+            log_msg(f"🛡️ Seguro. Retornando em {return_delay}s...")
+
+        if current_state == STATE_RETURNING:
+            if time.time() < return_timer_start:
+                time.sleep(1)
+                continue
+            else:
+                if enable_move:
+                    log_msg("🚶 Voltando para o Work Spot...")
+                    arrived = move_to_coord_hybrid(pm, base_addr, hwnd, work_pos, log_func=None)
+                    if arrived:
+                        current_state = STATE_WORKING
+                        log_msg("📍 Cheguei no trabalho.")
+                    else:
+                        continue # Continua andando até chegar
+                else:
+                    current_state = STATE_WORKING
+
+        # ======================================================================
+        # PRIORIDADE 4: MODO DE ESPERA (COOL-OFF / SEGURANÇA GLOBAL)
+        # ======================================================================
+        # Se 'can_perform_actions' for False, significa que estamos no delay de segurança
+        # definido pelo Main (ex: GM sumiu há pouco tempo, ou monstro sumiu e move=off).
+        if not can_act:
+            if time.time() - last_log_wait > 10:
+                log_msg("⏳ Aguardando segurança para retomar ações...")
+                last_log_wait = time.time()
+            time.sleep(1)
             continue
 
         # ======================================================================
-        # 🛡️ PROTEÇÃO DE BATALHA (SEGURANÇA)
+        # PRIORIDADE 5: TRABALHO (MANA TRAIN / RUNAS / COMIDA)
         # ======================================================================
-        current_target = get_target_id(pm, base_addr)
         
+        # 1. Proteção de Combate
+        current_target = get_target_id(pm, base_addr)
         if current_target != 0:
-            # Estamos atacando algo!
             last_combat_time = time.time()
-            # Resetamos o timer de cast para não castar assim que a luta acabar
-            # next_cast_time = 0 
-            time.sleep(0.5)
-            continue # Pula o resto do loop (não come, não treina, não faz runa)
+            time.sleep(0.5); continue
             
-        # Se não estamos atacando, verificamos o cooldown
         if time.time() - last_combat_time < COMBAT_COOLDOWN:
-            # Estamos no "buffer" de segurança pós-combate
-            time.sleep(0.5)
-            continue # Ainda perigoso, espera...
+            time.sleep(0.5); continue
 
-        # ======================================================================
-        # LÓGICA DE COMIDA (AUTO EAT)
-        # ======================================================================
+        # 2. Auto Eat
         if get_cfg('auto_eat', False):
-            if is_full_lock:
-                if time.time() - full_lock_time > FULL_COOLDOWN_SECONDS:
-                    is_full_lock = False 
+            if is_full_lock and (time.time() - full_lock_time > FULL_COOLDOWN_SECONDS):
+                is_full_lock = False 
             
             if not is_full_lock:
-                is_hungry_func = get_cfg('check_hunger')
-                if is_hungry_func and is_hungry_func():
+                check_hunger = get_cfg('check_hunger', lambda: False)
+                if check_hunger():
                     try:
-                        result = attempt_eat(pm, base_addr, hwnd)
-                        if result == "FULL":
-                            log_msg("⚠️ Personagem cheio. Pausando comida por 60s.")
+                        res = attempt_eat(pm, base_addr, hwnd)
+                        if res == "FULL":
                             is_full_lock = True
                             full_lock_time = time.time()
-                        elif result:
-                            food_id = result
-                            # Busca o nome no DB para log bonito
-                            food_name = foods_db.get_food_name(food_id)
-                            log_msg(f"🍖 {food_name} consumida.")
-                            if eat_callback: eat_callback(food_id)
-                    except Exception as e:
-                        print(f"[DEBUG] Erro ao comer: {e}")
+                        elif res:
+                            if eat_callback: eat_callback(res)
+                    except: pass
 
-        # ======================================================================
-        # MANA TRAIN
-        # ======================================================================
+        # 3. Mana Train (Prioridade sobre Runas se ativo)
         if get_cfg('mana_train', False):
-            if not is_safe:
-                if time.time() - last_mana_log > 5:
-                    log_msg("⚠️ Alarme ativo! Mana Train pausado.")
-                    last_mana_log = time.time()
-                time.sleep(1)
-                continue
-            
             try:
                 curr_mana = pm.read_int(base_addr + OFFSET_PLAYER_MANA)
-                mana_req = get_cfg('mana_req', 100)
-                
                 if curr_mana >= mana_req:
-                    # 1. Se não tem timer definido, cria um
                     if next_cast_time == 0:
                         h_min = get_cfg('human_min', 0)
                         h_max = get_cfg('human_max', 0)
-                        
                         if h_max > 0:
                             delay = random.uniform(h_min, h_max)
                             next_cast_time = time.time() + delay
                             log_msg(f"⏳ Mana cheia! Aguardando {int(delay)}s (Treino)...")
                         else:
-                            next_cast_time = time.time() # Sem delay
+                            next_cast_time = time.time()
 
-                    # 2. Verifica se já passou o tempo
                     if time.time() >= next_cast_time:
-                        log_msg(f"⚡ Mana cheia ({curr_mana}). Usando {hotkey_str}...")
+                        log_msg(f"⚡ Mana cheia. Usando {hotkey_str}...")
                         press_hotkey(hwnd, vk_hotkey)
-                        
-                        # Reseta o timer
                         next_cast_time = 0
-                        time.sleep(2.2) # Cooldown padrão do Tibia
-
+                        time.sleep(2.2)
                 else:
-                    # Se mana baixou, reseta o timer
                     next_cast_time = 0
-                    time.sleep(1)
-
-            except: time.sleep(1)
-            continue # Pula o resto (Runemaker) 
-
-        # ======================================================================
-        # RUNEMAKER (Movimento + Runas)
-        # ======================================================================
-        
-        safe_pos = get_cfg('safe_pos', (0,0,0))
-        work_pos = get_cfg('work_pos', (0,0,0))
-        coords_defined = (safe_pos[0] != 0)
-        movement_allowed = get_cfg('enable_movement', False)
-        has_coords = coords_defined and movement_allowed
-        
-        target_destination = None
-        mode = "IDLE"
+            except: pass
             
-        if not is_safe and has_coords:
-            mode = "FLEEING"
-            last_danger_time = time.time()
-            curr_pos = get_player_pos(pm, base_addr)
-            at_safe = (curr_pos[0] == safe_pos[0] and curr_pos[1] == safe_pos[1])
-            if not at_safe:
-                if not is_fleeing_active:
-                    flee_delay = get_cfg('flee_delay', 0)
-                    if flee_delay > 0:
-                        wait = random.uniform(flee_delay, flee_delay * 1.2)
-                        log_msg(f"🚨 PERIGO! Reagindo em {wait:.1f}s...")
-                        time.sleep(wait)
-                    is_fleeing_active = True
-                target_destination = safe_pos
-        else:
-            is_fleeing_active = False
-            time_since = time.time() - last_danger_time
-            if last_danger_time > 0 and time_since < return_delay:
-                mode = "WAITING"
-                if has_coords: target_destination = safe_pos
-            else:
-                mode = "WORKING"
-                if has_coords: target_destination = work_pos
+            time.sleep(0.5)
+            continue # Pula Runemaker se Mana Train está ativo
 
-        if target_destination:
-            at_dest = move_to_coord_hybrid(pm, base_addr, hwnd, target_destination, log_func=log_msg)
-            if not at_dest: continue 
-
-        # --- Ciclo de Fabricação ---
-        if mode == "WORKING":
-            try:
-                curr_mana = pm.read_int(base_addr + OFFSET_PLAYER_MANA)
-            except: time.sleep(1); continue
-
-            mana_req = get_cfg('mana_req', 100)
-
-            # >>> LÓGICA DE HUMANIZAÇÃO (BUFFER DE TEMPO) <<<
+        # 4. Fabricação de Runas
+        try:
+            curr_mana = pm.read_int(base_addr + OFFSET_PLAYER_MANA)
+            
             if curr_mana >= mana_req:
-                # Se ainda não definimos um tempo de espera, define agora
                 if next_cast_time == 0:
-                    h_min = get_cfg('human_min', 0)
-                    h_max = get_cfg('human_max', 0)
-                    
-                    if h_max > 0:
-                        delay = random.uniform(h_min, h_max)
-                        next_cast_time = time.time() + delay
-                        log_msg(f"⏳ Mana cheia! Aguardando {int(delay)}s (Humanização)...")
-                    else:
-                        # Se não tiver config, casta imediatamente
-                        next_cast_time = time.time()
+                    h_min = get_cfg('human_min', 2)
+                    h_max = get_cfg('human_max', 10)
+                    delay = random.uniform(h_min, h_max)
+                    next_cast_time = time.time() + delay
+                    log_msg(f"⏳ Mana cheia! Aguardando {int(delay)}s...")
 
-                # Verifica se o tempo de espera já passou
                 if time.time() >= next_cast_time:
                     log_msg(f"⚡ Mana ok ({curr_mana}). Fabricando...")
                     
@@ -329,13 +309,13 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                     for slot_enum in hands_to_use:
                         if is_safe_callback and not is_safe_callback(): break
                         
-                        # === LIMPEZA DE MÃO ===
+                        # --- LIMPEZA DE MÃO ---
                         unequipped_item_id = unequip_hand(pm, base_addr, slot_enum)
                         blank_id = get_cfg('blank_id', 3147)
                         blank_data = find_item_in_containers(pm, base_addr, blank_id)
                         
                         if not blank_data:
-                            log_msg(f"⚠️ Sem Blanks na BP! (Ou não encontrada)")
+                            log_msg(f"⚠️ Sem Blanks na BP!")
                             if unequipped_item_id:
                                 reequip_hand(pm, base_addr, unequipped_item_id, slot_enum)
                             break
@@ -355,37 +335,31 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
 
                     if active_runes:
                         log_msg(f"🪄 Pressionando {hotkey_str}...")
-                        
-                        # >>>>>> AQUI OCORRE O PRESS HOTKEY <<<<<<
                         press_hotkey(hwnd, vk_hotkey)
                         
-                        time.sleep(1.2) # Wait server process
+                        time.sleep(1.2) # Wait process
                         
                         for info in active_runes:
                              # 1. Identifica o que foi fabricado
                              detected_id = get_item_id_in_hand(pm, base_addr, info['slot_enum'])
                              
-                             rune_id_to_move = 0
-                             if detected_id > 0:
-                                 rune_id_to_move = detected_id
-                             else:
-                                 log_msg(f"⚠️ Erro: ID não detectado na mão! Usando Blank padrão.")
-                                 rune_id_to_move = blank_id
+                             rune_id_to_move = detected_id if detected_id > 0 else blank_id
 
                              # 2. Devolve Runa para Backpack
                              pos_dest = packet.get_container_pos(info['origin_idx'], 0)
                              packet.move_item(pm, info['hand_pos'], pos_dest, rune_id_to_move, 1)
                              time.sleep(0.4)
                              
-                             # === PASSO FINAL: RESTAURAR EQUIPAMENTO ===
+                             # 3. Restaura item original
                              if info['restorable_item']:
                                  reequip_hand(pm, base_addr, info['restorable_item'], info['slot_enum'])
                         
                         log_msg("✅ Ciclo concluído.")
-                        # Reseta o timer para a próxima vez
                         next_cast_time = 0 
             else:
-                # Se a mana baixou (ex: usou exura na mão), reseta o timer
                 next_cast_time = 0
+
+        except Exception as e:
+            print(f"Rune Error: {e}")
 
         time.sleep(0.5)
