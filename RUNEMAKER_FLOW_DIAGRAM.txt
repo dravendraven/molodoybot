@@ -1,0 +1,248 @@
+================================================================================
+RUNEMAKER "BOTH" HANDS - FLOW COMPARISON
+================================================================================
+
+BEFORE (BUGGY) - What Happened:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Setup:
+  LEFT hand:  Sword
+  RIGHT hand: Shield
+  Backpack:   Blank runes
+
+
+Step 1: PHASE 1 Loop (Unequip + Blank equip combined)
+┌─────────────────────────────────────────────────────┐
+│ Iteration 1 (SLOT_LEFT):                           │
+│   unequipped_item_id = SWORD                        │
+│   Move blank to LEFT                                │
+│   active_runes[0] = {                               │
+│     "restorable_item": unequipped_item_id → SWORD   │
+│   }                                                 │
+└─────────────────────────────────────────────────────┘
+                          ↓
+┌─────────────────────────────────────────────────────┐
+│ Iteration 2 (SLOT_RIGHT):                          │
+│   unequipped_item_id = SHIELD  ← OVERWRITES!       │
+│   Move blank to RIGHT                               │
+│   active_runes[1] = {                               │
+│     "restorable_item": unequipped_item_id → SHIELD  │
+│   }                                                 │
+└─────────────────────────────────────────────────────┘
+
+
+State After Spell Cast:
+┌─────────────────────────────────────────────────────┐
+│ active_runes[0]:                                   │
+│   {restorable_item: SHIELD, slot_enum: SLOT_LEFT}  │ ← WRONG!
+│                                                     │
+│ active_runes[1]:                                   │
+│   {restorable_item: SHIELD, slot_enum: SLOT_RIGHT} │ ← Only one SHIELD!
+└─────────────────────────────────────────────────────┘
+
+
+Step 2: Re-equip Loop
+┌─────────────────────────────────────────────────────┐
+│ Iteration 1: Re-equip SHIELD to LEFT                │
+│   find_item_in_containers(SHIELD)                  │
+│   → Found in backpack                              │
+│   → Move to LEFT hand ✅                           │
+│   → Backpack: empty (SHIELD moved)                 │
+└─────────────────────────────────────────────────────┘
+                          ↓
+┌─────────────────────────────────────────────────────┐
+│ Iteration 2: Re-equip SHIELD to RIGHT               │
+│   find_item_in_containers(SHIELD)                  │
+│   → NOT in backpack! (Already in LEFT from iter 1) │
+│   → find fails or returns stale position           │
+│   → RIGHT hand stays EMPTY ❌                      │
+└─────────────────────────────────────────────────────┘
+
+
+Final Result (BUGGY):
+┌──────────────────────────────────────────┐
+│ LEFT hand:  SHIELD (✅ but wrong item!)  │
+│ RIGHT hand: EMPTY   (❌ lost!)           │
+│ Backpack:   ---                         │
+└──────────────────────────────────────────┘
+
+
+================================================================================
+
+AFTER (FIXED) - What Happens Now:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Setup:
+  LEFT hand:  Sword
+  RIGHT hand: Shield
+  Backpack:   Blank runes
+
+
+Step 1: PHASE 1 - Unequip ALL (Store in dictionary)
+┌──────────────────────────────────────────────────────────┐
+│ Initialize: unequipped_items = {}                        │
+└──────────────────────────────────────────────────────────┘
+                          ↓
+┌──────────────────────────────────────────────────────────┐
+│ Iteration 1 (SLOT_LEFT):                                │
+│   unequipped_item_id = SWORD                            │
+│   unequipped_items[SLOT_LEFT] = SWORD                   │
+│                                                          │
+│   State: unequipped_items = {SLOT_LEFT: SWORD}          │
+└──────────────────────────────────────────────────────────┘
+                          ↓
+┌──────────────────────────────────────────────────────────┐
+│ Iteration 2 (SLOT_RIGHT):                               │
+│   unequipped_item_id = SHIELD                           │
+│   unequipped_items[SLOT_RIGHT] = SHIELD                 │
+│                                                          │
+│   State: unequipped_items = {                           │
+│     SLOT_LEFT: SWORD,                                   │
+│     SLOT_RIGHT: SHIELD  ← Stored! Not overwritten!      │
+│   }                                                      │
+└──────────────────────────────────────────────────────────┘
+
+
+Step 2: PHASE 2 - Equip Blanks (Reference stored items)
+┌──────────────────────────────────────────────────────────┐
+│ Iteration 1 (SLOT_LEFT):                                │
+│   active_runes[0] = {                                   │
+│     "restorable_item": unequipped_items[SLOT_LEFT]      │
+│                      = SWORD  ✅                        │
+│   }                                                      │
+└──────────────────────────────────────────────────────────┘
+                          ↓
+┌──────────────────────────────────────────────────────────┐
+│ Iteration 2 (SLOT_RIGHT):                               │
+│   active_runes[1] = {                                   │
+│     "restorable_item": unequipped_items[SLOT_RIGHT]     │
+│                      = SHIELD  ✅                       │
+│   }                                                      │
+└──────────────────────────────────────────────────────────┘
+
+
+State After Spell Cast:
+┌──────────────────────────────────────────────────────────┐
+│ active_runes[0]:                                        │
+│   {restorable_item: SWORD, slot_enum: SLOT_LEFT}        │ ✅ Correct!
+│                                                          │
+│ active_runes[1]:                                        │
+│   {restorable_item: SHIELD, slot_enum: SLOT_RIGHT}      │ ✅ Correct!
+└──────────────────────────────────────────────────────────┘
+
+
+Step 3: Re-equip Loop
+┌──────────────────────────────────────────────────────────┐
+│ Iteration 1: Re-equip SWORD to LEFT                      │
+│   find_item_in_containers(SWORD)                        │
+│   → Found in backpack ✅                                │
+│   → Move to LEFT hand ✅                                │
+│   → Backpack: no SWORD                                  │
+└──────────────────────────────────────────────────────────┘
+                          ↓
+┌──────────────────────────────────────────────────────────┐
+│ Iteration 2: Re-equip SHIELD to RIGHT                    │
+│   find_item_in_containers(SHIELD)                       │
+│   → Found in backpack ✅                                │
+│   → Move to RIGHT hand ✅                               │
+│   → Backpack: empty                                     │
+└──────────────────────────────────────────────────────────┘
+
+
+Final Result (FIXED):
+┌──────────────────────────────────────────┐
+│ LEFT hand:  SWORD   (✅ Correct!)        │
+│ RIGHT hand: SHIELD  (✅ Correct!)        │
+│ Backpack:   ---                         │
+└──────────────────────────────────────────┘
+
+
+================================================================================
+KEY DIFFERENCE SUMMARY:
+================================================================================
+
+BUGGY:
+  ❌ Loop variable `unequipped_item_id` gets overwritten each iteration
+  ❌ Both active_runes entries end up referencing the SAME item
+  ❌ Only one hand gets its item back
+  ❌ Other hand left empty
+
+FIXED:
+  ✅ Dictionary `unequipped_items` stores each item separately
+  ✅ Each active_runes entry references the correct stored item
+  ✅ Both hands get their correct items back
+  ✅ No item loss or confusion
+
+================================================================================
+VISUAL: Variable Storage Comparison:
+================================================================================
+
+BUGGY APPROACH:
+┌─────────────────────────┐
+│ unequipped_item_id      │
+│ (Single Variable)       │
+├─────────────────────────┤
+│ Iteration 1: SWORD      │
+│ Iteration 2: SHIELD ← Overwrites!
+│             (Final value)
+└─────────────────────────┘
+  Both active_runes entries reference this ONE variable
+  Problem: Whichever value is final wins for both hands!
+
+FIXED APPROACH:
+┌─────────────────────────┐
+│ unequipped_items        │
+│ (Dictionary)            │
+├─────────────────────────┤
+│ SLOT_LEFT  → SWORD  ✅  │
+│ SLOT_RIGHT → SHIELD ✅  │
+└─────────────────────────┘
+  Each hand has its dedicated storage
+  Solution: Each hand gets its own item back!
+
+================================================================================
+SCENARIO MATRIX:
+================================================================================
+
+Setup                    │ Before Fix  │ After Fix   │ Change
+─────────────────────────┼─────────────┼────────────┼──────────
+Single RIGHT hand        │ ✅ Works    │ ✅ Works   │ None
+Single LEFT hand         │ ✅ Works    │ ✅ Works   │ None
+Both hands (same weapon) │ ❌ FAILS    │ ✅ FIXED   │ BUG FIXED
+Both hands (different)   │ ❌ FAILS    │ ✅ FIXED   │ BUG FIXED
+Edge case: Not enough BP │ ⚠️ Partial  │ ✅ Safe    │ Better
+Safety interrupt         │ ⚠️ Risk     │ ✅ Safe    │ Safer
+
+================================================================================
+TIMELINE: What Happens During a Cycle
+================================================================================
+
+Before (BUGGY):
+  T+0.0s: Start runemaking cycle
+  T+0.5s: Unequip LEFT (Sword) ← unequipped_item_id = SWORD
+  T+1.0s: Move blank to LEFT
+  T+1.5s: Unequip RIGHT (Shield) ← unequipped_item_id = SHIELD (OVERWRITES!)
+  T+2.0s: Move blank to RIGHT
+  T+2.2s: Cast spell
+  T+3.4s: Move LEFT blank back to backpack
+  T+4.2s: Try to re-equip LEFT with unequipped_item_id (now SHIELD)
+  T+4.6s: Move RIGHT blank back to backpack
+  T+5.4s: Try to re-equip RIGHT with unequipped_item_id (still SHIELD) ❌
+  T+5.8s: LEFT=SHIELD (wrong!), RIGHT=EMPTY (lost!)
+
+After (FIXED):
+  T+0.0s: Start runemaking cycle
+  T+0.3s: Unequip LEFT (Sword) → unequipped_items[SLOT_LEFT] = SWORD
+  T+0.6s: Unequip RIGHT (Shield) → unequipped_items[SLOT_RIGHT] = SHIELD
+  T+0.9s: Move blank to LEFT
+  T+1.5s: Move blank to RIGHT
+  T+2.1s: Cast spell
+  T+3.3s: Move LEFT blank back → Move LEFT rune/blank to backpack
+  T+4.1s: Re-equip SWORD to LEFT (from dictionary) ✅
+  T+4.5s: Move RIGHT blank back → Move RIGHT rune/blank to backpack
+  T+5.3s: Re-equip SHIELD to RIGHT (from dictionary) ✅
+  T+5.7s: LEFT=SWORD ✅, RIGHT=SHIELD ✅
+
+Time difference: Negligible (slightly faster due to 0.3s unequip vs 0.5s)
+
+================================================================================
