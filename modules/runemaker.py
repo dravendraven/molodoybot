@@ -299,33 +299,43 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                     if hand_mode == "BOTH": hands_to_use = [SLOT_LEFT, SLOT_RIGHT]
                     elif hand_mode == "LEFT": hands_to_use = [SLOT_LEFT]
                     else: hands_to_use = [SLOT_RIGHT]
-                    
-                    active_runes = []
-                    
+
+                    # PHASE 1: Unequip all hands and store their items
+                    # (This fixes the bug where unequipped_item_id gets overwritten with "BOTH" hands)
+                    unequipped_items = {}  # slot_enum → item_id
                     for slot_enum in hands_to_use:
                         if is_safe_callback and not is_safe_callback(): break
-                        
-                        # --- LIMPEZA DE MÃO ---
                         unequipped_item_id = unequip_hand(pm, base_addr, slot_enum)
-                        blank_id = get_cfg('blank_id', 3147)
+                        unequipped_items[slot_enum] = unequipped_item_id
+                        time.sleep(0.3)
+
+                    # PHASE 2: Equip blank runes
+                    active_runes = []
+                    blank_id = get_cfg('blank_id', 3147)
+
+                    for slot_enum in hands_to_use:
+                        if is_safe_callback and not is_safe_callback(): break
+
                         blank_data = find_item_in_containers(pm, base_addr, blank_id)
-                        
+
                         if not blank_data:
                             log_msg(f"⚠️ Sem Blanks na BP!")
-                            if unequipped_item_id:
-                                reequip_hand(pm, base_addr, unequipped_item_id, slot_enum)
+                            # Restore all unequipped items on failure
+                            for slot, item_id in unequipped_items.items():
+                                if item_id:
+                                    reequip_hand(pm, base_addr, item_id, slot)
                             break
-                        
+
                         # Move Blank -> Mão
                         pos_from = packet.get_container_pos(blank_data['container_index'], blank_data['slot_index'])
                         pos_to = packet.get_inventory_pos(slot_enum)
                         packet.move_item(pm, pos_from, pos_to, blank_id, 1)
-                        
+
                         active_runes.append({
-                            "hand_pos": pos_to, 
-                            "origin_idx": blank_data['container_index'], 
+                            "hand_pos": pos_to,
+                            "origin_idx": blank_data['container_index'],
                             "slot_enum": slot_enum,
-                            "restorable_item": unequipped_item_id 
+                            "restorable_item": unequipped_items[slot_enum]  # Use stored value instead of loop variable
                         })
                         time.sleep(0.6)
 
