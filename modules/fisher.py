@@ -10,6 +10,7 @@ from modules.stacker import auto_stack_items
 from database import fishing_db
 from core.memory_map import MemoryMap
 from core.config_utils import make_config_getter
+from core.packet_mutex import PacketMutex
 
 # ==============================================================================
 # VARIÁVEIS GLOBAIS DE SESSÃO
@@ -306,13 +307,16 @@ def fishing_loop(pm, base_addr, hwnd, check_running=None, log_callback=None,
             time.sleep(human_wait)
             
             cap_before = get_player_cap(pm, base_addr)
-            packet.use_with(pm, rod_pos, ROD_ID, 0, water_pos, water_id, 0)
-            
-            # Atualiza Contadores
-            session_total_casts += 1 
+
+            # --- PACKET MUTEX: Evita conflito com outros módulos (Runemaker, etc) ---
+            with PacketMutex("fisher"):
+                packet.use_with(pm, rod_pos, ROD_ID, 0, water_pos, water_id, 0)
+
+            # Atualiza Contadores (fora do mutex - não é ação de packet)
+            session_total_casts += 1
             if is_fatigue_enabled:
                 fatigue_count += 1
-            
+
             time.sleep(random.uniform(0.6, 0.8))
             
             # --- CHECAGEM DE DESCANSO (FADIGA) ---
