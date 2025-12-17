@@ -631,7 +631,7 @@ def start_cavebot_thread():
                     cavebot_instance.run_cycle()
 
                 # 3. Atualizar Label de Status na UI (a cada ciclo)
-                if pm and label_cavebot_status.winfo_exists():
+                if pm and label_cavebot_status and label_cavebot_status.winfo_exists():
                     try:
                         px, py, pz = get_player_pos(pm, base_addr)
                         wp_list = cavebot_instance._waypoints if cavebot_instance._waypoints else []
