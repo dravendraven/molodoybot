@@ -1,7 +1,8 @@
 import time
 from config import *
 from modules.auto_loot import scan_containers
-from core import packet # <--- NOVO
+from core import packet
+from core.packet_mutex import PacketMutex
 
 def auto_stack_items(pm, base_addr, hwnd, my_containers_count=MY_CONTAINERS_COUNT):
     """
@@ -29,12 +30,13 @@ def auto_stack_items(pm, base_addr, hwnd, my_containers_count=MY_CONTAINERS_COUN
                         
                         # Origem: Slot Doador
                         pos_from = packet.get_container_pos(cont.index, item_src.slot_index)
-                        
+
                         # Destino: Slot Receptor
                         pos_to = packet.get_container_pos(cont.index, item_dst.slot_index)
-                        
+
                         # Executa Movimento
-                        packet.move_item(pm, pos_from, pos_to, item_src.id, item_src.count)
+                        with PacketMutex("stacker"):
+                            packet.move_item(pm, pos_from, pos_to, item_src.id, item_src.count)
                         
                         time.sleep(0.3) 
                         return True

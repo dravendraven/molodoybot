@@ -1,6 +1,7 @@
 import time
 
-from core import packet 
+from core import packet
+from core.packet_mutex import PacketMutex
 from config import *
 from modules.auto_loot import scan_containers, is_player_full
 
@@ -28,7 +29,9 @@ def attempt_eat(pm, base_addr, hwnd):
                 print(f"[DEBUG] Comida encontrada: {f_name} ID: {item.id} no Container {cont.index}, Slot {slot}")
                 
                 food_pos = packet.get_container_pos(cont.index, slot)
-                packet.use_item(pm, food_pos, item.id, index=cont.index)
+
+                with PacketMutex("eater"):
+                    packet.use_item(pm, food_pos, item.id, index=cont.index)
                 
                 # Pequena pausa para garantir que o servidor processe
                 time.sleep(0.6) 
