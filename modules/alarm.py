@@ -3,8 +3,9 @@ import winsound
 from config import *
 from core.map_core import get_player_pos
 from core.player_core import get_connected_char_name
+from core.bot_state import state
+from core.config_utils import make_config_getter
 
-_cached_my_name = ""
 # Definição de intervalos de alerta (Fallback caso não esteja no config)
 TELEGRAM_INTERVAL_NORMAL = 60
 TELEGRAM_INTERVAL_GM = 10
@@ -12,13 +13,15 @@ TELEGRAM_INTERVAL_GM = 10
 
 def get_my_name(pm, base_addr):
     """
-    Retorna nome do personagem com cache.
+    Retorna nome do personagem usando BotState (thread-safe).
     O nome não muda durante a sessão.
     """
-    global _cached_my_name
-    if not _cached_my_name:
-        _cached_my_name = get_connected_char_name(pm, base_addr)
-    return _cached_my_name
+    # Usa cache do BotState (thread-safe)
+    if not state.char_name:
+        name = get_connected_char_name(pm, base_addr)
+        if name:
+            state.char_name = name
+    return state.char_name
 
 def get_last_chat_entry(pm, base_addr):
     """
@@ -39,10 +42,9 @@ def get_last_chat_entry(pm, base_addr):
         return None, None
 
 def alarm_loop(pm, base_addr, check_running, config, callbacks):
-    
+
     # --- HELPER: LER CONFIGURAÇÃO EM TEMPO REAL ---
-    def get_cfg(key, default):
-        return config().get(key, default) if callable(config) else default
+    get_cfg = make_config_getter(config)
 
     # Recupera callbacks
     set_safe_state = callbacks.get('set_safe', lambda x: None)
@@ -119,7 +121,7 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks):
                     
                     # Ignora a mim mesmo
                     if not (current_name and current_name in author):
-                        is_gm_talk = "GM " in author or "CM " in author or "God " in author
+                        is_gm_talk = any(prefix in author for prefix in GM_PREFIXES)
                         
                         # 1. Alarme GM no Chat
                         if chat_gm_enabled and is_gm_talk:
@@ -171,7 +173,7 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks):
 
                         if vis != 0 and valid_floor:
                             # Detecta GM Visualmente
-                            if name.startswith("GM ") or name.startswith("CM ") or name.startswith("God "):
+                            if any(name.startswith(prefix) for prefix in GM_PREFIXES):
                                 visual_danger = True
                                 is_visual_gm = True
                                 visual_danger_name = f"GAMEMASTER {name}"

@@ -11,21 +11,23 @@ from database import corpses
 # CORREÇÃO: Importar scan_containers do local original (auto_loot.py)
 from modules.auto_loot import scan_containers
 from core.player_core import get_connected_char_name
-
-_cached_char_name = ""
+from core.bot_state import state
+from core.config_utils import make_config_getter
 
 # Definições de Delay
 SCAN_DELAY = 0.5
 
 def get_my_char_name(pm, base_addr):
     """
-    Retorna o nome do personagem com cache de sessão.
+    Retorna o nome do personagem usando BotState.
     Evita buscar na BattleList toda vez.
     """
-    global _cached_char_name
-    if not _cached_char_name:
-        _cached_char_name = get_connected_char_name(pm, base_addr)
-    return _cached_char_name
+    # Usa cache do BotState (thread-safe)
+    if not state.char_name:
+        name = get_connected_char_name(pm, base_addr)
+        if name:
+            state.char_name = name
+    return state.char_name
 
 def open_corpse_via_packet(pm, base_addr, target_data, player_id, log_func=print):
     """
@@ -99,9 +101,8 @@ def open_corpse_via_packet(pm, base_addr, target_data, player_id, log_func=print
         return False
 
 def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
-    
-    def get_cfg(key, default=None):
-        return config().get(key, default) if callable(config) else default
+
+    get_cfg = make_config_getter(config)
 
     current_monitored_id = 0
     last_target_data = None 

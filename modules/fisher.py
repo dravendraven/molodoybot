@@ -1,14 +1,15 @@
 import time
 import random
 import traceback
-import math 
-from core import packet 
+import math
+from core import packet
 from config import *
 from core.inventory_core import find_item_in_containers, find_item_in_equipment
 from core.map_core import get_player_pos
 from modules.stacker import auto_stack_items
 from database import fishing_db
 from core.memory_map import MemoryMap
+from core.config_utils import make_config_getter
 
 # ==============================================================================
 # VARIÁVEIS GLOBAIS DE SESSÃO
@@ -65,12 +66,10 @@ def get_rod_packet_position(pm, base_addr):
 # LOOP PRINCIPAL
 # ==============================================================================
 
-def fishing_loop(pm, base_addr, hwnd, check_running=None, log_callback=None, 
+def fishing_loop(pm, base_addr, hwnd, check_running=None, log_callback=None,
                  debug_hud_callback=None, config=None):
-    
-    def get_cfg(key, default):
-        if callable(config): return config().get(key, default)
-        return default
+
+    get_cfg = make_config_getter(config)
 
     def log_msg(text):
         timestamp = time.strftime("%H:%M:%S")

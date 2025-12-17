@@ -21,22 +21,34 @@ class MemoryMap:
     def __init__(self, pm, base_addr):
         self.pm = pm
         self.base_addr = base_addr
-        
+
         self.tiles = [None] * TOTAL_TILES
-        
+
         self.center_index = -1
         self.offset_x = 0
         self.offset_y = 0
         self.offset_z = 0
         self.last_update = 0
+        self.is_calibrated = False  # Flag para validar se calibração foi bem-sucedida
 
     def read_full_map(self, player_id):
+        # Reseta flag de calibração antes de cada leitura
+        self.is_calibrated = False
+
         try:
             map_start_addr = self.pm.read_int(self.base_addr + MAP_POINTER_ADDR)
             raw_data = self.pm.read_bytes(map_start_addr, MAP_DATA_SIZE)
             self._parse_map_data(raw_data, player_id)
             self.last_update = time.time()
-            return True
+
+            # Só marca como calibrado se encontrou o player no mapa
+            if self.center_index != -1:
+                self.is_calibrated = True
+                return True
+            else:
+                print(f"[MemoryMap] ⚠️ Calibração falhou: Player ID {player_id} não encontrado no mapa")
+                return False
+
         except Exception as e:
             print(f"[MemoryMap] Erro ao ler mapa: {e}")
             return False
@@ -86,17 +98,40 @@ class MemoryMap:
         self.offset_z = z
 
     def get_tile(self, rel_x, rel_y):
-        if self.center_index == -1: return None 
+        """
+        Retorna o tile na posição relativa (rel_x, rel_y) ao player.
 
-        target_x = (8 + rel_x + self.offset_x) 
-        target_y = (6 + rel_y + self.offset_y)
-        
-        final_x = target_x % 18
-        final_y = target_y % 14
-        final_z = self.offset_z 
-        
+        IMPORTANTE: Não usa wrap-around (modulo) - valida bounds corretamente.
+        Se a posição estiver fora do alcance visível (18x14), retorna None.
+        """
+        # Validação de calibração
+        if not self.is_calibrated or self.center_index == -1:
+            if DEBUG_PATHFINDING:
+                print(f"[MemoryMap] get_tile({rel_x}, {rel_y}) -> FALHOU (não calibrado)")
+            return None
+
+        target_x = 8 + rel_x + self.offset_x
+        target_y = 6 + rel_y + self.offset_y
+
+        # Validação de bounds (SEM wrap-around perigoso)
+        if not (0 <= target_x < 18 and 0 <= target_y < 14):
+            if DEBUG_PATHFINDING:
+                print(f"[MemoryMap] get_tile({rel_x}, {rel_y}) -> FORA DOS BOUNDS")
+                print(f"  target_x={target_x}, target_y={target_y} (offset_x={self.offset_x}, offset_y={self.offset_y})")
+            return None  # Fora do alcance visível
+
+        final_x = target_x
+        final_y = target_y
+        final_z = self.offset_z
+
         index = final_x + (final_y * 18) + (final_z * 18 * 14)
-        
+
         if 0 <= index < TOTAL_TILES:
-            return self.tiles[index]
+            tile = self.tiles[index]
+            if DEBUG_PATHFINDING and tile:
+                print(f"[MemoryMap] get_tile({rel_x}, {rel_y}) -> Tile com {tile.count} itens: {tile.items}")
+            return tile
+
+        if DEBUG_PATHFINDING:
+            print(f"[MemoryMap] get_tile({rel_x}, {rel_y}) -> Index {index} inválido (max={TOTAL_TILES})")
         return None

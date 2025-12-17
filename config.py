@@ -205,6 +205,11 @@ OFFSET_SLOT_RIGHT = 0x1CED90
 OFFSET_SLOT_LEFT  = 0x1CED9C
 OFFSET_SLOT_AMMO  = 0x1CEDCC
 
+# Índices de Slot de Equipamento (para packets/UI)
+SLOT_RIGHT = 5
+SLOT_LEFT = 6
+SLOT_AMMO = 7
+
 OFFSET_PLAYER_CAP = 0x1C6820  # Capacidade (Oz) 
 
 # Cooldown do peixe (em segundos)
@@ -316,3 +321,33 @@ RESUME_DELAY_GM = (120, 300)
 # Intervalo entre alertas no Telegram (Segundos)
 TELEGRAM_INTERVAL_NORMAL = 60
 TELEGRAM_INTERVAL_GM = 10  # Alerta frenético se for GM
+
+# ==============================================================================
+# CONSTANTES DE DETECÇÃO (ALARM)
+# ==============================================================================
+# Prefixos de GM/Staff detectados no chat e na tela
+GM_PREFIXES = ("GM ", "CM ", "God ")
+
+# ==============================================================================
+# ENUMS E CONSTANTES DE EQUIPAMENTO
+# ==============================================================================
+class HandSlot:
+    """Enumeração de slots de mão (para Runemaker/Fisher)"""
+    RIGHT = 0
+    LEFT = 1
+    AMMO = 2
+
+class AlertType:
+    """Tipos de alerta do sistema de Alarm"""
+    MONSTER = "MONSTER"
+    PLAYER = "PLAYER"
+    GM = "GM"
+    MANUAL = "MANUAL"
+    HP_LOW = "HP_LOW"
+    CHAT = "CHAT"
+
+# ==============================================================================
+# DEBUG CONFIG (PATHFINDING)
+# ==============================================================================
+# Ativa logs detalhados do A* quando não encontra caminho
+DEBUG_PATHFINDING = True

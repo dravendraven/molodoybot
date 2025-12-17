@@ -154,22 +154,32 @@ def stop(pm):
     """Para o personagem."""
     walk(pm, OP_STOP)
 
-def move_item(pm, from_pos, to_pos, item_id, count):
-    """Move/Arrasta item."""
+def move_item(pm, from_pos, to_pos, item_id, count, stack_pos=0):
+    """
+    Move/Arrasta item.
+
+    Args:
+        pm: Instância do Pymem
+        from_pos: Posição de origem (dict com x, y, z)
+        to_pos: Posição de destino (dict com x, y, z)
+        item_id: ID do item a mover
+        count: Quantidade de itens a mover
+        stack_pos: Posição na pilha (0=fundo, aumenta para cima). Obrigatório para itens no chão.
+    """
     pb = PacketBuilder()
     pb.add_call(FUNC_CREATE_PACKET, OP_MOVE)
-    
+
     pb.add_u16(from_pos['x'])
     pb.add_u16(from_pos['y'])
     pb.add_byte(from_pos['z'])
     pb.add_u16(item_id)
-    pb.add_byte(0) # Stackpos (geralmente 0 funciona)
-    
+    pb.add_byte(stack_pos)
+
     pb.add_u16(to_pos['x'])
     pb.add_u16(to_pos['y'])
     pb.add_byte(to_pos['z'])
     pb.add_byte(count)
-    
+
     pb.add_call(FUNC_SEND_PACKET, 1)
     inject_packet(pm, pb.get_code())
 

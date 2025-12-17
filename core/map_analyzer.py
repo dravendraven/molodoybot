@@ -1,5 +1,6 @@
 # core/map_analyzer.py
 from database.tiles_config import BLOCKING_IDS, AVOID_IDS, get_special_type
+from config import DEBUG_PATHFINDING
 
 class MapAnalyzer:
     def __init__(self, memory_map):
@@ -7,11 +8,13 @@ class MapAnalyzer:
 
     def get_tile_properties(self, rel_x, rel_y):
         tile = self.mm.get_tile(rel_x, rel_y)
-        
+
         # 1. VALIDAÇÃO DE EXISTÊNCIA (O "VAZIO")
         # Se o tile é None ou a lista de itens está vazia, não tem chão.
         # Isso evita que o bot tente andar no "preto" do mapa.
         if not tile or not tile.items:
+            if DEBUG_PATHFINDING:
+                print(f"[MapAnalyzer] get_tile_properties({rel_x}, {rel_y}) -> BLOQUEADO (tile=None ou vazio)")
             return {'walkable': False, 'type': 'BLOCK', 'cost': 999}
 
         properties = {

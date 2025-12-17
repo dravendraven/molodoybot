@@ -1,19 +1,18 @@
 import time
 import random
-import win32con 
+import win32con
 
-from core import packet 
+from core import packet
 from config import *
 from core.inventory_core import find_item_in_containers
 from core.map_core import get_player_pos, get_game_view, get_screen_coord
 from modules.eater import attempt_eat
 from core.input_core import press_hotkey, left_click_at
 from database import foods_db
-from core.inventory_core import find_item_in_containers
+from core.config_utils import make_config_getter
 
-# Slots do Inventário
-SLOT_RIGHT = 5
-SLOT_LEFT = 6
+# Usar constantes do config.py ao invés de redefinir
+# SLOT_RIGHT e SLOT_LEFT removidos (usar HandSlot do config)
 
 def get_vk_code(key_str):
     key_str = key_str.upper().strip()
@@ -105,11 +104,8 @@ def get_target_id(pm, base_addr):
         return 0
     
 def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe_callback=None, is_gm_callback=None, log_callback=None, eat_callback=None):
-    
-    def get_cfg(key, default=None):
-        if callable(config):
-            return config().get(key, default)
-        return config.get(key, default) if config else default
+
+    get_cfg = make_config_getter(config)
 
     def log_msg(text):
         timestamp = time.strftime("%H:%M:%S")
@@ -331,7 +327,7 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                             "slot_enum": slot_enum,
                             "restorable_item": unequipped_item_id 
                         })
-                        time.sleep(0.4)
+                        time.sleep(0.6)
 
                     if active_runes:
                         log_msg(f"🪄 Pressionando {hotkey_str}...")
@@ -348,7 +344,7 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                              # 2. Devolve Runa para Backpack
                              pos_dest = packet.get_container_pos(info['origin_idx'], 0)
                              packet.move_item(pm, info['hand_pos'], pos_dest, rune_id_to_move, 1)
-                             time.sleep(0.4)
+                             time.sleep(0.8)
                              
                              # 3. Restaura item original
                              if info['restorable_item']:
