@@ -208,10 +208,10 @@ def fishing_loop(pm, base_addr, hwnd, check_running=None, log_callback=None,
             candidates = []
             hud_grid = {} 
             
-            for dy in range(-6, 7):
-                for dx in range(-8, 9):
+            for dy in range(-5, 6):
+                for dx in range(-7, 8):
                     if dx == 0 and dy == 0: continue
-                    tile = mapper.get_tile(dx, dy)
+                    tile = mapper.get_tile_visible(dx, dy)
                     if tile:
                         top_id = tile.get_top_item()
                         if top_id in WATER_IDS:

@@ -135,3 +135,34 @@ class MemoryMap:
         if DEBUG_PATHFINDING:
             print(f"[MemoryMap] get_tile({rel_x}, {rel_y}) -> Index {index} inválido (max={TOTAL_TILES})")
         return None
+
+    def get_tile_visible(self, rel_x, rel_y):
+        """
+        Retorna o tile na posição relativa (rel_x, rel_y) ao player, com suporte a chunks adjacentes.
+
+        Ignora validação de bounds e usa wrap-around para ler tiles visíveis que estão
+        em chunks diferentes (crucial para fisher que precisa ver toda tela 15x11).
+
+        Retorna None apenas se dados de memória não forem válidos.
+        """
+        # Validação de calibração
+        if not self.is_calibrated or self.center_index == -1:
+            return None
+
+        # Cálcula a posição no chunk atual
+        target_x = 8 + rel_x + self.offset_x
+        target_y = 6 + rel_y + self.offset_y
+
+        # Usa wrap-around para cobrir chunks adjacentes
+        # Tiles visíveis na tela podem estar em chunks diferentes
+        final_x = target_x % 18
+        final_y = target_y % 14
+        final_z = self.offset_z
+
+        # Cálcula índice com wrap-around
+        index = final_x + (final_y * 18) + (final_z * 18 * 14)
+
+        if 0 <= index < TOTAL_TILES and self.tiles[index]:
+            return self.tiles[index]
+
+        return None
