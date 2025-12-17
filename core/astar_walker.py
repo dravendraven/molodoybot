@@ -85,7 +85,7 @@ class AStarWalker:
                     # Custo 25 faz com que o bot prefira andar 2 tiles retos (10+10=20)
                     # do que 1 diagonal, evitando o delay de "exhaust" do char.
                     # Ele só usará diagonal se os vizinhos retos estiverem bloqueados.
-                    move_cost = 40
+                    move_cost = 35
                 else:
                     move_cost = 10
 
@@ -106,12 +106,20 @@ class AStarWalker:
 
         # DEBUG: Log quando não encontra caminho
         if self.debug:
+            # Verifica se o target é walkable
+            target_props = self.analyzer.get_tile_properties(target_rel_x, target_rel_y)
+            target_walkable = target_props['walkable']
+
             if iterations > self.max_depth:
                 print(f"[A*] ⚠️ TIMEOUT: Atingiu max_depth ({self.max_depth}) sem encontrar target ({target_rel_x}, {target_rel_y})")
                 print(f"[A*]   Explored {iterations} nodes, closed_set size: {len(closed_set)}")
             elif walkable_count == 0:
                 print(f"[A*] ⚠️ DEBUG: Nenhum tile walkable encontrado ao redor! Target: ({target_rel_x}, {target_rel_y})")
                 print(f"[A*] Tiles analisados: {blocked_count} bloqueados, {walkable_count} walkable")
+            elif not target_walkable:
+                print(f"[A*] ⚠️ TARGET BLOQUEADO: O tile de destino ({target_rel_x}, {target_rel_y}) é NÃO-WALKABLE!")
+                print(f"[A*]   Target properties: {target_props}")
+                print(f"[A*]   Explored {len(closed_set)} reachable nodes antes de descobrir isso")
             else:
                 print(f"[A*] ⚠️ FAILED: Fim do open_list sem encontrar target ({target_rel_x}, {target_rel_y})")
                 print(f"[A*]   Iterations: {iterations}, closed_set size: {len(closed_set)}, walkable_count: {walkable_count}")
