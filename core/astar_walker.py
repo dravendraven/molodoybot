@@ -147,3 +147,17 @@ class AStarWalker:
             print(f"[A*] Step: {best_step}, distância: {best_distance:.2f}")
 
         return best_step
+
+    def _reconstruct_first_step(self, node):
+        """Reconstrói o primeiro passo da rota planejada pelo A*."""
+        curr = node
+        path = []
+        while curr.parent:
+            path.append(curr)
+            curr = curr.parent
+
+        if not path:
+            return None
+        # O último da lista é o filho direto do start (o primeiro passo)
+        first = path[-1]
+        return (first.x, first.y)
