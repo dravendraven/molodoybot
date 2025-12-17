@@ -3,7 +3,8 @@ import pymem
 import random
 from config import *
 from core.mouse_lock import is_mouse_busy
-from core import packet 
+from core import packet
+from core.packet_mutex import PacketMutex
 from database import foods_db
 from core.map_core import get_player_pos
 
@@ -143,7 +144,9 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
         if has_bag_to_open and bag_item_ref:
             print(f"🎒 Abrindo Bag no corpo...")
             bag_pos = packet.get_container_pos(cont.index, bag_item_ref.slot_index)
-            packet.use_item(pm, bag_pos, bag_item_ref.id, index=cont.index)
+
+            with PacketMutex("auto_loot"):
+                packet.use_item(pm, bag_pos, bag_item_ref.id, index=cont.index)
             time.sleep(0.6)
             return "BAG"
 
@@ -153,9 +156,10 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
             # --- AUTO EAT ---
             if item.id in FOOD_IDS:
                 food_pos = packet.get_container_pos(cont.index, item.slot_index)
-                
+
                 # Tenta comer
-                packet.use_item(pm, food_pos, item.id)
+                with PacketMutex("auto_loot"):
+                    packet.use_item(pm, food_pos, item.id)
                 time.sleep(0.25)
                 
                 # Verifica se está full e a config de drop
@@ -166,7 +170,9 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
                         
                         px, py, pz = get_player_pos(pm, base_addr)
                         pos_ground = {'x': px, 'y': py, 'z': pz}
-                        packet.move_item(pm, food_pos, pos_ground, item.id, item.count)
+
+                        with PacketMutex("auto_loot"):
+                            packet.move_item(pm, food_pos, pos_ground, item.id, item.count)
                         return ("DROP_FOOD", item.id, item.count)
                     else:
                         return "EAT_FULL"
@@ -183,8 +189,9 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
                 
                 pos_from = packet.get_container_pos(cont.index, item.slot_index)
                 pos_to = packet.get_container_pos(dest_idx, dest_slot)
-                
-                packet.move_item(pm, pos_from, pos_to, item.id, item.count)
+
+                with PacketMutex("auto_loot"):
+                    packet.move_item(pm, pos_from, pos_to, item.id, item.count)
                 time.sleep(0.3)
                 dest_slot += 1
                 return ("LOOT", item.id, item.count)
@@ -195,7 +202,9 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
                 pos_from = packet.get_container_pos(cont.index, item.slot_index)
                 px, py, pz = get_player_pos(pm, base_addr)
                 pos_ground = {'x': px, 'y': py, 'z': pz}
-                packet.move_item(pm, pos_from, pos_ground, item.id, item.count)
+
+                with PacketMutex("auto_loot"):
+                    packet.move_item(pm, pos_from, pos_ground, item.id, item.count)
                 time.sleep(0.3)
                 return "DROP"
                 

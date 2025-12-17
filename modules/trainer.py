@@ -3,6 +3,7 @@ import random
 import win32gui
 
 from core import packet
+from core.packet_mutex import PacketMutex
 from config import *
 from core.map_core import get_player_pos
 from core.memory_map import MemoryMap
@@ -89,7 +90,8 @@ def open_corpse_via_packet(pm, base_addr, target_data, player_id, log_func=print
             if target_index > 15: target_index = 15 
             
             # Envia packet usando o índice calculado
-            packet.use_item(pm, pos_dict, corpse_id, found_stack_pos, index=target_index)
+            with PacketMutex("trainer"):
+                packet.use_item(pm, pos_dict, corpse_id, found_stack_pos, index=target_index)
             return True
             
         else:
