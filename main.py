@@ -38,7 +38,7 @@ from core import packet
 from database import foods_db
 from modules.trainer import trainer_loop
 from modules.alarm import alarm_loop
-from core.cavebot import Cavebot
+from modules.cavebot import Cavebot
 from core.player_core import get_connected_char_name
 from core.bot_state import state
 #import corpses
