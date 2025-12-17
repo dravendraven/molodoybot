@@ -127,7 +127,7 @@ _cached_player_name = ""
 # Variáveis de Controle de Execução
 is_attacking = False
 is_looting = False
-bot_running = True
+# bot_running movido para state.is_running (bot_state.py)
 pm = None 
 base_addr = 0
 state.is_connected = False # True apenas se: Processo Aberto + Logado no Char
@@ -142,6 +142,7 @@ lbl_status = None
 cavebot_instance = None
 current_waypoints_ui = []
 current_waypoints_filename = ""
+label_cavebot_status = None  # Label para mostrar posição atual e waypoint
 txt_waypoints_settings = None
 entry_waypoint_name = None
 combo_cavebot_scripts = None
@@ -407,8 +408,8 @@ def auto_recorder_loop():
     global last_recorded_pos, is_recording_waypoints, pm, base_addr
     
     print("Gravador Automático Iniciado.")
-    
-    while bot_running:
+
+    while state.is_running:
         # Verifica condições: Gravação Ligada + Conectado + PM válido
         if is_recording_waypoints and state.is_connected and pm:
             try:
@@ -554,9 +555,9 @@ def toggle_cavebot_func():
 # ==============================================================================
 
 def connection_watchdog():
-    global pm, base_addr, bot_running
+    global pm, base_addr
     was_connected_once = False
-    while bot_running:
+    while state.is_running:
         try:
             # 1. Se não tem processo atrelado, tenta atrelar
             if pm is None:
@@ -609,8 +610,8 @@ def start_cavebot_thread():
     """Gerencia a inicialização e o loop do Cavebot."""
     global cavebot_instance, pm, base_addr
     print("Thread Cavebot iniciada.")
-    
-    while bot_running:
+
+    while state.is_running:
         # 1. Inicialização Lazy (Só cria quando o PM existir)
         if pm is not None and cavebot_instance is None and state.is_connected:
             try:
@@ -626,12 +627,29 @@ def start_cavebot_thread():
         if cavebot_instance and state.is_connected:
             try:
                 # O método run_cycle verifica internamente se está enabled
-                if cavebot_instance.enabled: 
+                if cavebot_instance.enabled:
                     cavebot_instance.run_cycle()
+
+                # 3. Atualizar Label de Status na UI (a cada ciclo)
+                if pm and label_cavebot_status.winfo_exists():
+                    try:
+                        px, py, pz = get_player_pos(pm, base_addr)
+                        wp_list = cavebot_instance._waypoints if cavebot_instance._waypoints else []
+                        wp_idx = cavebot_instance._current_index if cavebot_instance._waypoints else -1
+
+                        if wp_list and 0 <= wp_idx < len(wp_list):
+                            wp = wp_list[wp_idx]
+                            label_text = f"📍 Posição: ({px}, {py}, {pz}) | 🎯 WP {wp_idx}: ({wp['x']}, {wp['y']}, {wp['z']})"
+                        else:
+                            label_text = f"📍 Posição: ({px}, {py}, {pz}) | 🎯 Sem waypoints"
+
+                        label_cavebot_status.configure(text=label_text)
+                    except:
+                        pass  # Silencia erros de UI
             except Exception as e:
                 print(f"Erro Cavebot Loop: {e}")
                 time.sleep(1)
-        
+
         time.sleep(0.1)
 
 def start_trainer_thread():
@@ -752,9 +770,9 @@ def start_alarm_thread():
         'chat_gm': BOT_SETTINGS['alarm_chat_gm']
     }
 
-    check_run = lambda: bot_running and state.is_connected
+    check_run = lambda: state.is_running and state.is_connected
 
-    while bot_running:
+    while state.is_running:
         if not check_run(): time.sleep(1); continue
         if pm is None: time.sleep(1); continue
 
@@ -765,7 +783,7 @@ def start_alarm_thread():
             time.sleep(5)
 
 def regen_monitor_loop():
-    global pm, base_addr, bot_running
+    global pm, base_addr
     global global_regen_seconds, global_is_hungry, global_is_synced, global_is_full
     
     print("[REGEN] Monitor Iniciado (Modo Híbrido com Validação Dupla)")
@@ -776,8 +794,8 @@ def regen_monitor_loop():
     seconds_no_hp_up = 0
     seconds_no_mana_up = 0
     last_mem_id = 0
-    
-    while bot_running:
+
+    while state.is_running:
         if not state.is_connected or pm is None:
             time.sleep(1)
             continue
@@ -892,7 +910,7 @@ def auto_loot_thread():
         'loot_drop_food': BOT_SETTINGS.get('loot_drop_food', False)
     }
 
-    while bot_running:
+    while state.is_running:
         if not state.is_connected: time.sleep(1); continue
         if not switch_loot.get(): time.sleep(1); continue
         if not state.is_safe(): time.sleep(1); continue
@@ -960,7 +978,7 @@ def auto_fisher_thread():
     hwnd = 0
     def should_fish():
         # state.is_safe() já verifica a flag E o cooldown internamente
-        return bot_running and state.is_connected and switch_fisher.get() and state.is_safe()
+        return state.is_running and state.is_connected and switch_fisher.get() and state.is_safe()
 
     # --- CONFIG PROVIDER (O SEGREDO) ---
     # Essa função "empacota" as configurações atuais do BOT_SETTINGS.
@@ -973,7 +991,7 @@ def auto_fisher_thread():
         'fatigue': BOT_SETTINGS.get('fisher_fatigue', True)
     }
 
-    while bot_running:
+    while state.is_running:
         if not should_fish():
             time.sleep(1)
             continue
@@ -1001,9 +1019,9 @@ def auto_fisher_thread():
 
 def runemaker_thread():
     hwnd = 0
-    
+
     def should_run():
-        return bot_running and state.is_connected and switch_runemaker.get()
+        return state.is_running and state.is_connected and switch_runemaker.get()
     
     def check_safety():
         return state.is_safe_raw()
@@ -1050,7 +1068,7 @@ def runemaker_thread():
         )
     }
 
-    while bot_running:
+    while state.is_running:
         if not should_run():
             time.sleep(1); continue
         if pm is None: time.sleep(1); continue
@@ -1074,7 +1092,7 @@ def skill_monitor_loop():
     """
     Thread RÁPIDA: Apenas lê memória e atualiza a lógica matemática.
     """
-    while bot_running:
+    while state.is_running:
         if pm is not None:
             try:
                 sw_pct = pm.read_int(base_addr + OFFSET_SKILL_SWORD_PCT)
@@ -1095,7 +1113,7 @@ def skill_monitor_loop():
 # ==============================================================================
 
 def gui_updater_loop():
-    while bot_running:
+    while state.is_running:
         if not state.is_connected:
             lbl_sword_val.configure(text="--")
             lbl_shield_val.configure(text="--")
@@ -1271,7 +1289,7 @@ def gui_updater_loop():
                 print(f"Erro Plot: {e}")
 
         for _ in range(5):
-            if not bot_running: break
+            if not state.is_running: break
             time.sleep(1)
 
 def update_stats_visibility():
@@ -1330,7 +1348,7 @@ def auto_resize_window():
     app.geometry(f"320x{needed_height}")
 
 def open_settings():
-    global toplevel_settings, lbl_status, txt_waypoints_settings, entry_waypoint_name, combo_cavebot_scripts, current_waypoints_filename
+    global toplevel_settings, lbl_status, txt_waypoints_settings, entry_waypoint_name, combo_cavebot_scripts, current_waypoints_filename, label_cavebot_status
     
     if toplevel_settings is not None and toplevel_settings.winfo_exists():
         toplevel_settings.lift()
@@ -1908,7 +1926,13 @@ def open_settings():
     # --- COLUNA ESQUERDA: CONTROLES E MATRIZ ---
     frame_cb_left = ctk.CTkFrame(frame_cb_root, fg_color="transparent")
     frame_cb_left.grid(row=0, column=0, sticky="nsew", padx=(0, 3), pady=2)
-    
+
+    # 0. Status do Cavebot (Posição Atual + Waypoint Alvo)
+    label_cavebot_status = ctk.CTkLabel(frame_cb_left, text="📍 Posição: --- | 🎯 Waypoint: ---", **UI['BODY'])
+    label_cavebot_status.pack(anchor="w", pady=(0, 10), fill="x")
+
+    ctk.CTkFrame(frame_cb_left, height=1, fg_color="#555").pack(fill="x", pady=5)
+
     # 1. Gravação Automática
     ctk.CTkLabel(frame_cb_left, text="Gravação Automática", **UI['H1']).pack(anchor="w", pady=(0,2))
     
@@ -2150,9 +2174,8 @@ def toggle_xray():
     update_xray()
 
 def on_close():
-    global bot_running
     print("Encerrando bot e threads...")
-    bot_running = False
+    state.stop()
     clear_player_name_cache() 
     
     try:
@@ -2376,4 +2399,4 @@ update_stats_visibility()
 
 log("🚀 Iniciado.")
 app.mainloop()
-bot_running = False
+state.stop()  # Garante que todas as threads encerrem ao fechar

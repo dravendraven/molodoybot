@@ -149,7 +149,7 @@ class Cavebot:
         dist = math.sqrt((wp['x'] - px)**2 + (wp['y'] - py)**2)
 
         if dist <= 1.5 and wp['z'] == pz:
-            print(f"[Cavebot] Chegou no WP {current_index}")
+            print(f"[Cavebot] ✅ Chegou no WP {current_index}: ({wp['x']}, {wp['y']}, {wp['z']})")
             with self._waypoints_lock:
                 self._current_index = (self._current_index + 1) % len(self._waypoints)
             return
@@ -234,11 +234,12 @@ class Cavebot:
             dx, dy = next_step
             self._move_step(dx, dy)
         else:
-            print("[Cavebot] ⚠️ Caminho bloqueado ou calculando...")
+            print(f"[Cavebot] ⚠️ Caminho bloqueado ou calculando... [WP {current_index}: ({wp['x']}, {wp['y']}, {wp['z']})]")
             if DEBUG_PATHFINDING:
                 print(f"[Cavebot] DEBUG INFO:")
-                print(f"  Player pos: ({px}, {py}, {pz})")
-                print(f"  Waypoint: ({wp['x']}, {wp['y']}, {wp['z']})")
+                print(f"  Posição atual: ({px}, {py}, {pz})")
+                print(f"  Waypoint alvo: ({wp['x']}, {wp['y']}, {wp['z']})")
+                print(f"  Distância até waypoint: {dist:.2f} SQM")
                 print(f"  Target relativo: ({walk_x}, {walk_y})")
                 print(f"  Target absoluto chebyshev distance: {dist_axis} (limite: {MAX_VIEW_RANGE})")
                 print(f"  Map calibrado: {self.memory_map.is_calibrated}")
