@@ -15,7 +15,7 @@ class Node:
         return self.f < other.f
 
 class AStarWalker:
-    def __init__(self, map_analyzer, max_depth=100, debug=False):
+    def __init__(self, map_analyzer, max_depth=500, debug=False):
         self.analyzer = map_analyzer
         self.max_depth = max_depth
         self.debug = debug
@@ -39,10 +39,6 @@ class AStarWalker:
 
         while open_list:
             current_node = heapq.heappop(open_list)
-            iterations += 1
-
-            if iterations > self.max_depth:
-                break # Evita travar se não achar caminho
 
             # Se chegamos ao destino
             if current_node.x == target_rel_x and current_node.y == target_rel_y:
@@ -50,6 +46,11 @@ class AStarWalker:
 
             if (current_node.x, current_node.y) in closed_set:
                 continue
+
+            # Conta apenas nós únicos processados (não duplicatas)
+            iterations += 1
+            if iterations > self.max_depth:
+                break # Evita travar se não achar caminho
 
             closed_set.add((current_node.x, current_node.y))
 
