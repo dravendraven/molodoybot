@@ -28,6 +28,9 @@ class AStarWalker:
         if target_rel_x == 0 and target_rel_y == 0:
             return None
 
+        if self.debug:
+            print(f"[A*] 🔍 Iniciando busca para target ({target_rel_x}, {target_rel_y})")
+
         start_node = Node(0, 0)
         open_list = []
         closed_set = set()
@@ -100,9 +103,16 @@ class AStarWalker:
                 heapq.heappush(open_list, new_node)
 
         # DEBUG: Log quando não encontra caminho
-        if self.debug and walkable_count == 0:
-            print(f"[A*] ⚠️ DEBUG: Nenhum tile walkable encontrado ao redor! Target: ({target_rel_x}, {target_rel_y})")
-            print(f"[A*] Tiles analisados: {blocked_count} bloqueados, {walkable_count} walkable")
+        if self.debug:
+            if iterations > self.max_depth:
+                print(f"[A*] ⚠️ TIMEOUT: Atingiu max_depth ({self.max_depth}) sem encontrar target ({target_rel_x}, {target_rel_y})")
+                print(f"[A*]   Explored {iterations} nodes, closed_set size: {len(closed_set)}")
+            elif walkable_count == 0:
+                print(f"[A*] ⚠️ DEBUG: Nenhum tile walkable encontrado ao redor! Target: ({target_rel_x}, {target_rel_y})")
+                print(f"[A*] Tiles analisados: {blocked_count} bloqueados, {walkable_count} walkable")
+            else:
+                print(f"[A*] ⚠️ FAILED: Fim do open_list sem encontrar target ({target_rel_x}, {target_rel_y})")
+                print(f"[A*]   Iterations: {iterations}, closed_set size: {len(closed_set)}, walkable_count: {walkable_count}")
 
         # FALLBACK: Se A* não encontrou caminho, tenta dar um passo em direção ao waypoint
         # (Útil quando o target está fora do chunk visível)
