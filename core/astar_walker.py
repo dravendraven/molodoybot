@@ -97,7 +97,9 @@ class AStarWalker:
 
                 total_cost = move_cost + tile_cost
                 new_g = current_node.g + total_cost
-                new_h = math.sqrt((nx - target_rel_x)**2 + (ny - target_rel_y)**2) * 10
+                # Aumentar peso da heurística para melhor guiar a busca
+                # Com diagonal_cost=40, precisamos de h mais forte
+                new_h = math.sqrt((nx - target_rel_x)**2 + (ny - target_rel_y)**2) * 20
 
                 new_node = Node(nx, ny, current_node, new_g, new_h)
                 heapq.heappush(open_list, new_node)
