@@ -28,7 +28,6 @@ from config import *
 import config
 from utils.monitor import *
 from modules.auto_loot import *
-from modules.stacker import auto_stack_items
 from modules.fisher import fishing_loop # Vamos usar essa função principal
 from modules.runemaker import runemaker_loop
 from core.mouse_lock import acquire_mouse, release_mouse
@@ -959,17 +958,11 @@ def auto_loot_thread():
                 
                 time.sleep(0.5)
                 continue
-            
-            # 2. Se não tiver loot para pegar, tenta organizar (Stack)
-            did_stack = auto_stack_items(pm, base_addr, hwnd,
-                                       my_containers_count=BOT_SETTINGS['loot_containers'])
-            
-            if did_stack:
-                log("Stackou.")
-                time.sleep(0.5)
-            else:
-                time.sleep(1.0)
-                
+
+            # 2. REMOVIDO: Stacker agora é chamado DENTRO do AutoLoot (após cada item coletado)
+            # O loop aguarda 1.0s se nenhum loot foi coletado
+            time.sleep(1.0)
+
         except Exception as e:
             print(f"Erro Loot/Stack: {e}")
             time.sleep(1)

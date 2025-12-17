@@ -34,6 +34,11 @@ import time
 import threading
 from typing import Optional, Dict
 
+
+def _get_module_group(module_name: str) -> str:
+    """Retorna o grupo de um módulo para verificar relacionamento."""
+    return MODULE_GROUPS.get(module_name.lower(), f"{module_name.lower()}_SOLO")
+
 # Prioridades dos módulos (quanto maior, maior a prioridade)
 MODULE_PRIORITIES = {
     "runemaker": 100,
@@ -42,6 +47,19 @@ MODULE_PRIORITIES = {
     "auto_loot": 40,
     "stacker": 30,
     "eater": 20,
+}
+
+# Grupos de módulos relacionados (módulos do mesmo grupo compartilham contexto)
+MODULE_GROUPS = {
+    "fisher": "FISHER_GROUP",
+    "stacker": "FISHER_GROUP",  # Stacker faz parte do grupo Fisher
+
+    "auto_loot": "LOOT_GROUP",
+    "eater": "LOOT_GROUP",
+
+    "runemaker": "RUNEMAKER_GROUP",  # Isolado
+    "trainer": "TRAINER_GROUP",      # Isolado
+    "cavebot": "CAVEBOT_GROUP",      # Isolado
 }
 
 # Delay mínimo entre ações de módulos diferentes (em segundos)
@@ -59,9 +77,11 @@ class PacketMutex:
     # Variáveis de classe (compartilhadas entre instâncias)
     _lock = threading.Lock()
     _current_holder: Optional[str] = None
+    _last_holder: Optional[str] = None  # Rastreia o último titular (para comparar grupos)
     _last_action_time: float = 0.0
     _action_start_time: Optional[float] = None
     _wait_queue: Dict[str, float] = {}  # module_name -> request_time
+    _reused_context: bool = False  # Indica se mutex foi reutilizado de outro módulo
 
     def __init__(self, module_name: str, timeout: float = 30.0):
         """
@@ -75,15 +95,32 @@ class PacketMutex:
         self.timeout = timeout
         self.priority = MODULE_PRIORITIES.get(self.module_name, 50)
         self.acquired = False
+        self._reused_context = False  # Rastreia se reutilizou contexto de outro módulo
 
     def __enter__(self):
         """Context manager entry."""
+        # Se já temos um holder do mesmo grupo, reutiliza o contexto (sem adquirir novo)
+        with self._lock:
+            if self._current_holder is not None:
+                current_group = _get_module_group(self._current_holder)
+                this_group = _get_module_group(self.module_name)
+
+                if current_group == this_group and current_group != f"{self.module_name}_SOLO":
+                    # Mesmo grupo - reutiliza contexto
+                    self._reused_context = True
+                    self.acquired = True
+                    print(f"[PACKET-MUTEX] 🔄 {self.module_name.upper()} reutilizando mutex de {self._current_holder.upper()} (grupo: {current_group})")
+                    return self
+
+        # Senão, adquire normalmente
         self.acquire()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context manager exit."""
-        self.release()
+        # Apenas libera se foi o titular do mutex (não se foi reutilizado)
+        if not self._reused_context:
+            self.release()
         return False
 
     @classmethod
@@ -142,14 +179,20 @@ class PacketMutex:
                         # Verifica delay mínimo desde última ação
                         time_since_last = time.time() - self._last_action_time
                         if time_since_last < INTER_MODULE_DELAY:
-                            if not blocking:
-                                self._wait_queue.pop(self.module_name, None)
-                                return False
+                            # NOVO: Apenas força delay se for módulo NÃO-RELACIONADO
+                            last_holder_group = _get_module_group(self._last_holder) if self._last_holder else None
+                            current_group = _get_module_group(self.module_name)
 
-                            # Aguarda o delay mínimo
-                            remaining_delay = INTER_MODULE_DELAY - time_since_last
-                            time.sleep(remaining_delay)
-                            continue
+                            # Se são do mesmo grupo (módulos relacionados), SEM DELAY
+                            if last_holder_group != current_group:
+                                if not blocking:
+                                    self._wait_queue.pop(self.module_name, None)
+                                    return False
+
+                                # Aguarda o delay mínimo para módulos não-relacionados
+                                remaining_delay = INTER_MODULE_DELAY - time_since_last
+                                time.sleep(remaining_delay)
+                                continue
 
                         # Adquire o lock
                         self._current_holder = self.module_name
@@ -188,6 +231,7 @@ class PacketMutex:
         """
         with self._lock:
             if self._current_holder == self.module_name:
+                self._last_holder = self._current_holder  # Registra o último titular
                 self._current_holder = None
                 self._last_action_time = time.time()
                 self.acquired = False
@@ -221,6 +265,7 @@ class PacketMutex:
         """Reseta o mutex (apenas para testes)."""
         with cls._lock:
             cls._current_holder = None
+            cls._last_holder = None
             cls._last_action_time = 0.0
             cls._action_start_time = None
             cls._wait_queue.clear()

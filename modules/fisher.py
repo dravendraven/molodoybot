@@ -309,7 +309,7 @@ def fishing_loop(pm, base_addr, hwnd, check_running=None, log_callback=None,
             cap_before = get_player_cap(pm, base_addr)
 
             # --- PACKET MUTEX: Evita conflito com outros módulos (Runemaker, etc) ---
-            with PacketMutex("fisher"):
+            with PacketMutex("fisher") as fisher_ctx:
                 packet.use_with(pm, rod_pos, ROD_ID, 0, water_pos, water_id, 0)
 
             # Atualiza Contadores (fora do mutex - não é ação de packet)
@@ -362,12 +362,13 @@ def fishing_loop(pm, base_addr, hwnd, check_running=None, log_callback=None,
             
             if success:
                 session_fish_caught += 1
-                
+
                 # LOG GLOBAL ATUALIZADO
                 log_msg(f"✅ PEIXE! [{session_fish_caught}/{session_total_casts}]")
-                
+
                 fishing_db.mark_fish_caught(abs_x, abs_y, pz)
-                auto_stack_items(pm, base_addr, hwnd)
+                # NOVO: Passa contexto do Fisher para Stacker (reutiliza mutex, sem delay)
+                auto_stack_items(pm, base_addr, hwnd, mutex_context=fisher_ctx)
                 if (abs_x, abs_y) in fishing_sessions: del fishing_sessions[(abs_x, abs_y)]
                 current_target_coords = None 
                 

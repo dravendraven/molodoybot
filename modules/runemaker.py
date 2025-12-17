@@ -77,11 +77,11 @@ def get_item_id_in_hand(pm, base_addr, slot_enum):
     except:
         return 0
     
-def unequip_hand(pm, base_addr, slot_enum, dest_container_idx=0):
+def unequip_hand(pm, base_addr, slot_enum, dest_container_idx=0, dest_slot=0):
     current_id = get_item_id_in_hand(pm, base_addr, slot_enum)
     if current_id > 0:
         pos_from = packet.get_inventory_pos(slot_enum)
-        pos_to = packet.get_container_pos(dest_container_idx, 0) 
+        pos_to = packet.get_container_pos(dest_container_idx, dest_slot)
         packet.move_item(pm, pos_from, pos_to, current_id, 1)
         time.sleep(0.5)
         check_id = get_item_id_in_hand(pm, base_addr, slot_enum)
@@ -89,14 +89,26 @@ def unequip_hand(pm, base_addr, slot_enum, dest_container_idx=0):
         else: return None
     return None
 
-def reequip_hand(pm, base_addr, item_id, target_slot_enum, container_idx=0):
-    if not item_id: return
-    item_data = find_item_in_containers(pm, base_addr, item_id)
-    if item_data:
-        pos_from = packet.get_container_pos(item_data['container_index'], item_data['slot_index'])
-        pos_to = packet.get_inventory_pos(target_slot_enum)
-        packet.move_item(pm, pos_from, pos_to, item_id, 1)
-        time.sleep(0.4)
+def reequip_hand(pm, base_addr, item_id, target_slot_enum, container_idx=0, max_retries=3):
+    if not item_id: return False
+
+    # Retry logic: item might not be in containers immediately after move_item
+    for attempt in range(max_retries):
+        time.sleep(0.3)  # Wait for server to process the previous move_item
+        item_data = find_item_in_containers(pm, base_addr, item_id)
+
+        if item_data:
+            pos_from = packet.get_container_pos(item_data['container_index'], item_data['slot_index'])
+            pos_to = packet.get_inventory_pos(target_slot_enum)
+            packet.move_item(pm, pos_from, pos_to, item_id, 1)
+            time.sleep(0.4)
+            return True
+
+        if attempt < max_retries - 1:
+            print(f"[RUNEMAKER] ⚠️ Item {item_id} não encontrado, tentativa {attempt + 1}/{max_retries}")
+
+    print(f"[RUNEMAKER] ❌ Falha ao re-equipar item {item_id} após {max_retries} tentativas!")
+    return False
 
 def get_target_id(pm, base_addr):
     try:
@@ -305,11 +317,13 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                     with PacketMutex("runemaker"):
                         # PHASE 1: Unequip all hands and store their items
                         # (This fixes the bug where unequipped_item_id gets overwritten with "BOTH" hands)
-                        unequipped_items = {}  # slot_enum → item_id
-                        for slot_enum in hands_to_use:
+                        # IMPORTANT: Each hand gets unequipped to a different slot to avoid conflicts
+                        unequipped_items = {}  # slot_enum → (item_id, dest_slot)
+                        for dest_slot_idx, slot_enum in enumerate(hands_to_use):
                             if is_safe_callback and not is_safe_callback(): break
-                            unequipped_item_id = unequip_hand(pm, base_addr, slot_enum)
-                            unequipped_items[slot_enum] = unequipped_item_id
+                            unequipped_item_id = unequip_hand(pm, base_addr, slot_enum, dest_container_idx=0, dest_slot=dest_slot_idx)
+                            unequipped_items[slot_enum] = (unequipped_item_id, dest_slot_idx)
+                            log_msg(f"🔓 Desarmou {slot_enum}: Item {unequipped_item_id} → Slot {dest_slot_idx}")
                             time.sleep(0.3)
 
                         # PHASE 2: Equip blank runes
@@ -324,8 +338,9 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                             if not blank_data:
                                 log_msg(f"⚠️ Sem Blanks na BP!")
                                 # Restore all unequipped items on failure
-                                for slot, item_id in unequipped_items.items():
+                                for slot, (item_id, dest_slot) in unequipped_items.items():
                                     if item_id:
+                                        log_msg(f"🔄 Restaurando {item_id} para mão {slot} após falha...")
                                         reequip_hand(pm, base_addr, item_id, slot)
                                 break
 
@@ -334,11 +349,13 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                             pos_to = packet.get_inventory_pos(slot_enum)
                             packet.move_item(pm, pos_from, pos_to, blank_id, 1)
 
+                            restorable_item, orig_dest_slot = unequipped_items[slot_enum]
                             active_runes.append({
                                 "hand_pos": pos_to,
                                 "origin_idx": blank_data['container_index'],
                                 "slot_enum": slot_enum,
-                                "restorable_item": unequipped_items[slot_enum]  # Use stored value instead of loop variable
+                                "restorable_item": restorable_item,
+                                "orig_dest_slot": orig_dest_slot  # Track where the weapon was stored
                             })
                             time.sleep(0.6)
 
@@ -348,20 +365,33 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
 
                             time.sleep(1.2) # Wait process
 
+                            # PHASE 4: Return ALL runes to backpack FIRST (before re-equipping)
+                            # IMPORTANTE: Quando usa BOTH hands, precisa devolver AMBAS as runas
+                            # antes de tentar re-equipar (especialmente itens que ocupam 2 mãos)
                             for info in active_runes:
                                  # 1. Identifica o que foi fabricado
                                  detected_id = get_item_id_in_hand(pm, base_addr, info['slot_enum'])
-
                                  rune_id_to_move = detected_id if detected_id > 0 else blank_id
 
                                  # 2. Devolve Runa para Backpack
                                  pos_dest = packet.get_container_pos(info['origin_idx'], 0)
                                  packet.move_item(pm, info['hand_pos'], pos_dest, rune_id_to_move, 1)
-                                 time.sleep(0.8)
+                                 log_msg(f"📦 Devolvido: Runa {rune_id_to_move} → Container {info['origin_idx']}")
+                                 time.sleep(1.0)  # Aguarda servidor processar movimento
 
-                                 # 3. Restaura item original
+                            # PHASE 5: Re-equip ALL original items AFTER all runes are returned
+                            # Separar em outra fase garante que nenhum item fica equipado enquanto
+                            # ainda há runas nas mãos (importante para itens com 2 mãos)
+                            log_msg(f"🔙 Restaurando {len([i for i in active_runes if i['restorable_item']])} item(ns) original(is)...")
+                            for info in active_runes:
                                  if info['restorable_item']:
-                                     reequip_hand(pm, base_addr, info['restorable_item'], info['slot_enum'])
+                                     log_msg(f"🔄 Tentando re-equipar {info['restorable_item']} na mão {info['slot_enum']}...")
+                                     success = reequip_hand(pm, base_addr, info['restorable_item'], info['slot_enum'])
+                                     if success:
+                                         log_msg(f"✅ Item {info['restorable_item']} re-equipado com sucesso!")
+                                     else:
+                                         log_msg(f"⚠️ Falha ao re-equipar {info['restorable_item']}")
+                                     time.sleep(0.5)  # Pequena pausa entre re-equipamentos
 
                             log_msg("✅ Ciclo concluído.")
                             next_cast_time = 0 

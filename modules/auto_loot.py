@@ -7,6 +7,8 @@ from core import packet
 from core.packet_mutex import PacketMutex
 from database import foods_db
 from core.map_core import get_player_pos
+# NOTA: auto_stack_items é importado LAZY dentro da função run_auto_loot()
+# para evitar circular import com stacker.py
 
 # ==============================================================================
 # CLASSES DE DADOS
@@ -186,13 +188,21 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
                     return "FULL_BP_ALARM"
 
                 print(f"💰 Loot: ID {item.id} -> BP {dest_idx} Slot {dest_slot}")
-                
+
                 pos_from = packet.get_container_pos(cont.index, item.slot_index)
                 pos_to = packet.get_container_pos(dest_idx, dest_slot)
 
-                with PacketMutex("auto_loot"):
+                with PacketMutex("auto_loot") as loot_ctx:
                     packet.move_item(pm, pos_from, pos_to, item.id, item.count)
                 time.sleep(0.3)
+
+                # NOVO: Stack imediatamente após lotar (reutiliza contexto, sem delay)
+                # Import lazy para evitar circular import
+                from modules.stacker import auto_stack_items
+                auto_stack_items(pm, base_addr, hwnd,
+                                 my_containers_count=limit_containers,
+                                 mutex_context=loot_ctx)
+
                 dest_slot += 1
                 return ("LOOT", item.id, item.count)
 

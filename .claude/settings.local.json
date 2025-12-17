@@ -3,7 +3,10 @@
     "allow": [
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(grep:*)",
+      "Bash(xargs -I {} bash -c 'echo \"\"=== {} ===\"\" && grep \"\"packet\\.\"\" {} | grep -E \"\"(move_item|use_item|use_with|walk)\"\" | head -5')",
+      "Bash(ls:*)"
     ]
   }
 }
