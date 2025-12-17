@@ -20,7 +20,8 @@ matplotlib.use("TkAgg") # Define o backend para funcionar com Tkinter
 import sys
 import traceback
 import ctypes
-import tkinter as tk
+from tkinter import filedialog # Para salvar/abrir arquivos
+from pathlib import Path
 
 # arquivos do bot
 from config import *
@@ -37,6 +38,9 @@ from core import packet
 from database import foods_db
 from modules.trainer import trainer_loop
 from modules.alarm import alarm_loop
+from core.cavebot import Cavebot
+from core.player_core import get_connected_char_name
+from core.bot_state import state
 #import corpses
 
 # ==============================================================================
@@ -118,15 +122,15 @@ BOT_SETTINGS = {
     "rune_human_max": 300,  # Segundos máximos de espera
 }
 
+_cached_player_name = ""
+
 # Variáveis de Controle de Execução
 is_attacking = False
 is_looting = False
 bot_running = True
 pm = None 
 base_addr = 0
-is_safe_to_bot = True # True = Sem players por perto, pode atacar
-is_connected = False # True apenas se: Processo Aberto + Logado no Char
-is_gm_detected = False
+state.is_connected = False # True apenas se: Processo Aberto + Logado no Char
 is_graph_visible = False
 gm_found = False
 full_light_enabled = False # <--- NOVO
@@ -134,10 +138,22 @@ xray_window = None
 hud_overlay_data = [] # Lista de dicionários para Fisher HUD
 lbl_status = None 
 
+# ### CAVEBOT: Globais ###
+cavebot_instance = None
+current_waypoints_ui = []
+current_waypoints_filename = ""
+txt_waypoints_settings = None
+entry_waypoint_name = None
+combo_cavebot_scripts = None
+
+# NOVAS VARIÁVEIS PARA O RECORDER
+is_recording_waypoints = False
+last_recorded_pos = (0, 0, 0)
+
 # Variáveis de Controle de Retorno (Segurança)
-resume_actions_timestamp = 0
-last_alarm_was_gm = False
-resume_type = "NONE" # "NORMAL" ou "GM"
+#resume_actions_timestamp = 0
+# last_alarm_was_gm = False
+#resume_type = "NONE" # "NORMAL" ou "GM"
 
 # Variáveis de Regeneração e Timing
 global_regen_seconds = 0
@@ -209,25 +225,6 @@ def save_config_file():
     except Exception as e:
         print(f"[CONFIG] Erro ao salvar: {e}")
 
-def get_connected_char_name():
-    """
-    Lê o ID do jogador local e busca o nome correspondente na Battle List.
-    """
-    try:
-        if pm is None: return ""
-        player_id = pm.read_int(base_addr + OFFSET_PLAYER_ID)
-        if player_id == 0: return ""
-
-        list_start = base_addr + TARGET_ID_PTR + REL_FIRST_ID
-        for i in range(MAX_CREATURES):
-            slot = list_start + (i * STEP_SIZE)
-            c_id = pm.read_int(slot)
-            if c_id == player_id:
-                name = pm.read_string(slot + OFFSET_NAME, 32)
-                return name.split('\x00')[0].strip()
-    except: pass
-    return ""
-
 def register_food_eaten(item_id):
     """
     Chamado pelos módulos (Runemaker/AutoLoot/MonitorManual) quando comem algo.
@@ -279,12 +276,285 @@ def update_fisher_hud(data_list):
     global hud_overlay_data
     hud_overlay_data = data_list if data_list else []
 
+def get_player_name():
+    """
+    Retorna o nome do personagem logado.
+    Usa cache pois o nome não muda durante a sessão.
+    Reseta o cache quando desconecta.
+    """
+    global _cached_player_name, pm, base_addr
+    
+    # Se desconectou, limpa o cache
+    if pm is None:
+        _cached_player_name = ""
+        return ""
+    
+    # Se não tem cache, busca
+    if not _cached_player_name:
+        _cached_player_name = get_connected_char_name(pm, base_addr)
+    
+    return _cached_player_name
+
+def clear_player_name_cache():
+    """Chamado quando desconecta para limpar o cache."""
+    global _cached_player_name
+    _cached_player_name = ""
+
+# ==============================================================================
+# ### CAVEBOT: FUNÇÕES DA GUI ###
+# ==============================================================================
+
+def update_waypoint_display():
+    """Atualiza a lista visual de waypoints na janela de Settings (Thread-Safe)."""
+    
+    def _refresh_ui():
+        global txt_waypoints_settings
+        
+        # Se a janela de settings não estiver aberta ou o widget não existir, ignora
+        if txt_waypoints_settings is None:
+            return
+        try:
+            if not txt_waypoints_settings.winfo_exists():
+                return
+        except: 
+            return # Widget destruído
+        
+        # Atualiza o conteúdo
+        txt_waypoints_settings.configure(state="normal")
+        txt_waypoints_settings.delete("1.0", "end")
+        
+        if not current_waypoints_ui:
+            txt_waypoints_settings.insert("end", "Lista vazia.\n")
+        else:
+            for idx, wp in enumerate(current_waypoints_ui):
+                act = wp.get('action', 'WALK').upper()
+                # Formatação: 1. [WALK] 32300, 32100, 7
+                line = f"{idx+1}. [{act}] {wp['x']}, {wp['y']}, {wp['z']}\n"
+                txt_waypoints_settings.insert("end", line)
+                
+        txt_waypoints_settings.configure(state="disabled")
+        txt_waypoints_settings.see("end")
+
+    # Agenda a atualização para rodar na Thread Principal do app
+    if 'app' in globals() and app:
+        app.after(0, _refresh_ui)
+
+def _set_waypoint_name_field(name):
+    """Atualiza o campo de nome do arquivo e o estado global do nome atual."""
+    global current_waypoints_filename, entry_waypoint_name
+    current_waypoints_filename = name or ""
+    if entry_waypoint_name and entry_waypoint_name.winfo_exists():
+        entry_waypoint_name.delete(0, "end")
+        if name:
+            entry_waypoint_name.insert(0, name)
+
+def list_cavebot_scripts():
+    """Retorna nomes (sem .json) dos scripts em /cavebot_scripts."""
+    folder = Path("cavebot_scripts")
+    if not folder.exists():
+        return []
+    return sorted([p.stem for p in folder.glob("*.json")])
+
+def refresh_cavebot_scripts_combo(selected=None):
+    """Atualiza a combo de scripts salvos."""
+    if combo_cavebot_scripts is None or not combo_cavebot_scripts.winfo_exists():
+        return
+    names = list_cavebot_scripts()
+    combo_cavebot_scripts.configure(values=names)
+    if selected and selected in names:
+        combo_cavebot_scripts.set(selected)
+    elif names:
+        combo_cavebot_scripts.set(names[0])
+    else:
+        combo_cavebot_scripts.set("")
+
+def add_waypoint_entry(action, x, y, z):
+    """Função central para adicionar waypoint e atualizar UI e Backend."""
+    global current_waypoints_ui, cavebot_instance
+    
+    # Cria o dicionário do waypoint
+    new_wp = {'action': action, 'x': x, 'y': y, 'z': z}
+    current_waypoints_ui.append(new_wp)
+    
+    # Atualiza o Cavebot em tempo real se ele estiver rodando
+    if cavebot_instance:
+        cavebot_instance.load_waypoints(current_waypoints_ui)
+    
+    # Atualiza a tela
+    update_waypoint_display()
+
+def add_manual_waypoint(dx, dy, action_type):
+    """
+    Calcula a posição baseada no clique da matriz (dx, dy) relativo ao player.
+    dx, dy: -1, 0, ou 1
+    """
+    if not state.is_connected or pm is None:
+        log("❌ Conecte no Tibia primeiro.")
+        return
+
+    try:
+        px, py, pz = get_player_pos(pm, base_addr)
+        target_x = px + dx
+        target_y = py + dy
+        
+        add_waypoint_entry(action_type, target_x, target_y, pz)
+        
+    except Exception as e:
+        log(f"Erro ao adicionar WP manual: {e}")
+
+def auto_recorder_loop():
+    """Thread que monitora movimento e grava waypoints."""
+    global last_recorded_pos, is_recording_waypoints, pm, base_addr
+    
+    print("Gravador Automático Iniciado.")
+    
+    while bot_running:
+        # Verifica condições: Gravação Ligada + Conectado + PM válido
+        if is_recording_waypoints and state.is_connected and pm:
+            try:
+                px, py, pz = get_player_pos(pm, base_addr)
+                
+                # Se a leitura falhar (ex: retornou 0,0,0), ignora
+                if px == 0 and py == 0:
+                    time.sleep(0.1)
+                    continue
+
+                curr_pos = (px, py, pz)
+                
+                # Se mudou de posição
+                if curr_pos != last_recorded_pos:
+                    # Se for o primeiro registro (reset), apenas atualiza last_pos
+                    if last_recorded_pos == (0, 0, 0):
+                        last_recorded_pos = curr_pos
+                    else:
+                        # Adiciona o WP
+                        add_waypoint_entry("walk", px, py, pz)
+                        last_recorded_pos = curr_pos
+                        
+            except Exception as e:
+                print(f"Erro Recorder: {e}")
+                
+        time.sleep(0.2) # Verifica 5x por segundo
+
+def toggle_recording_func(switch_val):
+    global is_recording_waypoints, last_recorded_pos
+    is_recording_waypoints = bool(switch_val)
+    if is_recording_waypoints:
+        # Reseta a última posição para forçar gravação do primeiro passo
+        last_recorded_pos = (0, 0, 0)
+        log("⏺️ Gravação Automática INICIADA.")
+    else:
+        log("⏹️ Gravação Automática PARADA.")
+
+def record_current_pos():
+    """Pega a posição atual do char e adiciona na lista."""
+    global cavebot_instance
+    if not state.is_connected or pm is None:
+        log("Erro: Conecte no Tibia primeiro.")
+        return
+
+    try:
+        x, y, z = get_player_pos(pm, base_addr)
+        new_wp = {'x': x, 'y': y, 'z': z, 'action': 'walk'}
+        current_waypoints_ui.append(new_wp)
+        
+        # Atualiza o backend se existir
+        if cavebot_instance:
+            cavebot_instance.load_waypoints(current_waypoints_ui)
+            
+        update_waypoint_display()
+        log(f"📍 Waypoint gravado: {x}, {y}, {z}")
+    except Exception as e:
+        log(f"Erro ao gravar waypoint: {e}")
+
+def save_waypoints_file():
+    """Salva a lista atual usando o nome informado no campo (pasta /cavebot_scripts)."""
+    name = entry_waypoint_name.get().strip() if entry_waypoint_name else ""
+    if not name:
+        log("⚠️ Informe um nome para salvar o script.")
+        return
+
+    folder = Path("cavebot_scripts")
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        log(f"Erro ao preparar pasta cavebot_scripts: {e}")
+        return
+
+    filename = folder / f"{name}.json"
+    try:
+        with open(filename, 'w', encoding='utf-8') as f:
+            json.dump(current_waypoints_ui, f, indent=4)
+        _set_waypoint_name_field(name)
+        refresh_cavebot_scripts_combo(selected=name)
+        log(f"💾 Waypoints salvos: {filename.name}")
+    except Exception as e:
+        log(f"Erro ao salvar: {e}")
+
+def load_waypoints_file():
+    """Carrega um script selecionado na combo de /cavebot_scripts."""
+    global current_waypoints_ui, cavebot_instance
+    name = combo_cavebot_scripts.get().strip() if combo_cavebot_scripts else ""
+    if not name:
+        log("⚠️ Selecione um script na lista para carregar.")
+        return
+    filename = Path("cavebot_scripts") / f"{name}.json"
+    if not filename.exists():
+        log(f"Erro: arquivo {filename} não encontrado.")
+        refresh_cavebot_scripts_combo()
+        return
+    try:
+        with open(filename, 'r', encoding='utf-8') as f:
+            loaded_data = json.load(f)
+            if isinstance(loaded_data, list):
+                current_waypoints_ui = loaded_data
+                if cavebot_instance:
+                    cavebot_instance.load_waypoints(current_waypoints_ui)
+                _set_waypoint_name_field(name)
+                refresh_cavebot_scripts_combo(selected=name)
+                update_waypoint_display()
+                log(f"📂 Carregados {len(loaded_data)} waypoints de {filename.name}.")
+            else:
+                log("Erro: Formato de arquivo inválido.")
+    except Exception as e:
+        log(f"Erro ao carregar: {e}")
+
+def clear_waypoints():
+    global current_waypoints_ui, cavebot_instance
+    current_waypoints_ui = []
+    if cavebot_instance:
+        cavebot_instance.load_waypoints([])
+    update_waypoint_display()
+    _set_waypoint_name_field("")
+    log("🗑️ Lista de waypoints limpa.")
+
+def toggle_cavebot_func():
+    """Callback do Switch do Cavebot."""
+    global cavebot_instance
+    if not cavebot_instance:
+        log("Aguarde a conexão com o Tibia...")
+        switch_cavebot_var.set(0)
+        return
+
+    if switch_cavebot_var.get() == 1:
+        if not current_waypoints_ui:
+            log("⚠️ AVISO: Carregue waypoints antes de ativar!")
+            switch_cavebot_var.set(0)
+            return
+        # Garante que os WPs estão carregados
+        cavebot_instance.load_waypoints(current_waypoints_ui)
+        cavebot_instance.start()
+        log("🚀 CAVEBOT: ATIVADO")
+    else:
+        cavebot_instance.stop()
+        log("⏸️ CAVEBOT: PAUSADO")
+
 # ==============================================================================
 # 5. THREADS DE LÓGICA DO BOT (WORKERS)
 # ==============================================================================
 
 def connection_watchdog():
-    global pm, base_addr, is_connected, bot_running
+    global pm, base_addr, bot_running
     was_connected_once = False
     while bot_running:
         try:
@@ -297,8 +567,9 @@ def connection_watchdog():
                 except:
                     if was_connected_once:
                         print("Tibia fechou. Encerrando bot...")
+                        clear_player_name_cache() 
                         os._exit(0) # Mata o bot
-                    is_connected = False
+                    state.is_connected = False
                     lbl_connection.configure(text="Cliente Fechado ❌", text_color="#FF5555")
                     time.sleep(2)
                     continue
@@ -308,29 +579,60 @@ def connection_watchdog():
                 status = pm.read_int(base_addr + OFFSET_CONNECTION)
                 
                 if status == 8: # 8 geralmente é "In Game"
-                    if not is_connected:
+                    if not state.is_connected:
                         log("🟢 Conectado ao mundo!")
                         if full_light_enabled:
                             time.sleep(1) 
                             apply_full_light(True)
-                    is_connected = True
+                    state.is_connected = True
                     was_connected_once = True
                     lbl_connection.configure(text="Conectado 🟢", text_color="#00FF00")
                 else:
-                    is_connected = False
+                    state.is_connected = False
                     lbl_connection.configure(text="Desconectado ⚠️", text_color="#FFFF00")
+                    clear_player_name_cache() 
                     
             except Exception:
                 pm = None
-                is_connected = False
+                state.is_connected = False
                 if was_connected_once:
                     os._exit(0)
                 lbl_connection.configure(text="Cliente Fechado ❌", text_color="#FF5555")
+                clear_player_name_cache() 
 
         except Exception as e:
             print(f"Erro Watchdog: {e}")
         
         time.sleep(1)
+
+def start_cavebot_thread():
+    """Gerencia a inicialização e o loop do Cavebot."""
+    global cavebot_instance, pm, base_addr
+    print("Thread Cavebot iniciada.")
+    
+    while bot_running:
+        # 1. Inicialização Lazy (Só cria quando o PM existir)
+        if pm is not None and cavebot_instance is None and state.is_connected:
+            try:
+                print("Inicializando instância do Cavebot...")
+                cavebot_instance = Cavebot(pm, base_addr)
+                # Se já tiver waypoints na UI, carrega eles
+                if current_waypoints_ui:
+                    cavebot_instance.load_waypoints(current_waypoints_ui)
+            except Exception as e:
+                print(f"Erro init cavebot: {e}")
+
+        # 2. Execução do Ciclo
+        if cavebot_instance and state.is_connected:
+            try:
+                # O método run_cycle verifica internamente se está enabled
+                if cavebot_instance.enabled: 
+                    cavebot_instance.run_cycle()
+            except Exception as e:
+                print(f"Erro Cavebot Loop: {e}")
+                time.sleep(1)
+        
+        time.sleep(0.1)
 
 def start_trainer_thread():
     """
@@ -347,7 +649,7 @@ def start_trainer_thread():
         'enabled': switch_trainer.get(),
         
         # Lê a variável de segurança controlada pelo Alarme
-        'is_safe': is_safe_to_bot and (time.time() > resume_actions_timestamp),
+        'is_safe': state.is_safe(),
         
         # Lê as configurações salvas/editadas no menu
         'targets': BOT_SETTINGS['targets'],
@@ -366,9 +668,9 @@ def start_trainer_thread():
     }
 
     # Função para checar se o bot ainda deve rodar (stop kill)
-    check_running = lambda: bot_running and is_connected
+    check_running = lambda: state.is_running and state.is_connected
 
-    while bot_running:
+    while state.is_running:
         if not check_running(): 
             time.sleep(1)
             continue
@@ -398,31 +700,38 @@ def start_alarm_thread():
     """
     
     def set_safe(val): 
-        global is_safe_to_bot, resume_actions_timestamp, last_alarm_was_gm, resume_type
-        
+        """
+        Callback chamado pelo alarm.py quando estado de segurança muda.
+        Usa state para gerenciar transições de forma thread-safe.
+        """
         # Detecta transição: PERIGO (False) -> SEGURO (True)
-        if val is True and is_safe_to_bot is False:
-            if last_alarm_was_gm:
+        if val is True and not state.is_safe_raw():
+            if state.is_gm_detected:
                 # Caso GM: Delay Longo (Pânico)
                 delay = random.uniform(*config.RESUME_DELAY_GM)
-                resume_type = "GM"
                 log(f"👮 GM sumiu. Modo Pânico: Aguardando {int(delay)}s...")
             else:
                 # Caso Normal: Delay Curto (Humano)
                 delay = random.uniform(*config.RESUME_DELAY_NORMAL)
-                resume_type = "NORMAL"
                 log(f"🛡️ Perigo passou. Aguardando {int(delay)}s para retomar...")
             
-            resume_actions_timestamp = time.time() + delay
-            last_alarm_was_gm = False # Reset flag
-
-        is_safe_to_bot = val
+            # clear_alarm faz: is_safe=True, is_gm=False, define cooldown
+            state.clear_alarm(cooldown_seconds=delay)
+        
+        elif val is False:
+            # Transição para PERIGO
+            # Nota: set_gm() é chamado antes se for GM, então aqui só marcamos perigo genérico
+            if not state.is_gm_detected:  # Só dispara se não foi GM (evita sobrescrever)
+                state.trigger_alarm(is_gm=False, reason="DANGER")
         
     def set_gm(val): 
-        global is_gm_detected, last_alarm_was_gm
-        is_gm_detected = val
-        if val: 
-            last_alarm_was_gm = True # Marca que este alarme foi causado por GM
+        """
+        Callback chamado pelo alarm.py quando GM é detectado/liberado.
+        """
+        if val:
+            # Dispara alarme marcando como GM
+            state.trigger_alarm(is_gm=True, reason="GM")
+        # Se val=False, o set_safe(True) já vai limpar via clear_alarm
     
     callbacks = {
         'set_safe': set_safe,
@@ -443,7 +752,7 @@ def start_alarm_thread():
         'chat_gm': BOT_SETTINGS['alarm_chat_gm']
     }
 
-    check_run = lambda: bot_running and is_connected
+    check_run = lambda: bot_running and state.is_connected
 
     while bot_running:
         if not check_run(): time.sleep(1); continue
@@ -456,7 +765,7 @@ def start_alarm_thread():
             time.sleep(5)
 
 def regen_monitor_loop():
-    global pm, base_addr, bot_running, is_connected
+    global pm, base_addr, bot_running
     global global_regen_seconds, global_is_hungry, global_is_synced, global_is_full
     
     print("[REGEN] Monitor Iniciado (Modo Híbrido com Validação Dupla)")
@@ -469,7 +778,7 @@ def regen_monitor_loop():
     last_mem_id = 0
     
     while bot_running:
-        if not is_connected or pm is None:
+        if not state.is_connected or pm is None:
             time.sleep(1)
             continue
             
@@ -584,9 +893,9 @@ def auto_loot_thread():
     }
 
     while bot_running:
-        if not is_connected: time.sleep(1); continue
+        if not state.is_connected: time.sleep(1); continue
         if not switch_loot.get(): time.sleep(1); continue
-        if not is_safe_to_bot: time.sleep(1); continue
+        if not state.is_safe(): time.sleep(1); continue
         if pm is None: time.sleep(1); continue   
         if hwnd == 0: hwnd = win32gui.FindWindow("TibiaClient", None) or win32gui.FindWindow(None, "Tibia")
         
@@ -650,9 +959,8 @@ def auto_loot_thread():
 def auto_fisher_thread():
     hwnd = 0
     def should_fish():
-        # Verifica se o tempo de espera (Cool-off) já passou
-        is_cooldown_ok = time.time() > resume_actions_timestamp
-        return bot_running and is_connected and switch_fisher.get() and is_safe_to_bot and is_cooldown_ok
+        # state.is_safe() já verifica a flag E o cooldown internamente
+        return bot_running and state.is_connected and switch_fisher.get() and state.is_safe()
 
     # --- CONFIG PROVIDER (O SEGREDO) ---
     # Essa função "empacota" as configurações atuais do BOT_SETTINGS.
@@ -695,13 +1003,13 @@ def runemaker_thread():
     hwnd = 0
     
     def should_run():
-        return bot_running and is_connected and switch_runemaker.get()
+        return bot_running and state.is_connected and switch_runemaker.get()
     
     def check_safety():
-        return is_safe_to_bot
+        return state.is_safe_raw()
 
     def check_gm():
-        return is_gm_detected
+        return state.is_gm_detected
     
     def check_hunger_state():
         if not global_is_synced and not global_is_hungry:
@@ -734,11 +1042,11 @@ def runemaker_thread():
         'human_max': BOT_SETTINGS.get('rune_human_max', 0),
 
         'can_perform_actions': (
-            # Se movimento ligado E alarme foi NORMAL -> Ignora timer (True)
-            (BOT_SETTINGS.get('rune_movement', False) and resume_type == "NORMAL") 
+            # Se movimento ligado E alarme NÃO foi GM -> Ignora timer (True)
+            (BOT_SETTINGS.get('rune_movement', False) and not state.is_gm_detected) 
             or 
-            # Caso contrário (GM ou Sem Movimento) -> Respeita timer
-            (time.time() > resume_actions_timestamp)
+            # Caso contrário (GM ou Sem Movimento) -> Respeita cooldown
+            (state.cooldown_remaining <= 0)
         )
     }
 
@@ -788,7 +1096,7 @@ def skill_monitor_loop():
 
 def gui_updater_loop():
     while bot_running:
-        if not is_connected:
+        if not state.is_connected:
             lbl_sword_val.configure(text="--")
             lbl_shield_val.configure(text="--")
             time.sleep(1)
@@ -1022,7 +1330,7 @@ def auto_resize_window():
     app.geometry(f"320x{needed_height}")
 
 def open_settings():
-    global toplevel_settings, lbl_status
+    global toplevel_settings, lbl_status, txt_waypoints_settings, entry_waypoint_name, combo_cavebot_scripts, current_waypoints_filename
     
     if toplevel_settings is not None and toplevel_settings.winfo_exists():
         toplevel_settings.lift()
@@ -1054,11 +1362,32 @@ def open_settings():
             'font': ("Verdana", 10),
             'justify': "center"
         },
+        'INPUT_MED': {
+            'width': 80,
+            'height': 24,
+            'font': ("Verdana", 10),
+            'justify': "center"
+        },
         'COMBO': {
             'width': 130,
             'height': 24,
             'font': ("Verdana", 10),
             'state': "readonly"
+        },
+        'COMBO_MED': {
+            'width': 80,
+            'height': 24,
+            'font': ("Verdana", 10),
+            'state': "readonly"
+        },
+        'BUTTON_SM': {
+            'height': 24,
+            'font': ("Verdana", 10),
+        },
+        'BTN_GRID': {
+            'width': 35,
+            'height': 35,
+            'font': ("Verdana", 10, "bold"),
         },
         
         # --- PADDINGS & LAYOUT ---
@@ -1072,7 +1401,7 @@ def open_settings():
     # ==========================================================================
     toplevel_settings = ctk.CTkToplevel(app)
     toplevel_settings.title("Configurações")
-    toplevel_settings.geometry("360x520") 
+    toplevel_settings.geometry("390x520") 
     toplevel_settings.attributes("-topmost", True)
     
     def on_settings_close():
@@ -1092,6 +1421,7 @@ def open_settings():
     tab_loot   = tabview.add("Loot")
     tab_fisher = tabview.add("Fisher")
     tab_rune   = tabview.add("Rune")
+    tab_cavebot = tabview.add("Cavebot")
 
     # Helper para criar frames de grid (Label Esq | Input Dir)
     def create_grid_frame(parent):
@@ -1565,6 +1895,121 @@ def open_settings():
 
     ctk.CTkButton(tab_rune, text="Salvar Rune", command=save_rune, height=32, fg_color="#00A86B", hover_color="#008f5b").pack(side="bottom", fill="x", padx=20, pady=5)
 
+    # ==========================================================================
+    # 8. ABA CAVEBOT (REFORMULADA - ESTILO ZION)
+    # ==========================================================================
+    
+    # Container para compactar a aba Cavebot
+    frame_cb_root = ctk.CTkFrame(tab_cavebot, fg_color="transparent")
+    frame_cb_root.pack(fill="both", expand=True, padx=4, pady=4)
+    frame_cb_root.grid_columnconfigure(0, weight=1)
+    frame_cb_root.grid_columnconfigure(1, weight=1)
+
+    # --- COLUNA ESQUERDA: CONTROLES E MATRIZ ---
+    frame_cb_left = ctk.CTkFrame(frame_cb_root, fg_color="transparent")
+    frame_cb_left.grid(row=0, column=0, sticky="nsew", padx=(0, 3), pady=2)
+    
+    # 1. Gravação Automática
+    ctk.CTkLabel(frame_cb_left, text="Gravação Automática", **UI['H1']).pack(anchor="w", pady=(0,2))
+    
+    switch_rec_var = ctk.IntVar(value=1 if is_recording_waypoints else 0)
+    def on_rec_toggle(): toggle_recording_func(switch_rec_var.get())
+    
+    btn_rec_toggle = ctk.CTkSwitch(frame_cb_left, text="Gravar Waypoints", 
+                                  command=on_rec_toggle, variable=switch_rec_var,
+                                  progress_color="#FF5555", **UI['BODY'])
+    btn_rec_toggle.pack(anchor="w", pady=4)
+    
+    ctk.CTkFrame(frame_cb_left, height=2, fg_color="#444").pack(fill="x", pady=10)
+
+    # 2. Waypoint Manual (Matriz)
+    ctk.CTkLabel(frame_cb_left, text="Adicionar Manualmente", **UI['H1']).pack(anchor="w", pady=(0,2))
+    
+    # Dropdown de Ação
+    ctk.CTkLabel(frame_cb_left, text="Tipo de Ação:", **UI['BODY']).pack(anchor="w")
+    combo_action = ctk.CTkComboBox(frame_cb_left, values=["walk", "rope", "shovel", "use", "stand"], **UI['COMBO'])
+    combo_action.set("walk")
+    combo_action.pack(anchor="w", pady=5)
+    
+    ctk.CTkLabel(frame_cb_left, text="Direção (Relativa):", **UI['BODY']).pack(anchor="w", pady=(5,2))
+    
+    # Matriz 3x3 de Botões
+    frame_matrix = ctk.CTkFrame(frame_cb_left, fg_color="transparent")
+    frame_matrix.pack(anchor="center", pady=5)
+    
+    # Helper para criar botão da matriz
+    def mk_btn(parent, txt, dx, dy, color="#333"):
+        return ctk.CTkButton(parent, text=txt, fg_color=color,
+                             command=lambda: add_manual_waypoint(dx, dy, combo_action.get()),
+                             **UI['BTN_GRID'])
+
+    # Grid Layout (Norte é Y-1 no Tibia geralmente, mas depende da perspectiva.
+    # Assumindo sistema de coordenadas padrão: Y diminui para o Norte, X aumenta para Leste)
+    # NW (x-1, y-1) | N (x, y-1) | NE (x+1, y-1)
+    # W  (x-1, y)   | C (x, y)   | E  (x+1, y)
+    # SW (x-1, y+1) | S (x, y+1) | SE (x+1, y+1)
+    
+    mk_btn(frame_matrix, "NW", -1, -1).grid(row=0, column=0, padx=2, pady=2)
+    mk_btn(frame_matrix, "N",   0, -1).grid(row=0, column=1, padx=2, pady=2)
+    mk_btn(frame_matrix, "NE",  1, -1).grid(row=0, column=2, padx=2, pady=2)
+    
+    mk_btn(frame_matrix, "W",  -1,  0).grid(row=1, column=0, padx=2, pady=2)
+    mk_btn(frame_matrix, "📍",  0,  0, "#2CC985").grid(row=1, column=1, padx=2, pady=2) # Center/Stand
+    mk_btn(frame_matrix, "E",   1,  0).grid(row=1, column=2, padx=2, pady=2)
+    
+    mk_btn(frame_matrix, "SW", -1,  1).grid(row=2, column=0, padx=2, pady=2)
+    mk_btn(frame_matrix, "S",   0,  1).grid(row=2, column=1, padx=2, pady=2)
+    mk_btn(frame_matrix, "SE",  1,  1).grid(row=2, column=2, padx=2, pady=2)
+
+    # --- COLUNA DIREITA: LISTA E ARQUIVOS ---
+    frame_cb_right = ctk.CTkFrame(frame_cb_root, fg_color="transparent")
+    frame_cb_right.grid(row=0, column=1, sticky="nsew", padx=(3, 0), pady=2)
+    
+    ctk.CTkLabel(frame_cb_right, text="Lista de Waypoints", **UI['H1']).pack(anchor="w")
+    
+    # Botões de Arquivo (Topo da lista)
+    frame_files = ctk.CTkFrame(frame_cb_right, fg_color="transparent")
+    frame_files.pack(fill="x", pady=5)
+
+    # Linha 1: Nome do script + salvar
+    frame_file_row1 = ctk.CTkFrame(frame_files, fg_color="transparent")
+    frame_file_row1.pack(fill="x", pady=2)
+
+    #ctk.CTkLabel(frame_file_row1, text="Nome:", **UI['BODY']).pack(side="left", padx=2)
+    entry_waypoint_name = ctk.CTkEntry(frame_file_row1, **UI['INPUT_MED'])
+    entry_waypoint_name.pack(side="left", padx=4, fill="x", expand=True)
+    if current_waypoints_filename:
+        entry_waypoint_name.insert(0, current_waypoints_filename)
+
+    ctk.CTkButton(frame_file_row1, text="💾", command=save_waypoints_file, width=25, **UI['BUTTON_SM']).pack(side="left", padx=2)
+    ctk.CTkButton(frame_file_row1, text="🧹", command=clear_waypoints, width=25, fg_color="#e74c3c", **UI['BUTTON_SM']).pack(side="left", padx=2)
+
+    # Linha 2: Lista de scripts existentes + carregar
+    frame_file_row2 = ctk.CTkFrame(frame_files, fg_color="transparent")
+    frame_file_row2.pack(fill="x", pady=2)
+
+    #ctk.CTkLabel(frame_file_row2, text="Scripts:", **UI['BODY']).pack(side="left", padx=4)
+    combo_cavebot_scripts = ctk.CTkComboBox(frame_file_row2, values=[], **UI['COMBO_MED'])
+    combo_cavebot_scripts.pack(side="left", padx=4, fill="x", expand=True)
+
+    ctk.CTkButton(frame_file_row2, text="📂", command=load_waypoints_file, width=25, **UI['BUTTON_SM']).pack(side="left", padx=2)
+    ctk.CTkButton(frame_file_row2, text="🔄", command=lambda: refresh_cavebot_scripts_combo(selected=current_waypoints_filename), width=25, **UI['BUTTON_SM']).pack(side="left", padx=2)
+
+    # Inicializa combo e campo de nome
+    refresh_cavebot_scripts_combo(selected=current_waypoints_filename or None)
+    if not current_waypoints_filename and combo_cavebot_scripts.winfo_exists():
+        # Se não houver nome corrente mas houver scripts, pré-seleciona o primeiro
+        current = combo_cavebot_scripts.get()
+        if current:
+            _set_waypoint_name_field(current)
+
+    # Lista (Log)
+    txt_waypoints_settings = ctk.CTkTextbox(frame_cb_right, font=("Consolas", 10), state="disabled")
+    txt_waypoints_settings.pack(fill="both", expand=True, pady=5)
+    
+    # Inicializa lista visual
+    update_waypoint_display()
+
 def toggle_graph():
     global is_graph_visible
     if is_graph_visible:
@@ -1664,7 +2109,7 @@ def toggle_xray():
                                 canvas.create_text(cx+1, cy+1, text=text, fill="black", font=("Verdana", 8, "bold"))
                                 canvas.create_text(cx, cy, text=text, fill=color, font=("Verdana", 8, "bold"))
 
-                    current_name = get_connected_char_name()
+                    current_name = get_player_name(pm, base_addr)
                     first = base_addr + TARGET_ID_PTR + REL_FIRST_ID
                     
                     for i in range(MAX_CREATURES):
@@ -1707,7 +2152,8 @@ def toggle_xray():
 def on_close():
     global bot_running
     print("Encerrando bot e threads...")
-    bot_running = False 
+    bot_running = False
+    clear_player_name_cache() 
     
     try:
         if app:
@@ -1780,6 +2226,14 @@ switch_fisher.grid(row=1, column=1, sticky="w", padx=(10, 0), pady=5)
 
 switch_runemaker = ctk.CTkSwitch(frame_controls, text="Runemaker", progress_color="#A54EF9", font=("Verdana", 11))
 switch_runemaker.grid(row=2, column=0, sticky="w", padx=(20, 0), pady=5)
+
+switch_cavebot_var = ctk.IntVar(value=0)
+switch_cavebot = ctk.CTkSwitch(frame_controls, text="Cavebot", 
+                              variable=switch_cavebot_var, 
+                              command=toggle_cavebot_func,
+                              progress_color="#2CC985", 
+                              font=("Verdana", 11))
+switch_cavebot.grid(row=2, column=1, sticky="w", padx=(10, 0), pady=5)
 
 
 # STATS
@@ -1915,6 +2369,8 @@ threading.Thread(target=regen_monitor_loop, daemon=True).start()
 threading.Thread(target=auto_fisher_thread, daemon=True).start()
 threading.Thread(target=runemaker_thread, daemon=True).start()
 threading.Thread(target=connection_watchdog, daemon=True).start()
+threading.Thread(target=start_cavebot_thread, daemon=True).start()
+threading.Thread(target=auto_recorder_loop, daemon=True).start()
 
 update_stats_visibility()
 

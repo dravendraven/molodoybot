@@ -108,8 +108,8 @@ def fishing_loop(pm, base_addr, hwnd, check_running=None, log_callback=None,
         ROD_VIRTUAL_Y = 0 
         dist_sqm = math.sqrt((ROD_VIRTUAL_X - tile_dx)**2 + (ROD_VIRTUAL_Y - tile_dy)**2)
         
-        base_reaction = random.uniform(1.0, 1.5) 
-        travel_speed = random.uniform(0.05, 0.12) 
+        base_reaction = random.uniform(BASE_REACTION_MIN, BASE_REACTION_MAX) 
+        travel_speed = random.uniform(TRAVEL_SPEED_MIN, TRAVEL_SPEED_MAX) 
         
         raw_delay = base_reaction + (dist_sqm * travel_speed)
 

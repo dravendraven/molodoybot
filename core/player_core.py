@@ -1,0 +1,166 @@
+# core/player_core.py
+"""
+Funções relacionadas ao jogador atual.
+Centraliza código que estava duplicado em main.py, trainer.py e alarm.py.
+
+IMPORTANTE: Estas funções leem memória em tempo real.
+O nome do personagem é constante durante a sessão e pode ser
+armazenado pelo caller após primeira leitura bem-sucedida.
+"""
+
+from config import (
+    TARGET_ID_PTR,
+    REL_FIRST_ID,
+    STEP_SIZE,
+    MAX_CREATURES,
+    OFFSET_PLAYER_ID,
+    OFFSET_NAME,
+    OFFSET_X,
+    OFFSET_Y,
+    OFFSET_Z,
+    OFFSET_HP,
+)
+
+
+def get_player_id(pm, base_addr: int) -> int:
+    """
+    Retorna o ID único do personagem logado.
+    
+    Este valor é constante durante a sessão - o caller pode
+    armazenar após primeira leitura bem-sucedida.
+    
+    Args:
+        pm: Instância do Pymem conectada ao Tibia
+        base_addr: Endereço base do módulo Tibia
+    
+    Returns:
+        ID do jogador ou 0 se falhar
+    """
+    try:
+        return pm.read_int(base_addr + OFFSET_PLAYER_ID)
+    except Exception:
+        return 0
+
+
+def get_connected_char_name(pm, base_addr: int) -> str:
+    """
+    Lê o ID do jogador local e busca o nome correspondente na Battle List.
+    
+    O nome é constante durante a sessão. O caller pode armazenar
+    o resultado após a primeira chamada bem-sucedida para evitar
+    buscas repetidas na BattleList.
+    
+    Args:
+        pm: Instância do Pymem conectada ao Tibia
+        base_addr: Endereço base do módulo Tibia
+    
+    Returns:
+        Nome do personagem ou string vazia se não encontrar
+    """
+    try:
+        player_id = pm.read_int(base_addr + OFFSET_PLAYER_ID)
+        if player_id == 0:
+            return ""
+
+        list_start = base_addr + TARGET_ID_PTR + REL_FIRST_ID
+
+        for i in range(MAX_CREATURES):
+            slot = list_start + (i * STEP_SIZE)
+            creature_id = pm.read_int(slot)
+
+            if creature_id == player_id:
+                raw_name = pm.read_string(slot + OFFSET_NAME, 32)
+                return raw_name.split('\x00')[0].strip()
+    except Exception:
+        pass
+
+    return ""
+
+
+def get_target_id(pm, base_addr: int) -> int:
+    """
+    Retorna o ID da criatura atualmente sendo atacada.
+    
+    TEMPO REAL - Este valor muda constantemente durante combate.
+    Não armazenar entre ciclos.
+    
+    Args:
+        pm: Instância do Pymem conectada ao Tibia
+        base_addr: Endereço base do módulo Tibia
+    
+    Returns:
+        ID do alvo atual ou 0 se não estiver atacando
+    """
+    try:
+        return pm.read_int(base_addr + TARGET_ID_PTR)
+    except Exception:
+        return 0
+
+
+def is_attacking(pm, base_addr: int) -> bool:
+    """
+    Verifica se o jogador está atacando alguma criatura.
+    
+    TEMPO REAL - Não armazenar entre ciclos.
+    
+    Args:
+        pm: Instância do Pymem conectada ao Tibia
+        base_addr: Endereço base do módulo Tibia
+    
+    Returns:
+        True se estiver atacando, False caso contrário
+    """
+    return get_target_id(pm, base_addr) != 0
+
+
+def find_player_in_battlelist(pm, base_addr: int, player_id: int = None) -> dict:
+    """
+    Encontra os dados do próprio jogador na BattleList.
+    
+    Útil quando você já tem o player_id e quer evitar releitura.
+    
+    Args:
+        pm: Instância do Pymem conectada ao Tibia
+        base_addr: Endereço base do módulo Tibia
+        player_id: ID do jogador (se None, será lido da memória)
+    
+    Returns:
+        Dict com dados do jogador ou None se não encontrar
+        {
+            'id': int,
+            'name': str,
+            'x': int,
+            'y': int,
+            'z': int,
+            'hp_percent': int,
+            'slot_index': int
+        }
+    """
+    try:
+        if player_id is None:
+            player_id = pm.read_int(base_addr + OFFSET_PLAYER_ID)
+        
+        if player_id == 0:
+            return None
+
+        list_start = base_addr + TARGET_ID_PTR + REL_FIRST_ID
+
+        for i in range(MAX_CREATURES):
+            slot = list_start + (i * STEP_SIZE)
+            creature_id = pm.read_int(slot)
+
+            if creature_id == player_id:
+                raw_name = pm.read_string(slot + OFFSET_NAME, 32)
+                return {
+                    'id': player_id,
+                    'name': raw_name.split('\x00')[0].strip(),
+                    'x': pm.read_int(slot + OFFSET_X),
+                    'y': pm.read_int(slot + OFFSET_Y),
+                    'z': pm.read_int(slot + OFFSET_Z),
+                    'hp_percent': pm.read_int(slot + OFFSET_HP),
+                    'slot_index': i
+                }
+    except Exception:
+        pass
+
+    return None

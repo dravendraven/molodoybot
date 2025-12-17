@@ -10,6 +10,7 @@ FUNC_CREATE_PACKET = 0x4CB2A0
 FUNC_ADD_BYTE      = 0x4CB540
 FUNC_ADD_STRING    = 0x4CBA20
 FUNC_SEND_PACKET   = 0x4CBE00
+FUNC_ADD_U16       = 0x4CB660 # Geralmente próximo ao add_byte
 
 # Opcodes de Ação
 OP_SAY    = 0x96

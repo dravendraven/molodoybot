@@ -2,27 +2,23 @@ import time
 import winsound
 from config import *
 from core.map_core import get_player_pos
+from core.player_core import get_connected_char_name
 
+_cached_my_name = ""
 # Definição de intervalos de alerta (Fallback caso não esteja no config)
 TELEGRAM_INTERVAL_NORMAL = 60
 TELEGRAM_INTERVAL_GM = 10
 
-def get_connected_char_name(pm, base_addr):
-    """Lê o nome do próprio personagem para evitar alarme falso."""
-    try:
-        if pm is None: return ""
-        player_id = pm.read_int(base_addr + OFFSET_PLAYER_ID)
-        if player_id == 0: return ""
 
-        list_start = base_addr + TARGET_ID_PTR + REL_FIRST_ID
-        for i in range(MAX_CREATURES):
-            slot = list_start + (i * STEP_SIZE)
-            c_id = pm.read_int(slot)
-            if c_id == player_id:
-                name = pm.read_string(slot + OFFSET_NAME, 32)
-                return name.split('\x00')[0].strip()
-    except: pass
-    return ""
+def get_my_name(pm, base_addr):
+    """
+    Retorna nome do personagem com cache.
+    O nome não muda durante a sessão.
+    """
+    global _cached_my_name
+    if not _cached_my_name:
+        _cached_my_name = get_connected_char_name(pm, base_addr)
+    return _cached_my_name
 
 def get_last_chat_entry(pm, base_addr):
     """
@@ -87,7 +83,7 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks):
         chat_gm_enabled = get_cfg('chat_gm', True)
 
         try:
-            current_name = get_connected_char_name(pm, base_addr)
+            current_name = get_my_name(pm, base_addr)
             
             # =================================================================
             # A. VERIFICAÇÃO DE HP BAIXO

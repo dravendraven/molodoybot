@@ -10,26 +10,22 @@ from database import corpses
 
 # CORREÇÃO: Importar scan_containers do local original (auto_loot.py)
 from modules.auto_loot import scan_containers
+from core.player_core import get_connected_char_name
+
+_cached_char_name = ""
 
 # Definições de Delay
 SCAN_DELAY = 0.5
 
-def get_connected_char_name(pm, base_addr):
-    """Lê o nome do personagem logado para evitar auto-target."""
-    try:
-        if pm is None: return ""
-        player_id = pm.read_int(base_addr + OFFSET_PLAYER_ID)
-        if player_id == 0: return ""
-
-        list_start = base_addr + TARGET_ID_PTR + REL_FIRST_ID
-        for i in range(MAX_CREATURES):
-            slot = list_start + (i * STEP_SIZE)
-            c_id = pm.read_int(slot)
-            if c_id == player_id:
-                name = pm.read_string(slot + OFFSET_NAME, 32)
-                return name.split('\x00')[0].strip()
-    except: pass
-    return ""
+def get_my_char_name(pm, base_addr):
+    """
+    Retorna o nome do personagem com cache de sessão.
+    Evita buscar na BattleList toda vez.
+    """
+    global _cached_char_name
+    if not _cached_char_name:
+        _cached_char_name = get_connected_char_name(pm, base_addr)
+    return _cached_char_name
 
 def open_corpse_via_packet(pm, base_addr, target_data, player_id, log_func=print):
     """
@@ -142,7 +138,7 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
         try:  
             player_id = pm.read_int(base_addr + OFFSET_PLAYER_ID)
 
-            current_name = get_connected_char_name(pm, base_addr)
+            current_name = get_my_char_name(pm, base_addr)
             if not current_name: 
                 time.sleep(0.5); continue
             
