@@ -115,13 +115,15 @@ class AStarWalker:
         FALLBACK: Se A* não conseguir planejar até o destino (porque está fora do chunk),
         tenta dar um passo na direção mais próxima do destino.
 
-        Isso é crucial para cruzar limites de chunk: damos um passo em direção ao waypoint,
-        então o próximo ciclo lê a nova chunk e continua.
+        IMPORTANTE: Prioritiza passos que reduzem a distância ao target (não andam para trás).
         """
         neighbors = [
             (0, -1), (0, 1), (-1, 0), (1, 0),
             (-1, -1), (-1, 1), (1, -1), (1, 1)
         ]
+
+        # Distância atual até o target (antes de dar qualquer passo)
+        current_distance = math.sqrt(target_rel_x**2 + target_rel_y**2)
 
         best_step = None
         best_distance = float('inf')
@@ -132,19 +134,24 @@ class AStarWalker:
             if not props['walkable']:
                 continue
 
-            # Calcula distância até o destino se der este passo
-            # (Simula dar um passo e mede quantos tiles faltam)
+            # Calcula distância até o destino SE der este passo
+            # (dx, dy) é a posição após o passo
             new_x = dx
             new_y = dy
-            distance = math.sqrt((new_x - target_rel_x)**2 + (new_y - target_rel_y)**2)
+            new_distance = math.sqrt((new_x - target_rel_x)**2 + (new_y - target_rel_y)**2)
 
-            if distance < best_distance:
-                best_distance = distance
+            # CRÍTICO: SÓ considera passos que reduzem a distância
+            # (evita andar para trás ou ficar no mesmo lugar)
+            if new_distance >= current_distance:
+                continue
+
+            if new_distance < best_distance:
+                best_distance = new_distance
                 best_step = (dx, dy)
 
         if best_step and self.debug:
             print(f"[A*] 💡 FALLBACK: Dando um passo em direção ao target ({target_rel_x}, {target_rel_y})")
-            print(f"[A*] Step: {best_step}, distância: {best_distance:.2f}")
+            print(f"[A*] Step: {best_step}, distância reduzida de {current_distance:.2f} para {best_distance:.2f}")
 
         return best_step
 
