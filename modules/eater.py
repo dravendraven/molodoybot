@@ -17,7 +17,7 @@ def attempt_eat(pm, base_addr, hwnd):
         print("[DEBUG] scan_containers retornou lista vazia! Erro de leitura ou bolsas fechadas.")
         return False
 
-    print(f"[DEBUG] Varrendo {len(containers)} containers...")
+    #print(f"[DEBUG] Varrendo {len(containers)} containers...")
 
     for cont in containers:
         for slot, item in enumerate(cont.items):
@@ -43,5 +43,5 @@ def attempt_eat(pm, base_addr, hwnd):
                 print(f"[DEBUG] Comeu com sucesso. Retornando ID: {item.id}")
                 return item.id
     
-    print("[DEBUG] Loop finalizado. Nenhuma comida da lista FOOD_IDS foi encontrada.")
+    #print("[DEBUG] Loop finalizado. Nenhuma comida da lista FOOD_IDS foi encontrada.")
     return False

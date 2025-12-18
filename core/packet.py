@@ -288,17 +288,28 @@ def look_at(pm, pos, item_id, stack_pos=0):
     """
     pb = PacketBuilder()
     pb.add_call(FUNC_CREATE_PACKET, OP_LOOK)
-    
+
     # Posição
     pb.add_u16(pos['x'])
     pb.add_u16(pos['y'])
     pb.add_byte(pos['z'])
-    
+
     # ID do Item (Obrigatório pelo protocolo)
     pb.add_u16(item_id)
-    
+
     # Stack Position (0 = Topo, ou use um valor específico)
     pb.add_byte(stack_pos)
-    
+
+    pb.add_call(FUNC_SEND_PACKET, 1)
+    inject_packet(pm, pb.get_code())
+
+def close_container(pm, container_id):
+    """
+    Fecha um container específico (loot de criatura, etc).
+    Estrutura: [OpCode 0x87] [ContainerID]
+    """
+    pb = PacketBuilder()
+    pb.add_call(FUNC_CREATE_PACKET, OP_CLOSE_CONTAINER)
+    pb.add_byte(container_id)
     pb.add_call(FUNC_SEND_PACKET, 1)
     inject_packet(pm, pb.get_code())

@@ -51,6 +51,11 @@ class BotState:
         # ===== Dados de Sessão (constantes durante conexão) =====
         self._char_name: str = ""
         self._char_id: int = 0
+
+        # ===== Contextos de Jogo (coordenação entre módulos) =====
+        self._is_in_combat: bool = False
+        self._has_open_loot: bool = False
+        self._last_combat_time: float = 0.0
     
     # =========================================================================
     # CONEXÃO
@@ -217,6 +222,50 @@ class BotState:
             self._char_id = value
     
     # =========================================================================
+    # CONTEXTOS DE JOGO - Coordenação entre Módulos
+    # =========================================================================
+
+    @property
+    def is_in_combat(self) -> bool:
+        """Retorna True se há combate ativo (target_id != 0)."""
+        with self._lock:
+            return self._is_in_combat
+
+    @property
+    def has_open_loot(self) -> bool:
+        """Retorna True se há containers de loot abertos."""
+        with self._lock:
+            return self._has_open_loot
+
+    @property
+    def last_combat_time(self) -> float:
+        """Retorna timestamp do último combate (para cooldowns)."""
+        with self._lock:
+            return self._last_combat_time
+
+    def set_combat_state(self, in_combat: bool):
+        """
+        Atualiza estado de combate.
+
+        Args:
+            in_combat: True se há combate ativo, False caso contrário
+        """
+        with self._lock:
+            self._is_in_combat = in_combat
+            if in_combat:
+                self._last_combat_time = time.time()
+
+    def set_loot_state(self, has_loot: bool):
+        """
+        Atualiza estado de loot.
+
+        Args:
+            has_loot: True se há containers de loot abertos, False caso contrário
+        """
+        with self._lock:
+            self._has_open_loot = has_loot
+
+    # =========================================================================
     # MÉTODOS DE CONVENIÊNCIA
     # =========================================================================
     
@@ -244,7 +293,7 @@ class BotState:
     def get_status(self) -> dict:
         """
         Retorna snapshot do estado atual (para debug/GUI).
-        
+
         Returns:
             Dict com todos os estados
         """
@@ -258,6 +307,9 @@ class BotState:
                 'cooldown_remaining': max(0.0, self._resume_timestamp - time.time()),
                 'char_name': self._char_name,
                 'char_id': self._char_id,
+                'is_in_combat': self._is_in_combat,
+                'has_open_loot': self._has_open_loot,
+                'last_combat_time': self._last_combat_time,
             }
     
     def reset(self):
@@ -273,6 +325,9 @@ class BotState:
             self._pause_reason = ""
             self._char_name = ""
             self._char_id = 0
+            self._is_in_combat = False
+            self._has_open_loot = False
+            self._last_combat_time = 0.0
             # NÃO reseta _bot_running
 
 

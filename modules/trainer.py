@@ -56,7 +56,7 @@ def open_corpse_via_packet(pm, base_addr, target_data, player_id, log_func=print
         dx = target_x - my_x
         dy = target_y - my_y
 
-        tile = mapper.get_tile(dx, dy)
+        tile = mapper.get_tile_visible(dx, dy)
         if not tile:
             log_func(f"⚠️ Tile do corpo fora do alcance ({dx}, {dy}).")
             return False
@@ -247,7 +247,7 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
                     log("💀 Alvo eliminado.")
                     
                     if last_target_data and loot_enabled:
-                        time.sleep(1)
+                        time.sleep(random.uniform(0.6, 0.8))
                         
                         # CHAMA FUNÇÃO COM LÓGICA DE INDEX DINÂMICO
                         success = open_corpse_via_packet(pm, base_addr, last_target_data, player_id, log_func=log)

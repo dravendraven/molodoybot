@@ -6,58 +6,67 @@ class MapAnalyzer:
     def __init__(self, memory_map):
         self.mm = memory_map
 
-    def get_tile_properties(self, rel_x, rel_y):
-        tile = self.mm.get_tile(rel_x, rel_y)
+    def get_tile_properties(self, rel_x, rel_y, debug_reason=False):
+        """
+        Analisa propriedades de um tile.
+
+        Args:
+            rel_x, rel_y: Posição relativa ao player
+            debug_reason: Se True, retorna também o motivo de bloqueio
+        """
+        tile = self.mm.get_tile_visible(rel_x, rel_y)
 
         # 1. VALIDAÇÃO DE EXISTÊNCIA (O "VAZIO")
-        # Se o tile é None ou a lista de itens está vazia, não tem chão.
-        # Isso evita que o bot tente andar no "preto" do mapa.
         if not tile or not tile.items:
-            if DEBUG_PATHFINDING:
-                print(f"[MapAnalyzer] get_tile_properties({rel_x}, {rel_y}) -> BLOQUEADO (tile=None ou vazio)")
-            return {'walkable': False, 'type': 'BLOCK', 'cost': 999}
+            result = {'walkable': False, 'type': 'BLOCK', 'cost': 999}
+            if debug_reason:
+                result['block_reason'] = 'TILE_VAZIO' if not tile else 'SEM_ITENS'
+                result['items'] = []
+            return result
 
         properties = {
             'walkable': True,
             'type': 'GROUND',
-            'cost': 1, # Custo base (Grama, Terra, etc)
+            'cost': 1,
             'special_id': None
         }
 
-        has_avoid = False
+        if debug_reason:
+            properties['items'] = list(tile.items)  # Cópia da lista de IDs
 
         # Varre a pilha de itens do tile (Do chão até o topo)
         for item_id in tile.items:
-            
+
             # 2. VERIFICAÇÃO DE BLOQUEIO ABSOLUTO (Paredes, Pedras, Players)
             if item_id in BLOCKING_IDS:
                 if item_id == 99 and rel_x == 0 and rel_y == 0:
                     continue
-                return self._make_block()
+                result = self._make_block()
+                if debug_reason:
+                    result['block_reason'] = 'BLOCKING_ID'
+                    result['blocking_item_id'] = item_id
+                    result['items'] = list(tile.items)
+                return result
 
             # 3. VERIFICAÇÃO DE "AVOID" (Fields, Lava, Buracos)
-            # Usuário optou por tratar como BLOQUEIO TOTAL
             if item_id in AVOID_IDS:
-                # Exceção: Se for um buraco/escada que o Cavebot precisa usar,
-                # a verificação de 'special' abaixo cuidaria disso?
-                # Cuidado: Escadas muitas vezes tem flag 'Avoid' ou 'Unpass'.
-                # Para garantir que o bot suba escadas, precisamos checar se é ESPECIAL antes de bloquear.
-                
-                if get_special_type(item_id): 
-                    pass # Se é escada/buraco de acesso, deixa passar para a checagem abaixo
+                if get_special_type(item_id):
+                    pass  # Escada/buraco especial, deixa passar
                 else:
-                    return self._make_block()
+                    result = self._make_block()
+                    if debug_reason:
+                        result['block_reason'] = 'AVOID_ID'
+                        result['blocking_item_id'] = item_id
+                        result['items'] = list(tile.items)
+                    return result
 
             # 4. ITENS ESPECIAIS (Escadas, Buracos de Acesso, Corda)
             special = get_special_type(item_id)
             if special:
                 properties['type'] = special
                 properties['special_id'] = item_id
-                # Custo médio para evitar pisar à toa em escadas, 
-                # mas permite que o Cavebot force a entrada se for o destino.
-                properties['cost'] = 20 
-                # Não retorna imediatamente, continua checando se tem algo bloqueando em cima
-                continue 
+                properties['cost'] = 20
+                continue
 
         return properties
     

@@ -157,6 +157,10 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
             
             # --- AUTO EAT ---
             if item.id in FOOD_IDS:
+                if is_player_full(pm, base_addr) and not drop_food_if_full:
+                    # Se não for dropar, apenas ignora e continua o loop para o próximo item
+                    continue
+                
                 food_pos = packet.get_container_pos(cont.index, item.slot_index)
 
                 # Tenta comer
@@ -194,7 +198,7 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
 
                 with PacketMutex("auto_loot") as loot_ctx:
                     packet.move_item(pm, pos_from, pos_to, item.id, item.count)
-                time.sleep(0.3)
+                time.sleep(random.uniform(0.4, 0.8))
 
                 # NOVO: Stack imediatamente após lotar (reutiliza contexto, sem delay)
                 # Import lazy para evitar circular import
@@ -217,5 +221,10 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
                     packet.move_item(pm, pos_from, pos_ground, item.id, item.count)
                 time.sleep(0.3)
                 return "DROP"
-                
+
+    # NOVO: Fecha todos os containers de loot processados
+    for cont in containers[limit_containers:]:
+        packet.close_container(pm, cont.index)
+        time.sleep(random.uniform(0.5, 1))
+
     return None

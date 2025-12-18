@@ -174,6 +174,7 @@ AVOID_IDS = GENERATED_AVOID_IDS
 # Nota: Alguns itens 'Unpass' podem ser escadas. O MapAnalyzer deve priorizar
 # a verificação de 'FLOOR_CHANGE' antes de 'BLOCKING_IDS'.
 ROPE_ITEM_ID = 3003 # ID da Corda no inventário
+SHOVEL_ITEM_ID = 3457 # ID da Pá no inventário (para abrir buracos)
 
 FLOOR_CHANGE = {
     # --- SUBIR (Apenas andar em cima) ---
@@ -197,7 +198,7 @@ FLOOR_CHANGE = {
     'DOWN': {
         469, # rampa montanha
         432, 433, # Buraco Aberto
-        434, # Escada descendo
+        434, 369, # Escada descendo
         411,      # Escada navio
         482,      # Bueiro
         293, 294, # Buracos de caverna

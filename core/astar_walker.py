@@ -28,9 +28,6 @@ class AStarWalker:
         if target_rel_x == 0 and target_rel_y == 0:
             return None
 
-        if self.debug:
-            print(f"[A*] 🔍 Iniciando busca para target ({target_rel_x}, {target_rel_y})")
-
         start_node = Node(0, 0)
         open_list = []
         closed_set = set()
@@ -72,7 +69,9 @@ class AStarWalker:
                 # --- ANÁLISE DO TILE ---
                 props = self.analyzer.get_tile_properties(nx, ny)
 
-                if not props['walkable']:
+                is_target_node = (nx == target_rel_x and ny == target_rel_y)
+
+                if not props['walkable'] and not is_target_node:
                     blocked_count += 1
                     continue
 
@@ -104,10 +103,10 @@ class AStarWalker:
                 new_node = Node(nx, ny, current_node, new_g, new_h)
                 heapq.heappush(open_list, new_node)
 
-        # DEBUG: Log quando não encontra caminho
+        # DEBUG: Log quando não encontra caminho (COM MOTIVO)
         if self.debug:
-            # Verifica se o target é walkable
-            target_props = self.analyzer.get_tile_properties(target_rel_x, target_rel_y)
+            # Verifica se o target é walkable COM MOTIVO detalhado
+            target_props = self.analyzer.get_tile_properties(target_rel_x, target_rel_y, debug_reason=True)
             target_walkable = target_props['walkable']
 
             if iterations > self.max_depth:
@@ -117,9 +116,27 @@ class AStarWalker:
                 print(f"[A*] ⚠️ DEBUG: Nenhum tile walkable encontrado ao redor! Target: ({target_rel_x}, {target_rel_y})")
                 print(f"[A*] Tiles analisados: {blocked_count} bloqueados, {walkable_count} walkable")
             elif not target_walkable:
+                # Mostra MOTIVO detalhado do bloqueio
+                reason = target_props.get('block_reason', 'UNKNOWN')
+                items = target_props.get('items', [])
+
                 print(f"[A*] ⚠️ TARGET BLOQUEADO: O tile de destino ({target_rel_x}, {target_rel_y}) é NÃO-WALKABLE!")
-                print(f"[A*]   Target properties: {target_props}")
                 print(f"[A*]   Explored {len(closed_set)} reachable nodes antes de descobrir isso")
+
+                if reason == 'BLOCKING_ID':
+                    blocking_id = target_props.get('blocking_item_id', '?')
+                    print(f"[A*]   🚫 MOTIVO: Item bloqueador ID {blocking_id}")
+                    print(f"[A*]   📦 Pilha de itens no tile: {items}")
+                elif reason == 'AVOID_ID':
+                    blocking_id = target_props.get('blocking_item_id', '?')
+                    print(f"[A*]   ⚠️ MOTIVO: Item 'AVOID' ID {blocking_id}")
+                    print(f"[A*]   📦 Pilha de itens no tile: {items}")
+                elif reason == 'TILE_VAZIO':
+                    print(f"[A*]   🕳️ MOTIVO: Tile não existe na memória (fora do alcance de leitura)")
+                elif reason == 'SEM_ITENS':
+                    print(f"[A*]   🕳️ MOTIVO: Tile existe mas lista de itens está vazia")
+                else:
+                    print(f"[A*]   Target properties: {target_props}")
             else:
                 print(f"[A*] ⚠️ FAILED: Fim do open_list sem encontrar target ({target_rel_x}, {target_rel_y})")
                 print(f"[A*]   Iterations: {iterations}, closed_set size: {len(closed_set)}, walkable_count: {walkable_count}")
@@ -128,6 +145,7 @@ class AStarWalker:
         # (Útil quando o target está fora do chunk visível)
         if walkable_count > 0:
             return self._get_fallback_step(target_rel_x, target_rel_y)
+            print(f"[A*] ⚠️ Fallback step para direção ({target_rel_x}, {target_rel_y})")
 
         return None
 
@@ -170,10 +188,7 @@ class AStarWalker:
                 best_distance = new_distance
                 best_step = (dx, dy)
 
-        if best_step and self.debug:
-            print(f"[A*] 💡 FALLBACK: Dando um passo em direção ao target ({target_rel_x}, {target_rel_y})")
-            print(f"[A*] Step: {best_step}, distância reduzida de {current_distance:.2f} para {best_distance:.2f}")
-
+        # Fallback silencioso - log apenas se falhar completamente
         return best_step
 
     def _reconstruct_first_step(self, node):

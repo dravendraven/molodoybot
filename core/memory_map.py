@@ -98,42 +98,34 @@ class MemoryMap:
         self.offset_z = z
 
     def get_tile(self, rel_x, rel_y):
-        """
-        Retorna o tile na posição relativa (rel_x, rel_y) ao player.
-
-        IMPORTANTE: Não usa wrap-around (modulo) - valida bounds corretamente.
-        Se a posição estiver fora do alcance visível (18x14), retorna None.
-        """
-        # Validação de calibração
         if not self.is_calibrated or self.center_index == -1:
-            if DEBUG_PATHFINDING:
-                print(f"[MemoryMap] get_tile({rel_x}, {rel_y}) -> FALHOU (não calibrado)")
             return None
 
         target_x = 8 + rel_x + self.offset_x
         target_y = 6 + rel_y + self.offset_y
 
-        # Validação de bounds (SEM wrap-around perigoso)
+        # DEBUG TEMPORÁRIO
+        if rel_y == 2:  # Só para tile (+0, +2)
+            print(f"[DEBUG get_tile] rel=({rel_x},{rel_y})")
+            print(f"  offset_x={self.offset_x}, offset_y={self.offset_y}, offset_z={self.offset_z}")
+            print(f"  target_x={target_x}, target_y={target_y}")
+            print(f"  center_index={self.center_index}")
+        
+        # SEM ESSA VALIDAÇÃO, VOCÊ LÊ TILE ERRADO!
         if not (0 <= target_x < 18 and 0 <= target_y < 14):
-            if DEBUG_PATHFINDING:
-                print(f"[MemoryMap] get_tile({rel_x}, {rel_y}) -> FORA DOS BOUNDS")
-                print(f"  target_x={target_x}, target_y={target_y} (offset_x={self.offset_x}, offset_y={self.offset_y})")
-            return None  # Fora do alcance visível
+            if rel_y == 2:
+                print(f"  ❌ REJEITADO: target fora de bounds!")
+            return None
 
-        final_x = target_x
-        final_y = target_y
-        final_z = self.offset_z
-
-        index = final_x + (final_y * 18) + (final_z * 18 * 14)
-
+        index = target_x + (target_y * 18) + (self.offset_z * 252)
+        
+        if rel_y == 2:
+            print(f"  index calculado: {index}")
+            if 0 <= index < TOTAL_TILES and self.tiles[index]:
+                print(f"  items no tile: {self.tiles[index].items}")
+        
         if 0 <= index < TOTAL_TILES:
-            tile = self.tiles[index]
-            if DEBUG_PATHFINDING and tile:
-                print(f"[MemoryMap] get_tile({rel_x}, {rel_y}) -> Tile com {tile.count} itens: {tile.items}")
-            return tile
-
-        if DEBUG_PATHFINDING:
-            print(f"[MemoryMap] get_tile({rel_x}, {rel_y}) -> Index {index} inválido (max={TOTAL_TILES})")
+            return self.tiles[index]
         return None
 
     def get_tile_visible(self, rel_x, rel_y):

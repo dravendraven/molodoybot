@@ -156,6 +156,16 @@ FOOD_IDS = foods_db.get_food_ids()
 DROP_IDS = [3286, 3264, 3358, 3354, 3410] # Mace, Sword, Chain Armor, Brass Helmet, Plate Shield
 LOOT_CONTAINER_IDS = [2853]
 
+# ==============================================================================
+# ROPE SPOT EXCEPTIONS (Items que NÃO precisam ser removidos do rope spot)
+# ==============================================================================
+# Lista de item IDs que não bloqueiam o uso da rope no rope spot.
+# Exemplo: poças de sangue, pools de slime, etc.
+# Formato: [ID1, ID2, ID3, ...]
+# Adicione manualmente os IDs dos items que descobrir que não precisam ser limpos.
+ROPE_SPOT_IGNORE_IDS = [
+    2886, 2887, 2888, 2889, 2890, 2891, 2895, 2896, 2897, 2898, 2899, 2900
+]
 
 # ==============================================================================
 # GAME VIEW (Cálculo Automático do Mapa)
@@ -345,6 +355,11 @@ class AlertType:
     MANUAL = "MANUAL"
     HP_LOW = "HP_LOW"
     CHAT = "CHAT"
+
+# ==============================================================================
+# PACKET OPCODES
+# ==============================================================================
+OP_CLOSE_CONTAINER = 0x87  # Packet para fechar containers de loot
 
 # ==============================================================================
 # DEBUG CONFIG (PATHFINDING)

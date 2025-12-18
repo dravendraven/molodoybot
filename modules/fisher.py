@@ -11,6 +11,7 @@ from database import fishing_db
 from core.memory_map import MemoryMap
 from core.config_utils import make_config_getter
 from core.packet_mutex import PacketMutex
+from core.bot_state import state
 
 # ==============================================================================
 # VARIÁVEIS GLOBAIS DE SESSÃO
@@ -175,13 +176,19 @@ def fishing_loop(pm, base_addr, hwnd, check_running=None, log_callback=None,
                     if not cap_paused:
                         log_msg(f"⛔ Cap baixa ({cap_now:.1f} oz). Pausando...")
                         cap_paused = True
-                        if debug_hud_callback: debug_hud_callback([]) 
-                    time.sleep(2) 
-                    continue 
+                        if debug_hud_callback: debug_hud_callback([])
+                    time.sleep(2)
+                    continue
                 else:
                     if cap_paused:
                         log_msg(f"✅ Cap recuperada. Retomando...")
                         cap_paused = False
+
+            # NOVO: Pausa durante combate e loot
+            # Fisher deve pausar para permitir defesa e não interferir com auto-loot
+            if state.is_in_combat or state.has_open_loot:
+                time.sleep(0.5)
+                continue
 
             if player_id == 0:
                 try:
@@ -353,7 +360,7 @@ def fishing_loop(pm, base_addr, hwnd, check_running=None, log_callback=None,
             else:
                 time.sleep(0.2) 
                 if mapper.read_full_map(player_id):
-                    new_tile = mapper.get_tile(dx, dy)
+                    new_tile = mapper.get_tile_visible(dx, dy)
                     if new_tile:
                         new_id = new_tile.get_top_item()
                         if new_id in VISUAL_EMPTY_IDS: success = True

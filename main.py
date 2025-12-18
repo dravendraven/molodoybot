@@ -638,7 +638,7 @@ def start_cavebot_thread():
 
                         if wp_list and 0 <= wp_idx < len(wp_list):
                             wp = wp_list[wp_idx]
-                            label_text = f"📍 Posição: ({px}, {py}, {pz}) | 🎯 WP {wp_idx}: ({wp['x']}, {wp['y']}, {wp['z']})"
+                            label_text = f"📍 Posição: ({px}, {py}, {pz})"
                         else:
                             label_text = f"📍 Posição: ({px}, {py}, {pz}) | 🎯 Sem waypoints"
 
@@ -966,6 +966,40 @@ def auto_loot_thread():
         except Exception as e:
             print(f"Erro Loot/Stack: {e}")
             time.sleep(1)
+
+def combat_loot_monitor_thread():
+    """
+    Thread dedicada para monitorar estado de combate e loot.
+    Atualiza bot_state.py para coordenação entre módulos a cada 300ms.
+    """
+    from modules.auto_loot import scan_containers
+
+    log("🔍 Combat/Loot Monitor iniciado")
+
+    while state.is_running:
+        if not state.is_connected or pm is None:
+            state.set_combat_state(False)
+            state.set_loot_state(False)
+            time.sleep(1)
+            continue
+
+        try:
+            # Verifica combate (lê TARGET_ID_PTR da memória)
+            target_id = pm.read_int(base_addr + TARGET_ID_PTR)
+            in_combat = (target_id != 0)
+            state.set_combat_state(in_combat)
+
+            # Verifica loot (containers abertos acima do índice de "minhas bags")
+            my_containers_count = BOT_SETTINGS.get('loot_containers', 2)
+            containers = scan_containers(pm, base_addr)
+            has_loot = any(c.index >= my_containers_count and c.amount > 0 for c in containers)
+            state.set_loot_state(has_loot)
+
+        except Exception as e:
+            # Silencioso para não poluir logs
+            pass
+
+        time.sleep(0.3)  # ~3 verificações por segundo
 
 def auto_fisher_thread():
     hwnd = 0
@@ -1921,7 +1955,7 @@ def open_settings():
     frame_cb_left.grid(row=0, column=0, sticky="nsew", padx=(0, 3), pady=2)
 
     # 0. Status do Cavebot (Posição Atual + Waypoint Alvo)
-    label_cavebot_status = ctk.CTkLabel(frame_cb_left, text="📍 Posição: --- | 🎯 Waypoint: ---", **UI['BODY'])
+    label_cavebot_status = ctk.CTkLabel(frame_cb_left, text="📍 Posição: ---", **UI['BODY'])
     label_cavebot_status.pack(anchor="w", pady=(0, 10), fill="x")
 
     ctk.CTkFrame(frame_cb_left, height=1, fg_color="#555").pack(fill="x", pady=5)
@@ -2378,6 +2412,7 @@ app.protocol("WM_DELETE_WINDOW", on_close)
 # Iniciar Threads
 threading.Thread(target=start_trainer_thread, daemon=True).start()
 threading.Thread(target=start_alarm_thread, daemon=True).start()
+threading.Thread(target=combat_loot_monitor_thread, daemon=True).start()
 threading.Thread(target=auto_loot_thread, daemon=True).start()
 threading.Thread(target=skill_monitor_loop, daemon=True).start()
 threading.Thread(target=gui_updater_loop, daemon=True).start()

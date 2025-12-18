@@ -11,6 +11,7 @@ from modules.eater import attempt_eat
 from core.input_core import press_hotkey, left_click_at
 from database import foods_db
 from core.config_utils import make_config_getter
+from core.bot_state import state
 
 # Usar constantes do config.py ao invés de redefinir
 # SLOT_RIGHT e SLOT_LEFT removidos (usar HandSlot do config)
@@ -144,7 +145,7 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
     
     # Controle de Combate
     last_combat_time = 0
-    COMBAT_COOLDOWN = 5
+    COMBAT_COOLDOWN = 7  # Aumentado para 7s: aguarda estabilização do loot (3-5s) + margem de segurança
 
     log_msg(f"Iniciado (Modo Segurança Avançada).")
 
@@ -239,13 +240,14 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
         # PRIORIDADE 5: TRABALHO (MANA TRAIN / RUNAS / COMIDA)
         # ======================================================================
         
-        # 1. Proteção de Combate
-        current_target = get_target_id(pm, base_addr)
-        if current_target != 0:
-            last_combat_time = time.time()
+        # 1. Proteção de Combate (integrada com bot_state)
+        # Usa flags globais de combate/loot para coordenação entre módulos
+        if state.is_in_combat or state.has_open_loot:
             time.sleep(0.5); continue
-            
-        if time.time() - last_combat_time < COMBAT_COOLDOWN:
+
+        # Cooldown mais inteligente: aguarda 7s após combate terminar
+        # Permite que auto-loot (3-5s) termine completamente
+        if time.time() - state.last_combat_time < COMBAT_COOLDOWN:
             time.sleep(0.5); continue
 
         # 2. Auto Eat
@@ -313,6 +315,14 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                     elif hand_mode == "LEFT": hands_to_use = [SLOT_LEFT]
                     else: hands_to_use = [SLOT_RIGHT]
 
+                    # Verifica se temos blank runes no inventário ANTES de desarmar
+                    blank_id = get_cfg('blank_id', 3147)
+                    blank_data = find_item_in_containers(pm, base_addr, blank_id)
+                    if not blank_data:
+                        log_msg(f"⚠️ Sem Blanks na BP!")
+                        next_cast_time = 0
+                        continue
+
                     # PACKET MUTEX: Wrap entire runemaking cycle (unequip -> blank -> cast -> return -> reequip)
                     with PacketMutex("runemaker"):
                         # PHASE 1: Unequip all hands and store their items
@@ -322,32 +332,31 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                         for dest_slot_idx, slot_enum in enumerate(hands_to_use):
                             if is_safe_callback and not is_safe_callback(): break
                             unequipped_item_id = unequip_hand(pm, base_addr, slot_enum, dest_container_idx=0, dest_slot=dest_slot_idx)
-                            unequipped_items[slot_enum] = (unequipped_item_id, dest_slot_idx)
-                            log_msg(f"🔓 Desarmou {slot_enum}: Item {unequipped_item_id} → Slot {dest_slot_idx}")
+                            unequipped_items[slot_enum] = (unequipped_item_id, 0)
+                            log_msg(f"🔓 Desarmou {slot_enum}: Item {unequipped_item_id}")
                             time.sleep(0.3)
 
                         # PHASE 2: Equip blank runes
                         active_runes = []
-                        blank_id = get_cfg('blank_id', 3147)
 
                         for slot_enum in hands_to_use:
                             if is_safe_callback and not is_safe_callback(): break
-
-                            blank_data = find_item_in_containers(pm, base_addr, blank_id)
-
-                            if not blank_data:
-                                log_msg(f"⚠️ Sem Blanks na BP!")
-                                # Restore all unequipped items on failure
-                                for slot, (item_id, dest_slot) in unequipped_items.items():
-                                    if item_id:
-                                        log_msg(f"🔄 Restaurando {item_id} para mão {slot} após falha...")
-                                        reequip_hand(pm, base_addr, item_id, slot)
-                                break
 
                             # Move Blank -> Mão
                             pos_from = packet.get_container_pos(blank_data['container_index'], blank_data['slot_index'])
                             pos_to = packet.get_inventory_pos(slot_enum)
                             packet.move_item(pm, pos_from, pos_to, blank_id, 1)
+
+                            # Adiciona à lista de runes ativas
+                            restorable_item, orig_dest_slot = unequipped_items[slot_enum]
+                            active_runes.append({
+                                "hand_pos": pos_to,
+                                "origin_idx": blank_data['container_index'],
+                                "slot_enum": slot_enum,
+                                "restorable_item": restorable_item,
+                                "orig_dest_slot": orig_dest_slot  # Track where the weapon was stored
+                            })
+                            time.sleep(0.6)
 
                             restorable_item, orig_dest_slot = unequipped_items[slot_enum]
                             active_runes.append({

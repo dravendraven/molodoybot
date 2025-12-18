@@ -10,7 +10,7 @@ from core.map_analyzer import MapAnalyzer
 from core.astar_walker import AStarWalker
 from core.memory_map import MemoryMap
 from core.inventory_core import find_item_in_containers, find_item_in_equipment # Necessário para achar a corda
-from database.tiles_config import ROPE_ITEM_ID
+from database.tiles_config import ROPE_ITEM_ID, SHOVEL_ITEM_ID
 from core.bot_state import state
 
 # Mapeamento de Delta (dx, dy) para Opcode do Packet
@@ -39,6 +39,7 @@ class Cavebot:
         self._waypoints_lock = threading.Lock()
         self._waypoints = []
         self._current_index = 0
+        self._direction = 1  # 1 = forward (0→50), -1 = backward (50→0)
 
         self.enabled = False
         self.last_action_time = 0
@@ -84,6 +85,7 @@ class Cavebot:
         with self._waypoints_lock:
             self._waypoints = validated
             self._current_index = 0
+            self._direction = 1  # Sempre começa indo para frente
 
         print(f"[Cavebot] Carregados {len(validated)} waypoints válidos de {len(waypoints_list)} totais")
 
@@ -110,26 +112,36 @@ class Cavebot:
             self.last_action_time = time.time()
             return
 
+        # NOVO: Pausa para atividades de maior prioridade
+        # Aguarda combate terminar E auto-loot finalizar completamente
+        if state.is_in_combat or state.has_open_loot:
+            self.last_action_time = time.time()
+            if DEBUG_PATHFINDING:
+                reasons = []
+                if state.is_in_combat:
+                    reasons.append("COMBATE")
+                if state.has_open_loot:
+                    reasons.append("AUTO-LOOT")
+                print(f"[Cavebot] ⏸️ Pausado: {', '.join(reasons)}")
+            return
+
+        # NOVO: Cooldown de 1s após combate/loot para estabilização
+        # Evita race condition: matar criatura → delay 1s → abrir loot → próximo combate
+        if time.time() - state.last_combat_time < 1.0:
+            if DEBUG_PATHFINDING:
+                remaining = 1.0 - (time.time() - state.last_combat_time)
+                print(f"[Cavebot] ⏸️ Cooldown pós-combate: {remaining:.1f}s")
+            self.last_action_time = time.time()
+            return
+
         # Controle de Cooldown
         if time.time() - self.last_action_time < self.walk_delay:
             return
 
         # 1. Atualizar Posição e Mapa
         px, py, pz = get_player_pos(self.pm, self.base_addr)
-
-        # Precisamos do Player ID para ler o mapa corretamente (calibração)
-        # Lendo do offset definido no config.py
         player_id = self.pm.read_int(self.base_addr + OFFSET_PLAYER_ID)
-
-        if DEBUG_PATHFINDING:
-            print(f"\n[Cavebot] ===== CICLO INICIADO =====")
-            print(f"[Cavebot] Player pos: ({px}, {py}, {pz}), ID: {player_id}")
-
         success = self.memory_map.read_full_map(player_id)
-
-        if DEBUG_PATHFINDING:
-            print(f"[Cavebot] read_full_map() retornou: {success}, is_calibrated: {self.memory_map.is_calibrated}")
-            print(f"[Cavebot] center_index: {self.memory_map.center_index}, offsets: ({self.memory_map.offset_x}, {self.memory_map.offset_y}, {self.memory_map.offset_z})")
 
         # RETRY LOGIC: Se calibração falhar, tenta novamente
         if not success or not self.memory_map.is_calibrated:
@@ -146,32 +158,42 @@ class Cavebot:
         # 2. Selecionar Waypoint Atual (thread-safe)
         wp = current_waypoints[current_index]
 
+        # DEBUG: Estado do Cérebro do Cavebot
+        if DEBUG_PATHFINDING:
+            print(f"\n[🧠 CAVEBOT] Posição: ({px}, {py}, {pz}) | WP Atual: #{current_index}/{len(current_waypoints)-1} → ({wp['x']}, {wp['y']}, {wp['z']})")
+
         # 3. Checar se chegou (Distância < 1.5 SQM e mesmo Z)
         dist = math.sqrt((wp['x'] - px)**2 + (wp['y'] - py)**2)
 
         if dist <= 1.5 and wp['z'] == pz:
             print(f"[Cavebot] ✅ Chegou no WP {current_index}: ({wp['x']}, {wp['y']}, {wp['z']})")
             with self._waypoints_lock:
-                self._current_index = (self._current_index + 1) % len(self._waypoints)
+                self._advance_waypoint()
             return
 
         # ======================================================================
         # 4. LÓGICA DE ANDARES (FLOOR CHANGE)
         # ======================================================================
         if wp['z'] != pz:
+            direction = "↑ SUBIR" if wp['z'] < pz else "↓ DESCER"
+            if DEBUG_PATHFINDING:
+                print(f"[🪜 FLOOR CHANGE] Necessário {direction}: Z atual={pz} → Z alvo={wp['z']}")
+
             # O scanner retorna: (rel_x, rel_y, type, special_id)
             floor_target = self.analyzer.scan_for_floor_change(wp['z'], pz)
-            
+
             if floor_target:
                 fx, fy, ftype, fid = floor_target
-                
-                # Distância até o objeto especial
-                # Se fx, fy são relativos, a distância é a magnitude do vetor
                 dist_obj = math.sqrt(fx**2 + fy**2)
+
+                if DEBUG_PATHFINDING:
+                    print(f"[🪜 FLOOR CHANGE] Encontrado {ftype} (ID:{fid}) em ({fx:+d}, {fy:+d}), distância={dist_obj:.1f} SQM")
 
                 # Se estamos ADJACENTES (dist <= 1.5) ou EM CIMA (dist == 0)
                 # Para Ladder e Rope, precisamos estar PERTO.
                 if dist_obj <= 1.5:
+                    if DEBUG_PATHFINDING:
+                        print(f"[🪜 FLOOR CHANGE] ✓ Adjacente ao {ftype}, executando...")
                     self._handle_special_tile(fx, fy, ftype, fid, px, py, pz)
 
                     # Após uma interação de andar/usar, a posição global pode ter mudado (ex: subir de andar).
@@ -181,7 +203,7 @@ class Cavebot:
                         if dist_after <= 1.5:
                             print(f"[Cavebot] Chegou no WP {current_index} após floor change")
                             with self._waypoints_lock:
-                                self._current_index = (self._current_index + 1) % len(self._waypoints)
+                                self._advance_waypoint()
                             self.last_action_time = time.time()
                             return
                 else:
@@ -190,14 +212,26 @@ class Cavebot:
                     if ftype == 'UP_USE':
                         target_fx, target_fy = self._get_adjacent_use_tile(fx, fy)
 
+                    if DEBUG_PATHFINDING:
+                        print(f"[🪜 FLOOR CHANGE] Longe do {ftype}, calculando caminho para ({target_fx:+d}, {target_fy:+d})...")
+
                     # A escada está longe. Usa A* para chegar nela (ou ao adjacente definido).
                     step = self.walker.get_next_step(target_fx, target_fy)
                     if step:
+                        if DEBUG_PATHFINDING:
+                            target_props = self.analyzer.get_tile_properties(step[0], step[1])
+                            print(f"[🚶 WALKER] Movendo ({step[0]:+d}, {step[1]:+d}) [tipo={target_props['type']}, walkable={target_props['walkable']}]")
                         self._move_step(step[0], step[1])
                     else:
-                        print("[Cavebot] Caminho para a escada bloqueado.")
+                        print(f"[Cavebot] ⚠️ Caminho para {ftype} bloqueado!")
+                        if DEBUG_PATHFINDING:
+                            # Mostra tiles ao redor para debug
+                            print(f"[DEBUG] Tiles ao redor do player:")
+                            for dx, dy in [(0,-1), (1,0), (0,1), (-1,0)]:
+                                props = self.analyzer.get_tile_properties(dx, dy)
+                                print(f"  ({dx:+2},{dy:+2}): {props['type']}, walkable={props['walkable']}")
             else:
-                print(f"[Cavebot] Stuck? WP Z={wp['z']} vs Player Z={pz}. Nenhuma escada vista.")
+                print(f"[Cavebot] ⚠️ Nenhuma escada/rope encontrada! Z atual={pz}, Z alvo={wp['z']}")
             
             self.last_action_time = time.time()
             return
@@ -206,60 +240,123 @@ class Cavebot:
         target_rel_x = wp['x'] - px
         target_rel_y = wp['y'] - py
 
-        # --- LÓGICA DE HORIZONTE (FIX PARA CAMINHOS LONGOS) ---
-        # O MemoryMap geralmente lê com segurança uns 7 a 9 sqms do centro.
-        # Se o destino for mais longe que isso, o A* vai falhar.
-        # Precisamos criar um "Sub-Destino" na borda da visão.
-        
-        MAX_VIEW_RANGE = 7 # Limite seguro de leitura de memória
-        
-        # Distância Chebyshev (maior eixo)
+        MAX_VIEW_RANGE = 7  # Limite seguro de leitura de memória
         dist_axis = max(abs(target_rel_x), abs(target_rel_y))
-        
         walk_x, walk_y = target_rel_x, target_rel_y
 
+        # Lógica de Horizonte: Se waypoint está muito longe, cria sub-destino na borda visível
         if dist_axis > MAX_VIEW_RANGE:
-            # Regra de 3 para encurtar o vetor mantendo o ângulo
             factor = MAX_VIEW_RANGE / dist_axis
             walk_x = int(target_rel_x * factor)
             walk_y = int(target_rel_y * factor)
-            # Exemplo: Se o alvo é (20, 0) -> vira (7, 0)
-            # Exemplo: Se o alvo é (20, 20) -> vira (7, 7)
-        
-        # -----------------------------------------------------
-        
+            if DEBUG_PATHFINDING:
+                print(f"[🎯 TARGET] WP longe ({target_rel_x:+d}, {target_rel_y:+d}), usando horizonte ({walk_x:+d}, {walk_y:+d})")
+        else:
+            if DEBUG_PATHFINDING:
+                print(f"[🎯 TARGET] Navegando para WP ({walk_x:+d}, {walk_y:+d}), dist={dist:.1f} SQM")
+
         # Pede o próximo passo ao A*
         next_step = self.walker.get_next_step(walk_x, walk_y)
 
         if next_step:
             dx, dy = next_step
+            target_props = self.analyzer.get_tile_properties(dx, dy)
+            if DEBUG_PATHFINDING:
+                print(f"[🚶 WALKER] Movendo ({dx:+d}, {dy:+d}) [tipo={target_props['type']}, walkable={target_props['walkable']}]")
             self._move_step(dx, dy)
         else:
-            print(f"[Cavebot] ⚠️ Caminho bloqueado ou calculando... [WP {current_index}: ({wp['x']}, {wp['y']}, {wp['z']})]")
+            # A* falhou - mostrar informações úteis COM MOTIVO DO BLOQUEIO
+            print(f"[Cavebot] ⚠️ Caminho bloqueado para WP #{current_index}")
             if DEBUG_PATHFINDING:
-                print(f"[Cavebot] DEBUG INFO:")
-                print(f"  Posição atual: ({px}, {py}, {pz})")
-                print(f"  Waypoint alvo: ({wp['x']}, {wp['y']}, {wp['z']})")
-                print(f"  Distância até waypoint: {dist:.2f} SQM")
-                print(f"  Target relativo: ({walk_x}, {walk_y})")
-                print(f"  Target absoluto chebyshev distance: {dist_axis} (limite: {MAX_VIEW_RANGE})")
-                print(f"  Map calibrado: {self.memory_map.is_calibrated}")
-                print(f"  Center index: {self.memory_map.center_index}")
-                print(f"  Offsets: x={self.memory_map.offset_x}, y={self.memory_map.offset_y}, z={self.memory_map.offset_z}")
+                # Mostra tiles cardinais COM MOTIVO de bloqueio
+                print(f"[DEBUG] Tiles adjacentes ao player:")
+                for dx, dy in [(0,-1), (1,0), (0,1), (-1,0)]:
+                    props = self.analyzer.get_tile_properties(dx, dy, debug_reason=True)
+                    status = f"{props['type']:12s} walkable={props['walkable']}"
 
-                # Testa os 8 tiles cardinais ao redor do player
-                print(f"  Testando tiles ao redor do player (0,0):")
-                for dx, dy in [(0,-1), (1,0), (0,1), (-1,0), (1,-1), (1,1), (-1,1), (-1,-1)]:
-                    props = self.analyzer.get_tile_properties(dx, dy)
-                    print(f"    ({dx:+2},{dy:+2}): walkable={props['walkable']}, type={props['type']}")
+                    # Se bloqueado, mostra o MOTIVO
+                    if not props['walkable']:
+                        reason = props.get('block_reason', 'UNKNOWN')
+                        items_list = props.get('items', [])
+                        if reason == 'BLOCKING_ID':
+                            blocking_id = props.get('blocking_item_id', '?')
+                            status += f" | 🚫 REASON: {reason} (ID {blocking_id}) | Items: {items_list}"
+                        elif reason == 'AVOID_ID':
+                            blocking_id = props.get('blocking_item_id', '?')
+                            status += f" | ⚠️ REASON: {reason} (ID {blocking_id}) | Items: {items_list}"
+                        elif reason in ['TILE_VAZIO', 'SEM_ITENS']:
+                            status += f" | 🕳️ REASON: {reason}"
+                        else:
+                            status += f" | Items: {items_list}"
+                    else:
+                        # Tile walkable - mostra itens para referência
+                        items_list = props.get('items', [])
+                        if items_list:
+                            status += f" | Items: {items_list}"
 
-                print(f"[Cavebot] 💡 NOTA: Se o target está fora da visão (distância > {MAX_VIEW_RANGE}),")
-                print(f"[Cavebot]      o fallback step deve andar em direção à borda do chunk.")
+                    print(f"  ({dx:+2},{dy:+2}): {status}")
+
+                # Verifica se o próprio target é walkable COM MOTIVO
+                print(f"\n[DEBUG] Target ({walk_x:+d}, {walk_y:+d}):")
+                target_props = self.analyzer.get_tile_properties(walk_x, walk_y, debug_reason=True)
+                status = f"  {target_props['type']:12s} walkable={target_props['walkable']}"
+
+                if not target_props['walkable']:
+                    reason = target_props.get('block_reason', 'UNKNOWN')
+                    items_list = target_props.get('items', [])
+                    if reason == 'BLOCKING_ID':
+                        blocking_id = target_props.get('blocking_item_id', '?')
+                        status += f"\n  🚫 MOTIVO: Item bloqueador ID {blocking_id} está no tile"
+                        status += f"\n  📦 Pilha de itens: {items_list}"
+                    elif reason == 'AVOID_ID':
+                        blocking_id = target_props.get('blocking_item_id', '?')
+                        status += f"\n  ⚠️ MOTIVO: Item 'AVOID' ID {blocking_id} está no tile"
+                        status += f"\n  📦 Pilha de itens: {items_list}"
+                    elif reason == 'TILE_VAZIO':
+                        status += f"\n  🕳️ MOTIVO: Tile não existe na memória (fora do alcance ou não lido)"
+                    elif reason == 'SEM_ITENS':
+                        status += f"\n  🕳️ MOTIVO: Tile existe mas lista de itens está vazia"
+                else:
+                    items_list = target_props.get('items', [])
+                    status += f"\n  📦 Pilha de itens: {items_list}"
+
+                print(status)
 
         self.last_action_time = time.time()
 
         # Detecção de Stuck (player parado no mesmo tile)
         self._check_stuck(px, py, pz, current_index)
+
+    def _advance_waypoint(self):
+        """
+        Avança para o próximo waypoint em uma lógica circular/bidirecional.
+
+        Comportamento:
+        - Começa indo para frente: 0 → 1 → 2 → ... → n-1
+        - Quando atinge o final, inverte: n-1 → n-2 → ... → 0
+        - Quando volta ao início, inverte novamente: 0 → 1 → ...
+
+        Garante que o bot nunca pule de um waypoint para outro sem seguir a sequência.
+        """
+        if not self._waypoints:
+            return
+
+        n_waypoints = len(self._waypoints)
+
+        # Avança na direção atual
+        self._current_index += self._direction
+
+        # Verifica se precisa inverter a direção
+        if self._current_index >= n_waypoints:
+            # Chegou no final (tentou ir além do último), inverte
+            self._direction = -1
+            self._current_index = n_waypoints - 2  # Volta para o penúltimo
+            print(f"[Cavebot] 🔄 Invertendo direção (backward): indo para WP {self._current_index}")
+        elif self._current_index < 0:
+            # Voltou ao início (tentou ir antes do primeiro), inverte
+            self._direction = 1
+            self._current_index = 1  # Pula para o segundo
+            print(f"[Cavebot] 🔄 Invertendo direção (forward): indo para WP {self._current_index}")
 
     def _move_step(self, dx, dy):
         """Envia o pacote de andar."""
@@ -284,7 +381,7 @@ class Cavebot:
                 self._move_step(rel_x, rel_y)
                 # CRÍTICO: Aguarda o servidor processar a mudança de andar
                 # Sem isso, o próximo ciclo pode enviar comandos baseados na posição antiga
-                time.sleep(0.6)  # Tempo para o servidor processar teleport
+                time.sleep(1)  # Tempo para o servidor processar teleport
             return
 
         if ftype == 'UP_USE':
@@ -305,22 +402,56 @@ class Cavebot:
             # Rope precisa de adjacência cardeal, tile livre e corda no inventário.
             if not self._ensure_cardinal_adjacent(rel_x, rel_y):
                 return
-            if not self._clear_rope_spot(rel_x, rel_y, px, py, pz, special_id or 386):
-                return
+            
             rope_source = self._get_rope_source_position()
             if not rope_source:
                 print("[Cavebot] Corda (3003) não encontrada em containers ou mãos.")
                 return
 
+            if not self._clear_rope_spot(rel_x, rel_y, px, py, pz, special_id or 386):
+                return
+            
             with PacketMutex("cavebot"):
                 use_with(self.pm, rope_source, ROPE_ITEM_ID, 0, target_pos, special_id or 386, 0)
+                print("[Cavebot] Ação: USAR CORDA para subir de andar.")
             # CRÍTICO: Aguarda o servidor processar a mudança de andar
             # Rope teletransporta o jogador para o andar de cima
-            time.sleep(0.6)
+            time.sleep(1)
             return
 
         if ftype == 'SHOVEL':
-            print("[Cavebot] Ação: USAR PÁ (Ainda não implementado).")
+            # Shovel precisa de pá no inventário/equipamento
+            if not self._ensure_cardinal_adjacent(rel_x, rel_y, label="shovel"):
+                return
+
+            shovel_source = self._get_shovel_source_position()
+            if not shovel_source:
+                print("[Cavebot] Pá (3457) não encontrada em containers ou mãos.")
+                return
+
+            # Obtém o ID do stone pile no tile
+            shovel_tile = self.memory_map.get_tile_visible(rel_x, rel_y)
+            if not shovel_tile or shovel_tile.count == 0:
+                print("[Cavebot] Tile do shovel spot não encontrado na memória.")
+                return
+
+            top_id = shovel_tile.get_top_item()
+
+            # Valida se o item é um stone pile válido (593, 606, 608)
+            from database.tiles_config import FLOOR_CHANGE
+            valid_shovel_ids = FLOOR_CHANGE.get('SHOVEL', set())
+
+            if top_id not in valid_shovel_ids:
+                print(f"[Cavebot] Item {top_id} no shovel spot não é um stone pile válido. Esperado: {valid_shovel_ids}")
+                return
+
+            # Usa a pá no stone pile para criar o buraco (593 → 594)
+            with PacketMutex("cavebot"):
+                use_with(self.pm, shovel_source, SHOVEL_ITEM_ID, 0, target_pos, top_id, 0)
+                print(f"[Cavebot] Ação: USAR PÁ para abrir buraco. (Stone pile ID: {top_id})")
+
+            # Aguarda o servidor processar (stone pile se torna hole)
+            time.sleep(1)
             return
 
     def _use_ladder_tile(self, target_pos, ladder_id, rel_x=0, rel_y=0):
@@ -329,7 +460,7 @@ class Cavebot:
             print("[Cavebot] Ladder sem ID especial, abortando USE.")
             return
         stack_pos = 0
-        ladder_tile = self.memory_map.get_tile(rel_x, rel_y)
+        ladder_tile = self.memory_map.get_tile_visible(rel_x, rel_y)
         if ladder_tile and ladder_tile.items:
             # Procura o stackpos real do ID da ladder (última ocorrência = topo).
             for idx, item_id in enumerate(ladder_tile.items):
@@ -400,12 +531,29 @@ class Cavebot:
             return get_container_pos(cont_data['container_index'], cont_data['slot_index'])
         return None
 
+    def _get_shovel_source_position(self):
+        """Procura a pá nos equipamentos ou containers e retorna a posição do packet."""
+        equip = find_item_in_equipment(self.pm, self.base_addr, SHOVEL_ITEM_ID)
+        if equip:
+            slot_map = {'right': 5, 'left': 6, 'ammo': 10}
+            slot_enum = slot_map.get(equip['slot'])
+            if slot_enum:
+                return get_inventory_pos(slot_enum)
+
+        cont_data = find_item_in_containers(self.pm, self.base_addr, SHOVEL_ITEM_ID)
+        if cont_data:
+            return get_container_pos(cont_data['container_index'], cont_data['slot_index'])
+        return None
+
     def _clear_rope_spot(self, rel_x, rel_y, px, py, pz, rope_tile_id):
         """
         Rope spot precisa estar livre.
         Caso o topo tenha item diferente do rope spot, tentamos arrastar para nosso tile.
+
+        Itens na lista ROPE_SPOT_IGNORE_IDS (poças de sangue, etc.) não são movidos,
+        pois não bloqueiam o uso da rope.
         """
-        tile = self.memory_map.get_tile(rel_x, rel_y)
+        tile = self.memory_map.get_tile_visible(rel_x, rel_y)
         if not tile or tile.count == 0:
             print("[Cavebot] Tile do rope spot não encontrado na memória.")
             return False
@@ -419,6 +567,11 @@ class Cavebot:
         if top_id == 99:
             print("[Cavebot] Rope spot bloqueado por criatura/jogador. Não moveremos por enquanto.")
             return False
+
+        # NOVO: Se o item está na lista de exceção (poças, etc.), considera como "limpo"
+        if top_id in ROPE_SPOT_IGNORE_IDS:
+            print(f"[Cavebot] Item {top_id} no rope spot (permitido). Rope pode ser usada.")
+            return True
 
         # Calcula stack_pos do item no topo
         # items[-1] é o topo, e seu índice na pilha é len(items) - 1
@@ -448,7 +601,7 @@ class Cavebot:
                 with self._waypoints_lock:
                     if len(self._waypoints) > 1:
                         print(f"[Cavebot] Pulando para próximo waypoint...")
-                        self._current_index = (self._current_index + 1) % len(self._waypoints)
+                        self._advance_waypoint()
 
                 # Reseta contador
                 self.stuck_counter = 0
