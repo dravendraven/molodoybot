@@ -198,6 +198,17 @@ gold_tracker = GoldTracker()
 regen_tracker = RegenTracker()
 
 # ==============================================================================
+# MINIMAP VISUALIZATION (REALTIME)
+# ==============================================================================
+minimap_visualizer = None
+minimap_panel_expanded = False
+minimap_label = None
+minimap_image_ref = None
+
+# Log visibility toggle
+log_visible = True
+
+# ==============================================================================
 # 4. FUNÇÕES UTILITÁRIAS E HELPERS
 # ==============================================================================
 
@@ -1338,7 +1349,7 @@ def gui_updater_loop():
                 
                 if lbl_exp_rate.winfo_exists():
                     if xp_stats['xp_hour'] > 0:
-                        lbl_exp_rate.configure(text=f"{xp_stats['xp_hour']} x/h")
+                        lbl_exp_rate.configure(text=f"{xp_stats['xp_hour']} xp/h")
                         lbl_exp_eta.configure(text=f"⏳{xp_stats['eta']}")
                     else:
                         lbl_exp_rate.configure(text="-- xp/h")
@@ -1368,7 +1379,7 @@ def gui_updater_loop():
                     r_str = regen_tracker.get_display_string()
                     
                     if 'lbl_regen_stock' in globals() and lbl_regen_stock.winfo_exists():
-                        lbl_regen_stock.configure(text=f"🍖 Stock: {r_str}")
+                        lbl_regen_stock.configure(text=f"🍖 Food: {r_str}")
 
             except Exception as e:
                 print(f"Erro GUI: {e}")
@@ -1393,10 +1404,10 @@ def gui_updater_loop():
                     pct_left = 100 - ml_stats['pct']
                     mins_left = pct_left * ml_stats['speed']
                     horas, minutos = divmod(int(mins_left), 60)
-                    lbl_magic_time.configure(text=f"ETA {horas:02d}:{minutos:02d}")
+                    lbl_magic_time.configure(text=f"⏳ {horas:02d}:{minutos:02d}")
                 else:
                     lbl_magic_rate.configure(text="-- m/%")
-                    lbl_magic_time.configure(text="ETA --")
+                    lbl_magic_time.configure(text="⏳ --")
 
                 if real_sw > 0:
                     efficiency = (bench_sw / real_sw) * 100
@@ -1550,6 +1561,19 @@ def auto_resize_window():
     # 3. Aplica a nova geometria
     app.geometry(f"320x{needed_height}")
 
+def toggle_log_visibility():
+    """Toggle log console visibility."""
+    global log_visible, txt_log
+
+    log_visible = not log_visible
+
+    if log_visible:
+        txt_log.pack(side="bottom", fill="x", padx=5, pady=5, expand=True)
+        log("📝 Log console mostrado")
+    else:
+        txt_log.pack_forget()
+        # Mensagem será logada quando a visibilidade for ativada novamente
+
 def open_settings():
     global toplevel_settings, lbl_status, txt_waypoints_settings, entry_waypoint_name, combo_cavebot_scripts, current_waypoints_filename, label_cavebot_status
     
@@ -1693,6 +1717,14 @@ def open_settings():
     switch_light.pack(anchor="w", pady=UI['PAD_ITEM'])
     if full_light_enabled: switch_light.select()
 
+    def on_log_toggle():
+        global log_visible
+        toggle_log_visibility()
+
+    switch_log = ctk.CTkSwitch(frame_switches, text="Console Log", command=on_log_toggle, progress_color="#00FF00", **UI['BODY'])
+    switch_log.pack(anchor="w", pady=UI['PAD_ITEM'])
+    if log_visible: switch_log.select()
+
     def save_geral():
         BOT_SETTINGS['vocation'] = combo_voc.get()
         BOT_SETTINGS['telegram_chat_id'] = entry_telegram.get()
@@ -1768,6 +1800,15 @@ def open_settings():
     # ==========================================================================
     frame_alarm = create_grid_frame(tab_alarm)
 
+    # --- VISUAL ALARM ---
+    ctk.CTkLabel(tab_alarm, text="Monitorar Criaturas (Visual):", **UI['H1']).pack(anchor="w", padx=10, pady=(0,5))
+
+    switch_visual = ctk.CTkSwitch(tab_alarm, text="Alarme Visual", command=lambda: None, progress_color="#00D9FF", **UI['BODY'])
+    switch_visual.pack(anchor="w", padx=UI['PAD_INDENT'], pady=2)
+    if BOT_SETTINGS.get('alarm_visual_enabled', True): switch_visual.select()
+
+    ctk.CTkLabel(tab_alarm, text="↳ Detecta criaturas/players não-seguros na tela.", **UI['HINT']).pack(anchor="w", padx=45)
+
     # Distância
     ctk.CTkLabel(frame_alarm, text="Distância (SQM):", **UI['BODY']).grid(row=0, column=0, sticky="e", padx=10, pady=UI['PAD_ITEM'])
     dist_vals = ["1 SQM", "3 SQM", "5 SQM", "8 SQM (Padrão)", "Tela Toda"]
@@ -1784,7 +1825,7 @@ def open_settings():
     combo_floor.set(BOT_SETTINGS['alarm_floor'])
 
     # Divisória
-    ctk.CTkFrame(tab_alarm, height=1, fg_color="#444").pack(fill="x", padx=10, pady=10)
+    #ctk.CTkFrame(tab_alarm, height=1, fg_color="#444").pack(fill="x", padx=10, pady=10)
 
     # --- HP ALARM ---
     frame_hp = ctk.CTkFrame(tab_alarm, fg_color="transparent")
@@ -1813,19 +1854,12 @@ def open_settings():
     toggle_hp_alarm() # Aplica estado inicial
 
     # Divisória
-    ctk.CTkFrame(tab_alarm, height=1, fg_color="#444").pack(fill="x", padx=10, pady=10)
+    #ctk.CTkFrame(tab_alarm, height=1, fg_color="#444").pack(fill="x", padx=10, pady=10)
 
-    # --- VISUAL ALARM ---
-    ctk.CTkLabel(tab_alarm, text="Monitorar Criaturas (Visual):", **UI['H1']).pack(anchor="w", padx=10, pady=(0,5))
-
-    switch_visual = ctk.CTkSwitch(tab_alarm, text="Alarme Visual", command=lambda: None, progress_color="#00D9FF", **UI['BODY'])
-    switch_visual.pack(anchor="w", padx=UI['PAD_INDENT'], pady=2)
-    if BOT_SETTINGS.get('alarm_visual_enabled', True): switch_visual.select()
-
-    ctk.CTkLabel(tab_alarm, text="↳ Detecta criaturas/players não-seguros na tela.", **UI['HINT']).pack(anchor="w", padx=45)
+    
 
     # Divisória
-    ctk.CTkFrame(tab_alarm, height=1, fg_color="#444").pack(fill="x", padx=10, pady=10)
+    #ctk.CTkFrame(tab_alarm, height=1, fg_color="#444").pack(fill="x", padx=10, pady=10)
 
     # --- CHAT ALARM ---
     ctk.CTkLabel(tab_alarm, text="Monitorar Chat (Default):", **UI['H1']).pack(anchor="w", padx=10, pady=(0,5))
@@ -1839,8 +1873,6 @@ def open_settings():
     switch_gm_chat = ctk.CTkSwitch(tab_alarm, text="Pausar se GM falar", command=toggle_chat_opts, progress_color="#FF0000", **UI['BODY'])
     switch_gm_chat.pack(anchor="w", padx=UI['PAD_INDENT'], pady=2)
     if BOT_SETTINGS.get('alarm_chat_gm', True): switch_gm_chat.select()
-
-    ctk.CTkLabel(tab_alarm, text="↳ Ignora suas próprias mensagens.", **UI['HINT']).pack(anchor="w", padx=45)
 
     def save_alarm():
         try:
@@ -2463,6 +2495,162 @@ def on_fisher_toggle():
         update_fisher_hud([])
 
 # ==============================================================================
+# MINIMAP VISUALIZATION FUNCTIONS
+# ==============================================================================
+
+def create_minimap_panel():
+    """Create collapsible minimap panel in main window."""
+    global minimap_panel_expanded, minimap_label, minimap_visualizer
+
+    # Container frame
+    frame_minimap_container = ctk.CTkFrame(
+        main_frame,
+        fg_color="transparent",
+        border_color="#303030",
+        border_width=1,
+        corner_radius=6
+    )
+    frame_minimap_container.pack(padx=10, pady=5, fill="x")
+
+    # Header with toggle button
+    frame_minimap_header = ctk.CTkFrame(frame_minimap_container, fg_color="transparent")
+    frame_minimap_header.pack(fill="x", padx=5, pady=5)
+
+    lbl_minimap_title = ctk.CTkLabel(
+        frame_minimap_header,
+        text="🗺️ Minimap Cavebot",
+        font=("Verdana", 11, "bold"),
+        text_color="#00BFFF"
+    )
+    lbl_minimap_title.pack(side="left")
+
+    btn_toggle_minimap = ctk.CTkButton(
+        frame_minimap_header,
+        text="▼ Expandir",
+        width=100,
+        height=24,
+        command=lambda: toggle_minimap_panel(frame_minimap_content, btn_toggle_minimap)
+    )
+    btn_toggle_minimap.pack(side="right")
+
+    # Content frame (initially hidden)
+    frame_minimap_content = ctk.CTkFrame(frame_minimap_container, fg_color="#1a1a1a")
+
+    # Label to display minimap image
+    minimap_label = ctk.CTkLabel(
+        frame_minimap_content,
+        text="⏳ Aguardando Cavebot...",
+        font=("Verdana", 10),
+        text_color="#888888"
+    )
+    minimap_label.pack(padx=10, pady=10)
+
+    # Initialize visualizer
+    from utils.realtime_minimap import RealtimeMinimapVisualizer
+    from utils.visualize_path import COLOR_PALETTE
+    minimap_visualizer = RealtimeMinimapVisualizer(
+        MAPS_DIRECTORY,
+        WALKABLE_COLORS,
+        COLOR_PALETTE
+    )
+
+    return frame_minimap_container
+
+def toggle_minimap_panel(content_frame, toggle_button):
+    """Expand/collapse minimap panel."""
+    global minimap_panel_expanded
+
+    if minimap_panel_expanded:
+        content_frame.pack_forget()
+        toggle_button.configure(text="▼ Expandir")
+        minimap_panel_expanded = False
+    else:
+        content_frame.pack(fill="both", expand=True, padx=5, pady=5)
+        toggle_button.configure(text="▲ Colapsar")
+        minimap_panel_expanded = True
+
+def update_minimap_loop():
+    """Auto-scheduled loop to update minimap every 3 seconds."""
+    global minimap_label, minimap_image_ref, minimap_visualizer, cavebot_instance
+
+    # Check if widget exists
+    if not minimap_label or not minimap_label.winfo_exists():
+        return
+
+    try:
+        # Check if Cavebot is active
+        if not cavebot_instance or not switch_cavebot.get():
+            minimap_label.configure(
+                image="",
+                text="⏸️ Cavebot Desativado"
+            )
+            app.after(3000, update_minimap_loop)
+            return
+
+        # Collect Cavebot data (thread-safe)
+        try:
+            player_pos = get_player_pos(pm, base_addr)
+
+            with cavebot_instance._waypoints_lock:
+                all_waypoints = cavebot_instance._waypoints.copy()
+                current_idx = cavebot_instance._current_index
+
+            if not all_waypoints:
+                minimap_label.configure(
+                    image="",
+                    text="📍 Nenhum Waypoint Configurado"
+                )
+                app.after(3000, update_minimap_loop)
+                return
+
+            target_wp = all_waypoints[current_idx]
+            global_route = cavebot_instance.current_global_path.copy() if cavebot_instance.current_global_path else None
+            local_cache = cavebot_instance.local_path_cache.copy() if cavebot_instance.local_path_cache else None
+
+        except Exception as e:
+            print(f"[Minimap] Erro ao coletar dados: {e}")
+            app.after(3000, update_minimap_loop)
+            return
+
+        # Generate minimap image
+        pil_img = minimap_visualizer.generate_minimap(
+            player_pos,
+            target_wp,
+            all_waypoints,
+            global_route,
+            local_cache
+        )
+
+        # Limit max size to prevent breaking layout
+        max_width = 600
+        max_height = 400
+        if pil_img.width > max_width or pil_img.height > max_height:
+            ratio = min(max_width / pil_img.width, max_height / pil_img.height)
+            new_size = (int(pil_img.width * ratio), int(pil_img.height * ratio))
+            pil_img = pil_img.resize(new_size, Image.LANCZOS)
+
+        # Create CTkImage
+        ctk_img = ctk.CTkImage(
+            light_image=pil_img,
+            dark_image=pil_img,
+            size=(pil_img.width, pil_img.height)
+        )
+
+        # Update widget
+        minimap_label.configure(image=ctk_img, text="")
+        minimap_image_ref = ctk_img  # Keep reference for garbage collection
+
+    except Exception as e:
+        print(f"[Minimap] Erro ao atualizar: {e}")
+        minimap_label.configure(
+            image="",
+            text=f"❌ Erro: {str(e)[:50]}"
+        )
+
+    # Schedule next update
+    app.after(3000, update_minimap_loop)
+
+# ==============================================================================
 # 7. CONSTRUÇÃO DA INTERFACE GRÁFICA (GUI LAYOUT)
 # ==============================================================================
 
@@ -2554,8 +2742,8 @@ frame_div = ctk.CTkFrame(frame_stats, height=1, fg_color="#303030")
 frame_div.grid(row=1, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 5))
 
 # LINHA 2 REGEN
-lbl_regen = ctk.CTkLabel(frame_stats, text="🍖 --:--", font=("Verdana", 11, "bold"), text_color="gray")
-lbl_regen.grid(row=2, column=0, padx=5, pady=2, sticky="w")
+lbl_regen = ctk.CTkLabel(frame_stats, text="🍖 --:--", font=("Verdana", 10, "bold"), text_color="gray")
+lbl_regen.grid(row=2, column=0, padx=10, pady=2, sticky="w")
 
 # LINHA 3: RECURSOS (Gold + Regen Stock)
 # Usamos um frame container para organizar Esquerda vs Direita
@@ -2563,7 +2751,7 @@ frame_resources = ctk.CTkFrame(frame_stats, fg_color="transparent")
 frame_resources.grid(row=3, column=0, columnspan=2, sticky="ew", padx=10, pady=2)
 
 # Coluna Esquerda: Regen Stock
-lbl_regen_stock = ctk.CTkLabel(frame_resources, text="🍖 Stock --", font=("Verdana", 10))
+lbl_regen_stock = ctk.CTkLabel(frame_resources, text="🍖 --", font=("Verdana", 10))
 lbl_regen_stock.pack(side="left", padx=(0, 10))
 
 # Coluna Direita: Gold (Usamos um sub-frame ou pack side right para alinhar no fim)
@@ -2646,6 +2834,9 @@ canvas = FigureCanvasTkAgg(fig, master=frame_graph)
 widget = canvas.get_tk_widget()
 widget.pack(fill="both", expand=True, padx=1, pady=2)
 
+# MINIMAP PANEL
+create_minimap_panel()
+
 # LOG
 txt_log = ctk.CTkTextbox(main_frame, height=120, font=("Consolas", 11), fg_color="#151515", text_color="#00FF00", border_width=1)
 txt_log.pack(side="bottom", fill="x", padx=5, pady=5, expand=True)
@@ -2672,6 +2863,9 @@ threading.Thread(target=start_cavebot_thread, daemon=True).start()
 threading.Thread(target=auto_recorder_loop, daemon=True).start()
 
 update_stats_visibility()
+
+# Iniciar loop de atualização do minimap
+app.after(3000, update_minimap_loop)
 
 log("🚀 Iniciado.")
 app.mainloop()

@@ -336,7 +336,7 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                                 unequipped_item_id = unequip_hand(pm, base_addr, slot_enum, dest_container_idx=0, dest_slot=dest_slot_idx)
                                 unequipped_items[slot_enum] = (unequipped_item_id, 0)
                                 log_msg(f"🔓 Desarmou {slot_enum}: Item {unequipped_item_id}")
-                                time.sleep(0.3)
+                                time.sleep(1.2)
 
                             # PHASE 2: Equip blank runes
                             active_runes = []
@@ -358,7 +358,7 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                                     "restorable_item": restorable_item,
                                     "orig_dest_slot": orig_dest_slot  # Track where the weapon was stored
                                 })
-                                time.sleep(0.6)
+                                time.sleep(1.2)
 
                             if active_runes:
                                 log_msg(f"🪄 Pressionando {hotkey_str}...")
@@ -378,7 +378,7 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                                     pos_dest = packet.get_container_pos(info['origin_idx'], 0)
                                     packet.move_item(pm, info['hand_pos'], pos_dest, rune_id_to_move, 1)
                                     log_msg(f"📦 Devolvido: Runa {rune_id_to_move} → Container {info['origin_idx']}")
-                                    time.sleep(1.0)  # Aguarda servidor processar movimento
+                                    time.sleep(1.5)  # Aguarda servidor processar movimento
 
                                 # PHASE 5: Re-equip ALL original items AFTER all runes are returned
                                 # Separar em outra fase garante que nenhum item fica equipado enquanto

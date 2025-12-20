@@ -69,6 +69,7 @@ class Cavebot:
         self.local_path_index = 0  # Qual passo estamos executando
         self.cached_speed = 250    # Cache de velocidade para não ler battle list todo frame
         self.last_speed_check = 0  # Timestamp da última leitura de speed
+        self.last_floor_change_time = 0  # Timestamp do último floor change (subir/descer andar)
 
     def load_waypoints(self, waypoints_list):
         """
@@ -202,6 +203,16 @@ class Cavebot:
         if time.time() - self.last_action_time < self.walk_delay:
             return
 
+        # NOVO: Cooldown após mudança de andar (floor change)
+        # Aguarda 1 segundo após subir/descer para permitir combate no novo andar
+        FLOOR_CHANGE_COOLDOWN = 1.0
+        if time.time() - self.last_floor_change_time < FLOOR_CHANGE_COOLDOWN:
+            if DEBUG_PATHFINDING:
+                remaining = FLOOR_CHANGE_COOLDOWN - (time.time() - self.last_floor_change_time)
+                print(f"[Cavebot] ⏸️ Cooldown pós-floor-change: {remaining:.1f}s")
+            self.last_action_time = time.time()
+            return
+
         # 1. Atualizar Posição e Mapa
         px, py, pz = get_player_pos(self.pm, self.base_addr)
         player_id = self.pm.read_int(self.base_addr + OFFSET_PLAYER_ID)
@@ -261,6 +272,11 @@ class Cavebot:
                     if DEBUG_PATHFINDING:
                         print(f"[🪜 FLOOR CHANGE] ✓ Adjacente ao {ftype}, executando...")
                     self._handle_special_tile(fx, fy, ftype, fid, px, py, pz)
+
+                    # NOVO: Registra timestamp do floor change para cooldown
+                    self.last_floor_change_time = time.time()
+                    if DEBUG_PATHFINDING:
+                        print(f"[🪜 FLOOR CHANGE] ⏳ Aguardando 1s para permitir combate no novo andar")
 
                     # Após uma interação de andar/usar, a posição global pode ter mudado (ex: subir de andar).
                     npx, npy, npz = get_player_pos(self.pm, self.base_addr)

@@ -25,48 +25,61 @@ from config import (
 
 def get_player_speed(pm, base_addr) -> int:
     """
-    Escaneia a Battle List (endereço fixo) procurando pelo próprio player 
+    Escaneia a Battle List (endereço fixo) procurando pelo próprio player
     para ler o Speed atual.
-    
+
     Args:
         pm: Instância do Pymem
         base_addr: Endereço base do módulo Tibia
-        
+
     Returns:
-        int: Velocidade atual do player (ex: 220). 
+        int: Velocidade atual do player (ex: 220).
              Retorna 220 (padrão) se não encontrar.
     """
     try:
         # 1. Ler o ID do Player Logado
-        player_id = pm.read_int(base_addr + OFFSET_PLAYER_ID)
-        
+        try:
+            player_id = pm.read_int(base_addr + OFFSET_PLAYER_ID)
+        except Exception as e:
+            print(f"[PlayerCore] Failed to read player ID: {e}")
+            return 220
+
         if player_id == 0:
-            return 220 # Não logado ou erro
-            
+            return 220  # Não logado ou erro
+
         # 2. Endereço inicial da Battle List
         battle_list_addr = base_addr + BATTLELIST_BEGIN_ADDRESS
-        
-        # 3. Iterar pela lista
+
+        # 3. Iterar pela lista com bounds checking
         for i in range(MAX_CREATURES):
             # Calcula endereço da criatura atual
             creature_addr = battle_list_addr + (i * STEP_SIZE)
-            
-            # Lê o ID (Offset 0x00 da estrutura da criatura)
-            creature_id = pm.read_int(creature_addr)
-            
-            # Se for o nosso player
-            if creature_id == player_id:
-                speed = pm.read_int(creature_addr + OFFSET_SPEED)
-                return speed
-            
-            # Otimização: ID 0 indica fim da lista válida (em listas contíguas)
-            # Nota: Em alguns servidores a lista pode ter buracos, se tiver dúvidas, remova este if.
+
+            # Tenta ler o ID da criatura (com proteção contra endereço inválido)
+            try:
+                creature_id = pm.read_int(creature_addr)
+            except Exception as e:
+                # Se falhar ao ler creature_id, significa que chegamos ao fim da memória válida
+                print(f"[PlayerCore] Battle list read failed at slot {i}: {e}")
+                break
+
+            # Otimização: ID 0 indica fim da lista válida
             if creature_id == 0:
                 break
-                
+
+            # Se for o nosso player
+            if creature_id == player_id:
+                try:
+                    speed = pm.read_int(creature_addr + OFFSET_SPEED)
+                    return speed
+                except Exception as e:
+                    # Falha ao ler speed apesar de encontrar o player ID
+                    print(f"[PlayerCore] Could not read speed at 0x{creature_addr + OFFSET_SPEED:X}: {e}")
+                    return 220
+
     except Exception as e:
         print(f"[PlayerCore] Erro ao ler speed: {e}")
-        
+
     # Valor de fallback seguro (velocidade normal de char lvl baixo)
     return 220
 

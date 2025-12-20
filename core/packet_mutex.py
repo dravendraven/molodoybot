@@ -109,7 +109,7 @@ class PacketMutex:
                     # Mesmo grupo - reutiliza contexto
                     self._reused_context = True
                     self.acquired = True
-                    print(f"[PACKET-MUTEX] 🔄 {self.module_name.upper()} reutilizando mutex de {self._current_holder.upper()} (grupo: {current_group})")
+                    #print(f"[PACKET-MUTEX] 🔄 {self.module_name.upper()} reutilizando mutex de {self._current_holder.upper()} (grupo: {current_group})")
                     return self
 
         # Senão, adquire normalmente
@@ -200,13 +200,13 @@ class PacketMutex:
                         self.acquired = True
                         self._wait_queue.pop(self.module_name, None)
 
-                        print(f"[PACKET-MUTEX] 🔒 {self.module_name.upper()} adquiriu mutex")
+                        #print(f"[PACKET-MUTEX] 🔒 {self.module_name.upper()} adquiriu mutex")
                         return True
 
                     # Verifica timeout
                     if time.time() - start_time > self.timeout:
                         self._wait_queue.pop(self.module_name, None)
-                        print(f"[PACKET-MUTEX] ⏱️ {self.module_name.upper()} TIMEOUT aguardando mutex")
+                        #print(f"[PACKET-MUTEX] ⏱️ {self.module_name.upper()} TIMEOUT aguardando mutex")
                         return False
 
                     # Não bloqueante
@@ -238,7 +238,7 @@ class PacketMutex:
 
                 # Calcula tempo que manteve o lock
                 elapsed = time.time() - (self._action_start_time or time.time())
-                print(f"[PACKET-MUTEX] 🔓 {self.module_name.upper()} liberou mutex (duração: {elapsed:.2f}s)")
+                #print(f"[PACKET-MUTEX] 🔓 {self.module_name.upper()} liberou mutex (duração: {elapsed:.2f}s)")
                 return True
 
         print(f"[PACKET-MUTEX] ⚠️ {self.module_name.upper()} tentou liberar mutex que não possui")
