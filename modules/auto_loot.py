@@ -7,6 +7,7 @@ from core import packet
 from core.packet_mutex import PacketMutex
 from database import foods_db
 from core.map_core import get_player_pos
+from core.bot_state import state
 # NOTA: auto_stack_items é importado LAZY dentro da função run_auto_loot()
 # para evitar circular import com stacker.py
 
@@ -120,11 +121,17 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
     my_containers_count = get_cfg('loot_containers', 2)
     dest_container_index = get_cfg('loot_dest', 0)
     drop_food_if_full = get_cfg('loot_drop_food', False)
-    
+
     containers = scan_containers(pm, base_addr)
     limit_containers = int(my_containers_count)
-    
-    if len(containers) <= limit_containers: return None
+
+    # Se não há loot para coletar, marca state como sem loot
+    if len(containers) <= limit_containers:
+        state.set_loot_state(False)
+        return None
+
+    # NOVO: Marca que há loot sendo processado
+    state.set_loot_state(True)
 
     dest_idx, dest_slot = get_best_loot_destination(containers, limit_containers, dest_container_index)
     is_backpack_full = (dest_idx is None)
@@ -150,6 +157,7 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
             with PacketMutex("auto_loot"):
                 packet.use_item(pm, bag_pos, bag_item_ref.id, index=cont.index)
             time.sleep(0.6)
+            state.set_loot_state(False)
             return "BAG"
 
         # VARRER ITENS DO CORPO
@@ -173,22 +181,26 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
                     if drop_food_if_full:
                         food_name = foods_db.get_food_name(item.id)
                         print(f"🤢 Barriga cheia! Descartando {food_name}...")
-                        
+
                         px, py, pz = get_player_pos(pm, base_addr)
                         pos_ground = {'x': px, 'y': py, 'z': pz}
 
                         with PacketMutex("auto_loot"):
                             packet.move_item(pm, food_pos, pos_ground, item.id, item.count)
+                        state.set_loot_state(False)
                         return ("DROP_FOOD", item.id, item.count)
                     else:
+                        state.set_loot_state(False)
                         return "EAT_FULL"
 
+                state.set_loot_state(False)
                 return ("EAT", item.id)
 
             # --- AUTO LOOT ---
             if item.id in LOOT_IDS:
                 if is_backpack_full:
                     print(f"⚠️ BACKPACK CHEIA! Não consigo pegar {item.id}")
+                    state.set_loot_state(False)
                     return "FULL_BP_ALARM"
 
                 print(f"💰 Loot: ID {item.id} -> BP {dest_idx} Slot {dest_slot}")
@@ -208,6 +220,7 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
                                  mutex_context=loot_ctx)
 
                 dest_slot += 1
+                state.set_loot_state(False)
                 return ("LOOT", item.id, item.count)
 
             # --- AUTO DROP ---
@@ -220,6 +233,7 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
                 with PacketMutex("auto_loot"):
                     packet.move_item(pm, pos_from, pos_ground, item.id, item.count)
                 time.sleep(0.3)
+                state.set_loot_state(False)
                 return "DROP"
 
     # NOVO: Fecha todos os containers de loot processados
@@ -227,4 +241,5 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
         packet.close_container(pm, cont.index)
         time.sleep(random.uniform(0.5, 1))
 
+    state.set_loot_state(False)
     return None

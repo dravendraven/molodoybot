@@ -56,6 +56,7 @@ class BotState:
         self._is_in_combat: bool = False
         self._has_open_loot: bool = False
         self._last_combat_time: float = 0.0
+        self._is_runemaking: bool = False
     
     # =========================================================================
     # CONEXÃO
@@ -265,6 +266,22 @@ class BotState:
         with self._lock:
             self._has_open_loot = has_loot
 
+    @property
+    def is_runemaking(self) -> bool:
+        """Retorna True se runemaker está executando ciclo."""
+        with self._lock:
+            return self._is_runemaking
+
+    def set_runemaking(self, value: bool):
+        """
+        Atualiza estado de runemaking.
+
+        Args:
+            value: True se runemaker está executando, False caso contrário
+        """
+        with self._lock:
+            self._is_runemaking = value
+
     # =========================================================================
     # MÉTODOS DE CONVENIÊNCIA
     # =========================================================================
@@ -310,6 +327,7 @@ class BotState:
                 'is_in_combat': self._is_in_combat,
                 'has_open_loot': self._has_open_loot,
                 'last_combat_time': self._last_combat_time,
+                'is_runemaking': self._is_runemaking,
             }
     
     def reset(self):
@@ -328,6 +346,7 @@ class BotState:
             self._is_in_combat = False
             self._has_open_loot = False
             self._last_combat_time = 0.0
+            self._is_runemaking = False
             # NÃO reseta _bot_running
 
 

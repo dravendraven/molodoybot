@@ -1,7 +1,10 @@
 # modules/cavebot.py
+import random
 import time
 import math
 import threading
+
+
 from config import *
 from core.packet import *
 from core.packet_mutex import PacketMutex
@@ -12,6 +15,12 @@ from core.memory_map import MemoryMap
 from core.inventory_core import find_item_in_containers, find_item_in_equipment # Necessário para achar a corda
 from database.tiles_config import ROPE_ITEM_ID, SHOVEL_ITEM_ID
 from core.bot_state import state
+from core.global_map import GlobalMap
+from core.player_core import get_player_speed
+
+
+COOLDOWN_AFTER_COMBAT = random.uniform(2.5, 5)  # 1s a 1.5s de cooldown após combate
+GLOBAL_RECALC_LIMIT = 5
 
 # Mapeamento de Delta (dx, dy) para Opcode do Packet
 MOVE_OPCODES = {
@@ -34,6 +43,10 @@ class Cavebot:
         self.memory_map = MemoryMap(pm, base_addr)
         self.analyzer = MapAnalyzer(self.memory_map)
         self.walker = AStarWalker(self.analyzer, debug=DEBUG_PATHFINDING)
+        
+        # [NAVEGAÇÃO HIBRIDA] Inicializa o "GPS" (Global)
+        self.global_map = GlobalMap(MAPS_DIRECTORY, WALKABLE_COLORS)
+        self.current_global_path = [] # Lista de nós [(x,y,z), ...] da rota atual
 
         # Thread-safe waypoints
         self._waypoints_lock = threading.Lock()
@@ -43,12 +56,19 @@ class Cavebot:
 
         self.enabled = False
         self.last_action_time = 0
-        self.walk_delay = 0.5 # 500ms entre passos
 
         # Detecção de stuck
         self.stuck_counter = 0
         self.last_known_pos = None
         self.stuck_threshold = 10  # 5 segundos (10 * 0.5s)
+        self.global_recalc_counter = 0 # Para acionar o GlobalMap
+
+        # --- CONFIGURAÇÃO DE FLUIDEZ (NOVO) ---
+        self.walk_delay = 0.4 # Valor base, será sobrescrito dinamicamente
+        self.local_path_cache = [] # Armazena a lista de passos [(dx,dy), ...]
+        self.local_path_index = 0  # Qual passo estamos executando
+        self.cached_speed = 250    # Cache de velocidade para não ler battle list todo frame
+        self.last_speed_check = 0  # Timestamp da última leitura de speed
 
     def load_waypoints(self, waypoints_list):
         """
@@ -84,16 +104,51 @@ class Cavebot:
         # Thread-safe assignment
         with self._waypoints_lock:
             self._waypoints = validated
-            self._current_index = 0
-            self._direction = 1  # Sempre começa indo para frente
+
+            # ✅ NOVO: Inicialização inteligente baseada em waypoint mais próximo
+            if validated:
+                try:
+                    px, py, pz = get_player_pos(self.pm, self.base_addr)
+
+                    closest_idx = 0
+                    closest_dist = float('inf')
+
+                    for i, wp in enumerate(validated):
+                        # Distância Euclidiana (mesma usada no run_cycle linha 195)
+                        dist = math.sqrt((wp['x'] - px)**2 + (wp['y'] - py)**2)
+
+                        # Penaliza waypoints em andares diferentes
+                        if wp['z'] != pz:
+                            dist += 1000  # Prefer same floor
+
+                        if dist < closest_dist:
+                            closest_dist = dist
+                            closest_idx = i
+
+                    self._current_index = closest_idx
+                    self._direction = 1  # Sempre FORWARD e ciclico
+
+                    print(f"[Cavebot] 🎯 Inicialização inteligente: WP mais próximo é #{closest_idx} (Dist: {closest_dist:.1f} SQM)")
+                    print(f"[Cavebot]    Navegação: #{closest_idx} → #{closest_idx + 1} → ... → #{len(validated) - 1} → #0 → #1 ... (FORWARD ciclico)")
+
+                except Exception as e:
+                    # Fallback para comportamento padrão se houver erro
+                    print(f"[Cavebot] ⚠️ Erro ao calcular waypoint inicial: {e}")
+                    self._current_index = 0
+                    self._direction = 1
+            else:
+                self._current_index = 0
+                self._direction = 1
 
         print(f"[Cavebot] Carregados {len(validated)} waypoints válidos de {len(waypoints_list)} totais")
 
     def start(self):
         self.enabled = True
+        print("[Cavebot] Iniciado.")
 
     def stop(self):
         self.enabled = False
+        print("[Cavebot] Parado.")
 
     def run_cycle(self):
         """Deve ser chamado no loop principal do bot."""
@@ -112,6 +167,13 @@ class Cavebot:
             self.last_action_time = time.time()
             return
 
+        # NOVO: Pausa enquanto runemaker está ativo
+        if state.is_runemaking:
+            self.last_action_time = time.time()
+            if DEBUG_PATHFINDING:
+                print(f"[Cavebot] ⏸️ PAUSA: Runemaker ativo")
+            return
+
         # NOVO: Pausa para atividades de maior prioridade
         # Aguarda combate terminar E auto-loot finalizar completamente
         if state.is_in_combat or state.has_open_loot:
@@ -127,7 +189,7 @@ class Cavebot:
 
         # NOVO: Cooldown de 1s após combate/loot para estabilização
         # Evita race condition: matar criatura → delay 1s → abrir loot → próximo combate
-        if time.time() - state.last_combat_time < 1.0:
+        if time.time() - state.last_combat_time < COOLDOWN_AFTER_COMBAT:
             if DEBUG_PATHFINDING:
                 remaining = 1.0 - (time.time() - state.last_combat_time)
                 print(f"[Cavebot] ⏸️ Cooldown pós-combate: {remaining:.1f}s")
@@ -169,6 +231,8 @@ class Cavebot:
             print(f"[Cavebot] ✅ Chegou no WP {current_index}: ({wp['x']}, {wp['y']}, {wp['z']})")
             with self._waypoints_lock:
                 self._advance_waypoint()
+                self.current_global_path = []
+                self.last_lookahead_idx = -1
             return
 
         # ======================================================================
@@ -214,118 +278,270 @@ class Cavebot:
 
                     if DEBUG_PATHFINDING:
                         print(f"[🪜 FLOOR CHANGE] Longe do {ftype}, calculando caminho para ({target_fx:+d}, {target_fy:+d})...")
-
-                    # A escada está longe. Usa A* para chegar nela (ou ao adjacente definido).
-                    step = self.walker.get_next_step(target_fx, target_fy)
-                    if step:
-                        if DEBUG_PATHFINDING:
-                            target_props = self.analyzer.get_tile_properties(step[0], step[1])
-                            print(f"[🚶 WALKER] Movendo ({step[0]:+d}, {step[1]:+d}) [tipo={target_props['type']}, walkable={target_props['walkable']}]")
-                        self._move_step(step[0], step[1])
-                    else:
-                        print(f"[Cavebot] ⚠️ Caminho para {ftype} bloqueado!")
-                        if DEBUG_PATHFINDING:
-                            # Mostra tiles ao redor para debug
-                            print(f"[DEBUG] Tiles ao redor do player:")
-                            for dx, dy in [(0,-1), (1,0), (0,1), (-1,0)]:
-                                props = self.analyzer.get_tile_properties(dx, dy)
-                                print(f"  ({dx:+2},{dy:+2}): {props['type']}, walkable={props['walkable']}")
+                    abs_ladder_x = px + target_fx
+                    abs_ladder_y = py + target_fy
+                    self._navigate_hybrid(abs_ladder_x, abs_ladder_y, pz, px, py)
             else:
                 print(f"[Cavebot] ⚠️ Nenhuma escada/rope encontrada! Z atual={pz}, Z alvo={wp['z']}")
             
             self.last_action_time = time.time()
             return
-
-        # 5. Caminho Normal (A*)
-        target_rel_x = wp['x'] - px
-        target_rel_y = wp['y'] - py
-
-        MAX_VIEW_RANGE = 7  # Limite seguro de leitura de memória
-        dist_axis = max(abs(target_rel_x), abs(target_rel_y))
-        walk_x, walk_y = target_rel_x, target_rel_y
-
-        # Lógica de Horizonte: Se waypoint está muito longe, cria sub-destino na borda visível
-        if dist_axis > MAX_VIEW_RANGE:
-            factor = MAX_VIEW_RANGE / dist_axis
-            walk_x = int(target_rel_x * factor)
-            walk_y = int(target_rel_y * factor)
-            if DEBUG_PATHFINDING:
-                print(f"[🎯 TARGET] WP longe ({target_rel_x:+d}, {target_rel_y:+d}), usando horizonte ({walk_x:+d}, {walk_y:+d})")
-        else:
-            if DEBUG_PATHFINDING:
-                print(f"[🎯 TARGET] Navegando para WP ({walk_x:+d}, {walk_y:+d}), dist={dist:.1f} SQM")
-
-        # Pede o próximo passo ao A*
-        next_step = self.walker.get_next_step(walk_x, walk_y)
-
-        if next_step:
-            dx, dy = next_step
-            target_props = self.analyzer.get_tile_properties(dx, dy)
-            if DEBUG_PATHFINDING:
-                print(f"[🚶 WALKER] Movendo ({dx:+d}, {dy:+d}) [tipo={target_props['type']}, walkable={target_props['walkable']}]")
-            self._move_step(dx, dy)
-        else:
-            # A* falhou - mostrar informações úteis COM MOTIVO DO BLOQUEIO
-            print(f"[Cavebot] ⚠️ Caminho bloqueado para WP #{current_index}")
-            if DEBUG_PATHFINDING:
-                # Mostra tiles cardinais COM MOTIVO de bloqueio
-                print(f"[DEBUG] Tiles adjacentes ao player:")
-                for dx, dy in [(0,-1), (1,0), (0,1), (-1,0)]:
-                    props = self.analyzer.get_tile_properties(dx, dy, debug_reason=True)
-                    status = f"{props['type']:12s} walkable={props['walkable']}"
-
-                    # Se bloqueado, mostra o MOTIVO
-                    if not props['walkable']:
-                        reason = props.get('block_reason', 'UNKNOWN')
-                        items_list = props.get('items', [])
-                        if reason == 'BLOCKING_ID':
-                            blocking_id = props.get('blocking_item_id', '?')
-                            status += f" | 🚫 REASON: {reason} (ID {blocking_id}) | Items: {items_list}"
-                        elif reason == 'AVOID_ID':
-                            blocking_id = props.get('blocking_item_id', '?')
-                            status += f" | ⚠️ REASON: {reason} (ID {blocking_id}) | Items: {items_list}"
-                        elif reason in ['TILE_VAZIO', 'SEM_ITENS']:
-                            status += f" | 🕳️ REASON: {reason}"
-                        else:
-                            status += f" | Items: {items_list}"
-                    else:
-                        # Tile walkable - mostra itens para referência
-                        items_list = props.get('items', [])
-                        if items_list:
-                            status += f" | Items: {items_list}"
-
-                    print(f"  ({dx:+2},{dy:+2}): {status}")
-
-                # Verifica se o próprio target é walkable COM MOTIVO
-                print(f"\n[DEBUG] Target ({walk_x:+d}, {walk_y:+d}):")
-                target_props = self.analyzer.get_tile_properties(walk_x, walk_y, debug_reason=True)
-                status = f"  {target_props['type']:12s} walkable={target_props['walkable']}"
-
-                if not target_props['walkable']:
-                    reason = target_props.get('block_reason', 'UNKNOWN')
-                    items_list = target_props.get('items', [])
-                    if reason == 'BLOCKING_ID':
-                        blocking_id = target_props.get('blocking_item_id', '?')
-                        status += f"\n  🚫 MOTIVO: Item bloqueador ID {blocking_id} está no tile"
-                        status += f"\n  📦 Pilha de itens: {items_list}"
-                    elif reason == 'AVOID_ID':
-                        blocking_id = target_props.get('blocking_item_id', '?')
-                        status += f"\n  ⚠️ MOTIVO: Item 'AVOID' ID {blocking_id} está no tile"
-                        status += f"\n  📦 Pilha de itens: {items_list}"
-                    elif reason == 'TILE_VAZIO':
-                        status += f"\n  🕳️ MOTIVO: Tile não existe na memória (fora do alcance ou não lido)"
-                    elif reason == 'SEM_ITENS':
-                        status += f"\n  🕳️ MOTIVO: Tile existe mas lista de itens está vazia"
-                else:
-                    items_list = target_props.get('items', [])
-                    status += f"\n  📦 Pilha de itens: {items_list}"
-
-                print(status)
-
+    
+        # ======================================================================
+        # 5. NAVEGAÇÃO HÍBRIDA (Substitui o antigo "Caminho Normal")
+        # ======================================================================
+        # Chama a função que integra GlobalMap e Local A*
+        self._navigate_hybrid(wp['x'], wp['y'], wp['z'], px, py)
+        
         self.last_action_time = time.time()
-
-        # Detecção de Stuck (player parado no mesmo tile)
+        
+        # Detecção de Stuck Geral (player parado no mesmo tile)
         self._check_stuck(px, py, pz, current_index)
+
+    def _navigate_hybrid(self, dest_x, dest_y, dest_z, my_x, my_y):
+        """
+        Decide se usa rota Global ou Local e move o personagem.
+        """
+        dist_total = math.sqrt((dest_x - my_x)**2 + (dest_y - my_y)**2)
+
+        # A. Decisão: Precisamos de rota Global?
+        # Condições: Distância > 7 SQM ou estamos travados localmente (tentando dar a volta)
+        need_global = False
+        reason = ""
+
+        if not self.current_global_path:
+            if dist_total > 7:
+                need_global = True
+                reason = f"Destino Longe ({dist_total:.1f} sqm)"
+            elif self.global_recalc_counter > 2:
+                need_global = True
+                reason = "Stuck Local (Tentando desvio)"
+        
+        if need_global:
+            print(f"[Nav] 🌍 Calculando Rota Global... Motivo: {reason}")
+            # Ao recalcular global, limpamos o cache local
+            self.local_path_cache = []
+
+            # ===== NOVO: Usar fallback inteligente =====
+            path = self.global_map.get_path_with_fallback(
+                (my_x, my_y, dest_z),
+                (dest_x, dest_y, dest_z),
+                max_offset=2  # Busca até 2 tiles de distância
+            )
+
+            if path:
+                self.current_global_path = path
+                self.global_recalc_counter = 0 # Sucesso, reseta contador
+                self.last_lookahead_idx = -1
+                print(f"[Nav] 🛤️ Rota Global Gerada: {len(path)} nós.")
+            else:
+                print(f"[Nav] ⚠️ GlobalMap não achou rota (nem com fallback). Tentando direto.")
+        
+        # B. Definir o Sub-Destino (Janela Deslizante)
+        # O A* local não consegue ir até o destino final se for longe.
+        # Precisamos dar a ele um alvo visível (~7 sqm).
+        target_local_x, target_local_y = dest_x, dest_y
+
+        if self.current_global_path:
+            # Sincroniza: Onde estou na rota?
+            closest_idx = -1
+            min_dist_path = 9999
+            
+            # Otimização: Busca apenas nos primeiros 40 nós
+            search_limit = min(len(self.current_global_path), 40)
+            for i in range(search_limit):
+                px, py, pz = self.current_global_path[i]
+                d = math.sqrt((px - my_x)**2 + (py - my_y)**2)
+                if d < min_dist_path:
+                    min_dist_path = d
+                    closest_idx = i
+            
+            if closest_idx != -1:
+                # Poda o passado
+                self.current_global_path = self.current_global_path[closest_idx:]
+                # Lookahead: Pega o nó X passos à frente
+                lookahead = min(7, len(self.current_global_path) - 1)
+
+                if lookahead != self.last_lookahead_idx:
+                    print(f"[Nav] 🚶 Seguindo Global: Nó {lookahead}/{len(self.current_global_path)}")
+                    self.last_lookahead_idx = lookahead
+
+                tx, ty, tz = self.current_global_path[lookahead]
+                target_local_x, target_local_y = tx, ty
+            else:
+                # Perdemos a rota, limpa para recalcular
+                print("[Nav] ⚠️ Perdido da rota global. Resetando.")
+                self.current_global_path = []
+        
+        # ============================================================
+        # 3. LÓGICA DE CACHE LOCAL (Prioridade Máxima)
+        # ============================================================
+        
+        if self.local_path_cache:
+            if self.local_path_index < len(self.local_path_cache):
+                dx, dy = self.local_path_cache[self.local_path_index]
+                
+                # [CRÍTICO] Checagem de Segurança em Tempo Real
+                # O cache diz para ir, mas verificamos AGORA se o tile continua livre.
+                # Isso previne bater em Magic Walls ou Players que apareceram depois do cálculo.
+                props = self.analyzer.get_tile_properties(dx, dy)
+                
+                if props['walkable']:
+                    # Caminho livre! Executa passo fluido.
+                    self._execute_smooth_step(dx, dy)
+                    self.local_path_index += 1
+                    return
+                else:
+                    # Obstáculo dinâmico detectado! O cache "mentiu". Invalida e recalcula.
+                    # print("[Nav] ⚠️ Obstáculo dinâmico (MW/Player) invalidou cache.")
+                    self.local_path_cache = []
+            else:
+                # Cache esgotado
+                self.local_path_cache = []
+
+
+        # ============================================================
+        # 4. CÁLCULO DE NOVA ROTA LOCAL (Se não houver cache)
+        # ============================================================
+        # C. Execução Local (A* Walker)
+        # Calcula coordenadas relativas para o Walker
+        rel_x = target_local_x - my_x
+        rel_y = target_local_y - my_y
+
+        # ===== NOVO: LIMITAR DISTÂNCIA DO A* =====
+        # Se destino está muito longe e não temos rota global,
+        # usa navegação por aproximação com sub-destinos incrementais
+        MAX_LOCAL_ASTAR_DIST = 7
+        dist_to_target = math.sqrt(rel_x**2 + rel_y**2)
+
+        if dist_to_target > MAX_LOCAL_ASTAR_DIST and not self.current_global_path:
+            # Normaliza direção
+            norm_x = rel_x / dist_to_target
+            norm_y = rel_y / dist_to_target
+
+            # Sub-destino a 7 SQM na direção correta
+            rel_x = int(norm_x * MAX_LOCAL_ASTAR_DIST)
+            rel_y = int(norm_y * MAX_LOCAL_ASTAR_DIST)
+
+            if DEBUG_PATHFINDING:
+                print(f"[Nav] 📍 Destino longe ({dist_to_target:.1f} sqm), usando sub-destino ({rel_x}, {rel_y})")
+        
+        full_path = self.walker.get_full_path(rel_x, rel_y)
+
+        if full_path:
+            # Enche o cache!
+            self.local_path_cache = full_path
+            self.local_path_index = 0
+            
+            # Executa o primeiro passo imediatamente
+            dx, dy = self.local_path_cache[0]
+            self._execute_smooth_step(dx, dy)
+            self.local_path_index += 1
+            
+            if self.global_recalc_counter > 0:
+                print(f"[Nav] ✓ Movimento local com sucesso. Resetando stuck.")
+                self.global_recalc_counter = 0
+        else:
+            # Falha Local
+            self.global_recalc_counter += 1
+            print(f"[Nav] ⚠️ Bloqueio Local! ({self.global_recalc_counter}/{GLOBAL_RECALC_LIMIT})")
+            
+            if self.global_recalc_counter >= GLOBAL_RECALC_LIMIT:
+                self._handle_hard_stuck(dest_x, dest_y, dest_z, my_x, my_y)
+
+        # # Pede o próximo passo
+        # step = self.walker.get_next_step(rel_x, rel_y)
+            
+        # if step:
+        #     # Caminho Livre!
+        #     dx, dy = step
+        #     self._move_step(dx, dy)
+        #     # Sucesso no movimento local reduz a frustração global
+        #     if self.global_recalc_counter > 0:
+        #         print(f"[Nav] ✓ Movimento local com sucesso. Resetando stuck.")
+        #         self.global_recalc_counter -= 1
+        # else:
+        #     # D. Tratamento de Bloqueio (Local Falhou)
+        #     print(f"[Nav] Caminho Local Bloqueado.")
+        #     self.global_recalc_counter += 1
+        #     print(f"[Nav] ⚠️ Bloqueio Local! ({self.global_recalc_counter}/{GLOBAL_RECALC_LIMIT})")
+
+        #     # Se falhar muitas vezes localmente, assume "Hard Stuck" (ex: player trapando)
+        #     if self.global_recalc_counter >= GLOBAL_RECALC_LIMIT:
+        #         self._handle_hard_stuck(dest_x, dest_y, dest_z, my_x, my_y)
+
+    def _execute_smooth_step(self, dx, dy):
+        """
+        Executa um passo e calcula o delay exato para permitir Pre-Move.
+        Isso garante que o próximo pacote seja enviado antes do char parar.
+        """
+        # 1. Envia o pacote de movimento
+        self._move_step(dx, dy)
+        
+        # 2. Atualiza cache de velocidade (a cada 2s)
+        if time.time() - self.last_speed_check > 2.0:
+            self.cached_speed = get_player_speed(self.pm, self.base_addr)
+            if self.cached_speed <= 0: self.cached_speed = 220
+            self.last_speed_check = time.time()
+            
+        player_speed = self.cached_speed
+        
+        # 3. Define Custo do Terreno (Tibia 7.72)
+        # Diagonal gasta muito mais tempo que reto em versões antigas
+        # Ajuste: Use 3 para diagonal, 1 para reto. 
+        is_diagonal = (dx != 0 and dy != 0)
+        tile_cost = 4 if is_diagonal else 1
+        
+        # 4. Fórmula de Tempo (ms) = (1000 * cost) / speed
+        duration_ms = (1000 * tile_cost) / player_speed
+        
+        # 5. Buffer de Pre-Move (Antecipação)
+        # Enviamos o próximo comando X ms antes de terminar o passo atual.
+        # 90ms é um valor seguro para ping médio. Se tiver lag, diminua para 50ms.
+        pre_move_buffer = 0.090 
+        
+        wait_time = (duration_ms / 1000.0) - pre_move_buffer
+        
+        # Trava de segurança: Delay mínimo de 50ms para evitar flood se a conta der errada
+        wait_time = max(0.05, wait_time)
+        
+        # Define o tempo em que o bot vai "acordar" para o próximo passo
+        self.last_action_time = time.time() + wait_time
+
+    def _handle_hard_stuck(self, dest_x, dest_y, dest_z, my_x, my_y):
+        """Marca bloqueio no mapa global e força nova rota (Desvio)."""
+        print("[Nav] HARD STUCK! Adicionando bloqueio temporário e recalculando...")
+        
+        block_node = None
+        
+        # Tenta bloquear o próximo nó da rota global
+        if self.current_global_path:
+            for node in self.current_global_path:
+                nx, ny, nz = node
+                # Se for adjacente, é o provável culpado
+                if max(abs(nx - my_x), abs(ny - my_y)) == 1:
+                    block_node = node
+                    break
+        
+        # Fallback: Bloqueia tile na direção do destino
+        if not block_node:
+            dx = 1 if dest_x > my_x else -1 if dest_x < my_x else 0
+            dy = 1 if dest_y > my_y else -1 if dest_y < my_y else 0
+            if dx != 0 or dy != 0:
+                block_node = (my_x + dx, my_y + dy, dest_z)
+
+        if block_node:
+            bx, by, bz = block_node
+            # Adiciona bloqueio de 20s no Global Map
+            print(f"[Nav] 🧱 Adicionando barreira virtual em ({bx}, {by}) por 20s.")
+            self.global_map.add_temp_block(bx, by, bz, duration=20)
+        else:
+            print("[Nav] ❓ Não foi possível identificar o tile de bloqueio.")
+        
+        # Limpa rota para forçar recálculo imediato na próxima volta
+        print("[Nav] 🔄 Forçando recálculo de rota global...")
+        self.current_global_path = []
+        self.global_recalc_counter = 0
 
     def _advance_waypoint(self):
         """
@@ -602,6 +818,7 @@ class Cavebot:
                     if len(self._waypoints) > 1:
                         print(f"[Cavebot] Pulando para próximo waypoint...")
                         self._advance_waypoint()
+                        self.current_global_path = [] # Reseta ao pular
 
                 # Reseta contador
                 self.stuck_counter = 0

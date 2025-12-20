@@ -22,6 +22,11 @@ MY_PLAYER_NAME = "It is Molodoy"
 TELEGRAM_TOKEN = "7238077578:AAELH9lr8dLGJqOE5mZlXmYkpH4fIHDAGAM"
 TELEGRAM_CHAT_ID = "452514119"
 
+# ==============================================================================
+# GUI SETTINGS
+# ==============================================================================
+RELOAD_BUTTON = True  # Exibe botão de reload na interface (desabilitar para release)
+
 TARGET_MONSTERS = ["Rotworm", "Minotaur"]
 SAFE_CREATURES = ["Minotaur", "Rotworm", "Troll", "Wolf", "Deer", "Rabbit", "Spider", "Poison Spider", "Bug", "Rat", "Bear", "Wasp", "Orc"]
 HIT_LOG_ENABLED = False  # Controls writing hits to hits_monitor.txt
@@ -43,6 +48,7 @@ PLAYER_X_ADDRESS = 0x005D16F0
 PLAYER_Y_ADDRESS = 0x005D16EC
 PLAYER_Z_ADDRESS = 0x005D16E8
 
+BATTLELIST_BEGIN_ADDRESS = 0x5C68B0
 TARGET_ID_PTR = 0x1C681C 
 REL_FIRST_ID = 0x94
 STEP_SIZE = 156
@@ -51,7 +57,8 @@ OFFSET_NAME = 4
 OFFSET_X = 0x24       # 36
 OFFSET_Y = 0x28       # 40
 OFFSET_Z = 0x2C       
-OFFSET_HP = 0x84      
+OFFSET_HP = 0x84    
+OFFSET_SPEED = 0x88  
 OFFSET_VISIBLE = 0x8C
 MAX_CREATURES = 250
 
@@ -312,12 +319,10 @@ MAP_DATA_SIZE = TOTAL_TILES * TILE_SIZE
 # ==============================================================================
 # ALARME DE CHAT (CONSOLE)
 # ==============================================================================
-# Endereço base do console (Calculado: 0x0071DD18 - 0x400000)
-OFFSET_CONSOLE_PTR = 0x31DD18 
-
+OFFSET_CONSOLE_PTR = 0x31DD18
 # Offsets relativos ao ponteiro do console
-OFFSET_CONSOLE_MSG = 0x118    # A mensagem em si
-OFFSET_CONSOLE_AUTHOR = 0xF0  # O log/autor ("Fulano says:")
+OFFSET_CONSOLE_MSG = 0x31DE30    # A mensagem em si
+OFFSET_CONSOLE_AUTHOR = 0x31DE08  # O log/autor ("Fulano says:")
 
 # ==============================================================================
 # SEGURANÇA: RETORNO HUMANIZADO (COOL-OFF)
@@ -362,7 +367,19 @@ class AlertType:
 OP_CLOSE_CONTAINER = 0x87  # Packet para fechar containers de loot
 
 # ==============================================================================
-# DEBUG CONFIG (PATHFINDING)
+# DEBUG CONFIG (PATHFINDING & NAVIGATION)
 # ==============================================================================
 # Ativa logs detalhados do A* quando não encontra caminho
 DEBUG_PATHFINDING = True
+
+# Ativa logs detalhados de leituras de memória (tiles distantes)
+DEBUG_MEMORY_MAP = False  # Caro de performance, ativar apenas quando necessário
+
+# Ativa logs detalhados do GlobalMap pathfinding
+DEBUG_GLOBAL_MAP = True  # Ativa logs quando GlobalMap tenta encontrar rotas
+
+# ==============================================================================
+### GLOBAL MAP
+
+WALKABLE_COLORS = [24, 129, 121, 210] # Grama, Chão Padrão cinza, Chão de Dirt/Caverna, #Amarelo: escada, buraco, etc
+MAPS_DIRECTORY = r"c:\Users\vitor\Downloads\amera-client-latest"

@@ -22,3 +22,13 @@ backup/
 
 # Ignorar o banco de dados do Fishing se ele for muito grande ou pessoal
 # fishing_map.json (já coloquei acima)
+utils/test_stop.py
+test_global_map.py
+cavebot_maps/rota_z7.png
+cavebot_maps/rota_z8.png
+cavebot_maps/rota_z9.png
+FALLBACK_FIX_SUMMARY.md
+TRAINER_FIXES_SUMMARY.md
+TRAINER_TESTING_GUIDE.md
+cavebot_maps/rota_z6.png
+.claude/settings.local.json

@@ -308,106 +308,101 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
 
                 if time.time() >= next_cast_time:
                     log_msg(f"⚡ Mana ok ({curr_mana}). Fabricando...")
-                    
-                    hand_mode = get_cfg('hand_mode', 'RIGHT')
-                    hands_to_use = []
-                    if hand_mode == "BOTH": hands_to_use = [SLOT_LEFT, SLOT_RIGHT]
-                    elif hand_mode == "LEFT": hands_to_use = [SLOT_LEFT]
-                    else: hands_to_use = [SLOT_RIGHT]
+                    state.set_runemaking(True)
 
-                    # Verifica se temos blank runes no inventário ANTES de desarmar
-                    blank_id = get_cfg('blank_id', 3147)
-                    blank_data = find_item_in_containers(pm, base_addr, blank_id)
-                    if not blank_data:
-                        log_msg(f"⚠️ Sem Blanks na BP!")
-                        next_cast_time = 0
-                        continue
+                    try:
+                        hand_mode = get_cfg('hand_mode', 'RIGHT')
+                        hands_to_use = []
+                        if hand_mode == "BOTH": hands_to_use = [SLOT_LEFT, SLOT_RIGHT]
+                        elif hand_mode == "LEFT": hands_to_use = [SLOT_LEFT]
+                        else: hands_to_use = [SLOT_RIGHT]
 
-                    # PACKET MUTEX: Wrap entire runemaking cycle (unequip -> blank -> cast -> return -> reequip)
-                    with PacketMutex("runemaker"):
-                        # PHASE 1: Unequip all hands and store their items
-                        # (This fixes the bug where unequipped_item_id gets overwritten with "BOTH" hands)
-                        # IMPORTANT: Each hand gets unequipped to a different slot to avoid conflicts
-                        unequipped_items = {}  # slot_enum → (item_id, dest_slot)
-                        for dest_slot_idx, slot_enum in enumerate(hands_to_use):
-                            if is_safe_callback and not is_safe_callback(): break
-                            unequipped_item_id = unequip_hand(pm, base_addr, slot_enum, dest_container_idx=0, dest_slot=dest_slot_idx)
-                            unequipped_items[slot_enum] = (unequipped_item_id, 0)
-                            log_msg(f"🔓 Desarmou {slot_enum}: Item {unequipped_item_id}")
-                            time.sleep(0.3)
+                        # Verifica se temos blank runes no inventário ANTES de desarmar
+                        blank_id = get_cfg('blank_id', 3147)
+                        blank_data = find_item_in_containers(pm, base_addr, blank_id)
+                        if not blank_data:
+                            log_msg(f"⚠️ Sem Blanks na BP!")
+                            next_cast_time = 0
+                            continue
 
-                        # PHASE 2: Equip blank runes
-                        active_runes = []
+                        # PACKET MUTEX: Wrap entire runemaking cycle (unequip -> blank -> cast -> return -> reequip)
+                        with PacketMutex("runemaker"):
+                            # PHASE 1: Unequip all hands and store their items
+                            # (This fixes the bug where unequipped_item_id gets overwritten with "BOTH" hands)
+                            # IMPORTANT: Each hand gets unequipped to a different slot to avoid conflicts
+                            unequipped_items = {}  # slot_enum → (item_id, dest_slot)
+                            for dest_slot_idx, slot_enum in enumerate(hands_to_use):
+                                if is_safe_callback and not is_safe_callback(): break
+                                unequipped_item_id = unequip_hand(pm, base_addr, slot_enum, dest_container_idx=0, dest_slot=dest_slot_idx)
+                                unequipped_items[slot_enum] = (unequipped_item_id, 0)
+                                log_msg(f"🔓 Desarmou {slot_enum}: Item {unequipped_item_id}")
+                                time.sleep(0.3)
 
-                        for slot_enum in hands_to_use:
-                            if is_safe_callback and not is_safe_callback(): break
+                            # PHASE 2: Equip blank runes
+                            active_runes = []
 
-                            # Move Blank -> Mão
-                            pos_from = packet.get_container_pos(blank_data['container_index'], blank_data['slot_index'])
-                            pos_to = packet.get_inventory_pos(slot_enum)
-                            packet.move_item(pm, pos_from, pos_to, blank_id, 1)
+                            for slot_enum in hands_to_use:
+                                if is_safe_callback and not is_safe_callback(): break
 
-                            # Adiciona à lista de runes ativas
-                            restorable_item, orig_dest_slot = unequipped_items[slot_enum]
-                            active_runes.append({
-                                "hand_pos": pos_to,
-                                "origin_idx": blank_data['container_index'],
-                                "slot_enum": slot_enum,
-                                "restorable_item": restorable_item,
-                                "orig_dest_slot": orig_dest_slot  # Track where the weapon was stored
-                            })
-                            time.sleep(0.6)
+                                # Move Blank -> Mão
+                                pos_from = packet.get_container_pos(blank_data['container_index'], blank_data['slot_index'])
+                                pos_to = packet.get_inventory_pos(slot_enum)
+                                packet.move_item(pm, pos_from, pos_to, blank_id, 1)
 
-                            restorable_item, orig_dest_slot = unequipped_items[slot_enum]
-                            active_runes.append({
-                                "hand_pos": pos_to,
-                                "origin_idx": blank_data['container_index'],
-                                "slot_enum": slot_enum,
-                                "restorable_item": restorable_item,
-                                "orig_dest_slot": orig_dest_slot  # Track where the weapon was stored
-                            })
-                            time.sleep(0.6)
+                                # Adiciona à lista de runes ativas
+                                restorable_item, orig_dest_slot = unequipped_items[slot_enum]
+                                active_runes.append({
+                                    "hand_pos": pos_to,
+                                    "origin_idx": blank_data['container_index'],
+                                    "slot_enum": slot_enum,
+                                    "restorable_item": restorable_item,
+                                    "orig_dest_slot": orig_dest_slot  # Track where the weapon was stored
+                                })
+                                time.sleep(0.6)
 
-                        if active_runes:
-                            log_msg(f"🪄 Pressionando {hotkey_str}...")
-                            press_hotkey(hwnd, vk_hotkey)
+                            if active_runes:
+                                log_msg(f"🪄 Pressionando {hotkey_str}...")
+                                press_hotkey(hwnd, vk_hotkey)
 
-                            time.sleep(1.2) # Wait process
+                                time.sleep(1.2) # Wait process
 
-                            # PHASE 4: Return ALL runes to backpack FIRST (before re-equipping)
-                            # IMPORTANTE: Quando usa BOTH hands, precisa devolver AMBAS as runas
-                            # antes de tentar re-equipar (especialmente itens que ocupam 2 mãos)
-                            for info in active_runes:
-                                 # 1. Identifica o que foi fabricado
-                                 detected_id = get_item_id_in_hand(pm, base_addr, info['slot_enum'])
-                                 rune_id_to_move = detected_id if detected_id > 0 else blank_id
+                                # PHASE 4: Return ALL runes to backpack FIRST (before re-equipping)
+                                # IMPORTANTE: Quando usa BOTH hands, precisa devolver AMBAS as runas
+                                # antes de tentar re-equipar (especialmente itens que ocupam 2 mãos)
+                                for info in active_runes:
+                                    # 1. Identifica o que foi fabricado
+                                    detected_id = get_item_id_in_hand(pm, base_addr, info['slot_enum'])
+                                    rune_id_to_move = detected_id if detected_id > 0 else blank_id
 
-                                 # 2. Devolve Runa para Backpack
-                                 pos_dest = packet.get_container_pos(info['origin_idx'], 0)
-                                 packet.move_item(pm, info['hand_pos'], pos_dest, rune_id_to_move, 1)
-                                 log_msg(f"📦 Devolvido: Runa {rune_id_to_move} → Container {info['origin_idx']}")
-                                 time.sleep(1.0)  # Aguarda servidor processar movimento
+                                    # 2. Devolve Runa para Backpack
+                                    pos_dest = packet.get_container_pos(info['origin_idx'], 0)
+                                    packet.move_item(pm, info['hand_pos'], pos_dest, rune_id_to_move, 1)
+                                    log_msg(f"📦 Devolvido: Runa {rune_id_to_move} → Container {info['origin_idx']}")
+                                    time.sleep(1.0)  # Aguarda servidor processar movimento
 
-                            # PHASE 5: Re-equip ALL original items AFTER all runes are returned
-                            # Separar em outra fase garante que nenhum item fica equipado enquanto
-                            # ainda há runas nas mãos (importante para itens com 2 mãos)
-                            log_msg(f"🔙 Restaurando {len([i for i in active_runes if i['restorable_item']])} item(ns) original(is)...")
-                            for info in active_runes:
-                                 if info['restorable_item']:
-                                     log_msg(f"🔄 Tentando re-equipar {info['restorable_item']} na mão {info['slot_enum']}...")
-                                     success = reequip_hand(pm, base_addr, info['restorable_item'], info['slot_enum'])
-                                     if success:
-                                         log_msg(f"✅ Item {info['restorable_item']} re-equipado com sucesso!")
-                                     else:
-                                         log_msg(f"⚠️ Falha ao re-equipar {info['restorable_item']}")
-                                     time.sleep(0.5)  # Pequena pausa entre re-equipamentos
+                                # PHASE 5: Re-equip ALL original items AFTER all runes are returned
+                                # Separar em outra fase garante que nenhum item fica equipado enquanto
+                                # ainda há runas nas mãos (importante para itens com 2 mãos)
+                                log_msg(f"🔙 Restaurando {len([i for i in active_runes if i['restorable_item']])} item(ns) original(is)...")
+                                for info in active_runes:
+                                    if info['restorable_item']:
+                                        log_msg(f"🔄 Tentando re-equipar {info['restorable_item']} na mão {info['slot_enum']}...")
+                                        success = reequip_hand(pm, base_addr, info['restorable_item'], info['slot_enum'])
+                                        if success:
+                                            log_msg(f"✅ Item {info['restorable_item']} re-equipado com sucesso!")
+                                        else:
+                                            log_msg(f"⚠️ Falha ao re-equipar {info['restorable_item']}")
+                                        time.sleep(0.5)  # Pequena pausa entre re-equipamentos
 
-                            log_msg("✅ Ciclo concluído.")
-                            next_cast_time = 0 
+                                log_msg("✅ Ciclo concluído.")
+                                next_cast_time = 0
+                    finally:
+                        state.set_runemaking(False)
             else:
                 next_cast_time = 0
 
         except Exception as e:
             print(f"Rune Error: {e}")
+            state.set_runemaking(False)
 
         time.sleep(0.5)

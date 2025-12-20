@@ -50,8 +50,26 @@ class MapAnalyzer:
 
             # 3. VERIFICAÇÃO DE "AVOID" (Fields, Lava, Buracos)
             if item_id in AVOID_IDS:
-                if get_special_type(item_id):
-                    pass  # Escada/buraco especial, deixa passar
+                special_type = get_special_type(item_id)
+
+                if special_type:
+                    # CASO CRÍTICO: É um buraco/escada (Avoid + Special)
+                    # Ação: Marcamos como NÃO ANDÁVEL para o A* não traçar rota por cima,
+                    # mas definimos o 'type' correto para que o scan_for_floor_change encontre.
+                    
+                    properties['walkable'] = False  # <--- O SEGREDO: A* vê como parede
+                    properties['type'] = special_type # <--- O SEGREDO: Scanner vê como escada
+                    properties['special_id'] = item_id
+                    properties['cost'] = 1000 # Custo proibitivo
+                    
+                    if debug_reason:
+                        properties['block_reason'] = 'AVOID_SPECIAL' # Para debug saber que é escada
+                        properties['blocking_item_id'] = item_id
+                        properties['items'] = list(tile.items)
+                    
+                    # Retornamos imediatamente. 
+                    # Assim ele não é tratado como 'GROUND' nas próximas linhas.
+                    return properties
                 else:
                     result = self._make_block()
                     if debug_reason:

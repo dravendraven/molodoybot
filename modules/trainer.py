@@ -14,9 +14,15 @@ from modules.auto_loot import scan_containers
 from core.player_core import get_connected_char_name
 from core.bot_state import state
 from core.config_utils import make_config_getter
+from core.map_analyzer import MapAnalyzer
+from core.astar_walker import AStarWalker
 
 # Definições de Delay
 SCAN_DELAY = 0.5
+
+# Retargeting Configuration
+RETARGET_DELAY = 2.5  # Segundos para aguardar antes de retargetar alvo inacessível
+REACHABILITY_CHECK_INTERVAL = 1.0  # Frequência de verificação de acessibilidade
 
 def get_my_char_name(pm, base_addr):
     """
@@ -102,13 +108,46 @@ def open_corpse_via_packet(pm, base_addr, target_data, player_id, log_func=print
         log_func(f"🔥 Erro OpenCorpse: {e}")
         return False
 
+def find_nearest_reachable_target(candidates, my_x, my_y, current_id=0):
+    """
+    Encontra o alvo acessível mais próximo da lista de candidatos.
+
+    Args:
+        candidates: Lista de dicts de candidatos válidos
+        my_x, my_y: Posição absoluta do player
+        current_id: ID do alvo atual para excluir
+
+    Returns:
+        Dict do candidato mais próximo ou None
+    """
+    # Filtra: no alcance, vivo, não é o alvo atual
+    valid = [c for c in candidates
+             if c["is_in_range"] and c["hp"] > 0 and c["id"] != current_id]
+
+    if not valid:
+        return None
+
+    # Ordena por distância Chebyshev (distância SQM no Tibia: max de dx, dy)
+    valid.sort(key=lambda c: max(abs(c["abs_x"] - my_x), abs(c["abs_y"] - my_y)))
+
+    return valid[0]
+
 def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
 
     get_cfg = make_config_getter(config)
 
     current_monitored_id = 0
-    last_target_data = None 
-    next_attack_time = 0       
+    last_target_data = None
+    next_attack_time = 0
+
+    # Retargeting State
+    last_reachability_check_time = 0.0
+    became_unreachable_time = None
+
+    # Será inicializado dentro do loop com debug_mode
+    mapper = None
+    analyzer = None
+    walker = None
 
     while True:
         if check_running and not check_running(): 
@@ -132,11 +171,17 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
         min_delay = get_cfg('min_delay', 1.0)
         max_delay = get_cfg('max_delay', 2.0)
         attack_range = get_cfg('range', 1)
-        log = get_cfg('log_callback', print) 
+        log = get_cfg('log_callback', print)
         debug_mode = get_cfg('debug_mode', False)
         loot_enabled = get_cfg('loot_enabled', False)
         targets_list = get_cfg('targets', [])
         ignore_first = get_cfg('ignore_first', False)
+
+        # Inicializa componentes de pathfinding na primeira iteração com debug_mode
+        if mapper is None:
+            mapper = MemoryMap(pm, base_addr)
+            analyzer = MapAnalyzer(mapper)
+            walker = AStarWalker(analyzer, max_depth=150, debug=debug_mode)
 
         try:  
             player_id = pm.read_int(base_addr + OFFSET_PLAYER_ID)
@@ -152,7 +197,8 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
             if my_z == 0: 
                 time.sleep(0.2)
                 continue
-
+            
+            mapper.read_full_map(player_id)
             # 2. SCAN
             valid_candidates = []
             visual_line_count = 0 
@@ -189,19 +235,46 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
                             
                             if any(t in name for t in targets_list):
                                 if is_in_range and hp > 0:
-                                    if debug_mode: print(f"      -> CANDIDATO: HP:{hp} Dist:({dist_x},{dist_y})")
-                                    valid_candidates.append({
-                                        "id": c_id,
-                                        "name": name,
-                                        "hp": hp,
-                                        "dist_x": dist_x,
-                                        "dist_y": dist_y,
-                                        "abs_x": cx,
-                                        "abs_y": cy,
-                                        "z": z,
-                                        "is_in_range": is_in_range,
-                                        "line": current_line
-                                    })
+
+                                    is_reachable = True
+
+                                    # Calculamos posição relativa
+                                    rel_x = cx - my_x
+                                    rel_y = cy - my_y
+                                    dist_sqm = max(abs(rel_x), abs(rel_y))
+
+                                    # DEBUG: Log antes de verificar acessibilidade
+                                    if debug_mode: print(f"   📍 Checking {name} (ID:{c_id}) at ({cx},{cy}) | Rel:({rel_x},{rel_y}) Dist:{dist_sqm}")
+
+                                    # SEMPRE verificar acessibilidade com A*, exceto se dist == 0 (mesmo tile)
+                                    if dist_sqm == 0:
+                                        # Mesmo tile que o player - sempre acessível (não deveria acontecer)
+                                        if debug_mode: print(f"      ⚠️ Monstro no mesmo tile (dist=0)")
+                                    else:
+                                        # Pergunta ao A*: "Consigo dar o primeiro passo em direção a esse destino?"
+                                        next_step = walker.get_next_step(rel_x, rel_y, activate_fallback=False)
+
+                                        # Se next_step for None, o caminho está bloqueado (parede ou outro monstro)
+                                        if next_step is None:
+                                            is_reachable = False
+                                            if debug_mode: print(f"      ❌ INACESSÍVEL: {name} (A* retornou None)")
+                                        else:
+                                            if debug_mode: print(f"      ✅ ACESSÍVEL: Next step = {next_step}")
+
+                                    if is_reachable:
+                                        if debug_mode: print(f"      → CANDIDATO: HP:{hp} Dist:({dist_x},{dist_y})")
+                                        valid_candidates.append({
+                                            "id": c_id,
+                                            "name": name,
+                                            "hp": hp,
+                                            "dist_x": dist_x,
+                                            "dist_y": dist_y,
+                                            "abs_x": cx,
+                                            "abs_y": cy,
+                                            "z": z,
+                                            "is_in_range": is_in_range,
+                                            "line": current_line
+                                        })
                 except: continue
 
             if debug_mode:
@@ -215,7 +288,93 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
                 target_data = next((c for c in valid_candidates if c["id"] == current_target_id), None)
                 
                 if target_data:
-                    next_attack_time = 0       
+                    # === VALIDAÇÃO CONTÍNUA DE ACESSIBILIDADE ===
+                    current_time = time.time()
+
+                    # Verifica acessibilidade a cada REACHABILITY_CHECK_INTERVAL segundos
+                    if current_time - last_reachability_check_time >= REACHABILITY_CHECK_INTERVAL:
+                        last_reachability_check_time = current_time
+
+                        # Calcula posição relativa para check do A*
+                        rel_x = target_data["abs_x"] - my_x
+                        rel_y = target_data["abs_y"] - my_y
+                        dist_sqm = max(abs(rel_x), abs(rel_y))
+
+                        # SEMPRE verifica acessibilidade com A*, exceto se dist == 0 (mesmo tile)
+                        is_reachable = True
+                        if dist_sqm == 0:
+                            # Mesmo tile que o player - sempre acessível
+                            pass
+                        else:
+                            next_step = walker.get_next_step(rel_x, rel_y, activate_fallback=False)
+                            if next_step is None:
+                                is_reachable = False
+                                if debug_mode:
+                                    log(f"   🔍 Retargeting check: {target_data['name']} - ❌ INACESSÍVEL (A* retornou None)")
+
+                        # Trata detecção de inacessibilidade
+                        if not is_reachable:
+                            # Inicia timer na primeira detecção
+                            if became_unreachable_time is None:
+                                became_unreachable_time = current_time
+                                if debug_mode:
+                                    log(f"⚠️ Target {target_data['name']} se tornou inacessível (iniciando timer de {RETARGET_DELAY}s)")
+
+                            # Verifica se threshold de delay foi atingido
+                            unreachable_duration = current_time - became_unreachable_time
+
+                            if unreachable_duration >= RETARGET_DELAY:
+                                # FORÇA RETARGET PARA CRIATURA MAIS PRÓXIMA ACESSÍVEL
+                                log(f"🔄 Alvo inacessível por {RETARGET_DELAY}s - retargeting para mais próximo")
+
+                                # Para monitoramento do alvo antigo
+                                if current_monitored_id != 0:
+                                    monitor.stop_and_report()
+                                    current_monitored_id = 0
+
+                                # Limpa memória do cliente (remove quadrado vermelho)
+                                pm.write_int(target_addr, 0)
+
+                                # Encontra alvo acessível mais próximo
+                                nearest = find_nearest_reachable_target(
+                                    valid_candidates, my_x, my_y, current_target_id
+                                )
+
+                                if nearest:
+                                    nearest_dist = max(abs(nearest['abs_x'] - my_x), abs(nearest['abs_y'] - my_y))
+                                    log(f"⚔️ RETARGET: {nearest['name']} (dist: {nearest_dist} sqm)")
+
+                                    # Ataca novo alvo
+                                    packet.attack(pm, base_addr, nearest["id"])
+
+                                    # Atualiza variáveis de estado
+                                    current_target_id = nearest["id"]
+                                    current_monitored_id = nearest["id"]
+                                    last_target_data = nearest.copy()
+
+                                    # Inicia monitoramento do novo alvo
+                                    monitor.start(nearest["id"], nearest["name"], nearest["hp"])
+
+                                    # Reseta estado de retarget
+                                    became_unreachable_time = None
+                                    next_attack_time = 0  # Sem delay (troca tática)
+                                else:
+                                    log("⚠️ Nenhum alvo acessível disponível - aguardando")
+                                    became_unreachable_time = None  # Reseta para tentar no próximo scan
+
+                                # Pula resto do processamento do Cenário A
+                                time.sleep(SCAN_DELAY)
+                                continue
+
+                        else:  # Alvo está acessível
+                            # Reseta timer de inacessibilidade
+                            if became_unreachable_time is not None:
+                                if debug_mode:
+                                    log(f"✅ Target {target_data['name']} está acessível novamente")
+                                became_unreachable_time = None
+
+                    # === LÓGICA EXISTENTE DE ATUALIZAÇÃO DO MONITOR ===
+                    next_attack_time = 0
                     last_target_data = target_data.copy()
                     if current_target_id != current_monitored_id:
                         monitor.start(current_target_id, target_data["name"], target_data["hp"])
@@ -224,8 +383,127 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
                     else:
                         monitor.update(target_data["hp"])
                 else:
-                    if debug_mode: print("-> Alvo inválido (morto/fora de alcance).")
-                    pass
+                    # Alvo não está em valid_candidates - pode ser:
+                    # (A) Fora de alcance (dist > attack_range)
+                    # (B) Morto (hp <= 0)
+                    # (C) Despawned (não está mais na battle list)
+                    # (D) INACESSÍVEL (no alcance mas bloqueado)
+
+                    # Tenta encontrar o alvo na battle list inteira (não filtrada)
+                    # para distinguir entre "despawned" e "fora de alcance/inacessível"
+                    target_in_battlelist = None
+
+                    for i in range(MAX_CREATURES):
+                        slot = list_start + (i * STEP_SIZE)
+                        try:
+                            c_id = pm.read_int(slot)
+                            if c_id == current_target_id:
+                                # Encontrou na battle list!
+                                raw = pm.read_string(slot + OFFSET_NAME, 32)
+                                name = raw.split('\x00')[0].strip()
+                                hp = pm.read_int(slot + OFFSET_HP)
+                                cx = pm.read_int(slot + OFFSET_X)
+                                cy = pm.read_int(slot + OFFSET_Y)
+                                z = pm.read_int(slot + OFFSET_Z)
+                                vis = pm.read_int(slot + OFFSET_VISIBLE)
+
+                                target_in_battlelist = {
+                                    'id': c_id,
+                                    'name': name,
+                                    'hp': hp,
+                                    'abs_x': cx,
+                                    'abs_y': cy,
+                                    'z': z,
+                                    'visible': vis
+                                }
+                                break
+                        except:
+                            continue
+
+                    if target_in_battlelist:
+                        # Alvo está na battle list, mas não em valid_candidates
+                        # Pode estar: fora de alcance, ou INACESSÍVEL
+
+                        if target_in_battlelist['hp'] <= 0:
+                            # Está morto
+                            if debug_mode: print("-> Alvo morto na battle list.")
+                            became_unreachable_time = None
+                        elif target_in_battlelist['z'] != my_z:
+                            # Mudou de andar
+                            if debug_mode: print("-> Alvo em andar diferente.")
+                            became_unreachable_time = None
+                        else:
+                            # Alvo vivo e no mesmo andar, mas fora de valid_candidates
+                            # Trata como INACESSÍVEL (verificar com A*)
+                            current_time = time.time()
+
+                            if current_time - last_reachability_check_time >= REACHABILITY_CHECK_INTERVAL:
+                                last_reachability_check_time = current_time
+
+                                # Verifica acessibilidade com A*
+                                rel_x = target_in_battlelist['abs_x'] - my_x
+                                rel_y = target_in_battlelist['abs_y'] - my_y
+                                dist_sqm = max(abs(rel_x), abs(rel_y))
+
+                                is_reachable = True
+                                if dist_sqm == 0:
+                                    is_reachable = True
+                                else:
+                                    next_step = walker.get_next_step(rel_x, rel_y, activate_fallback=False)
+                                    if next_step is None:
+                                        is_reachable = False
+
+                                if not is_reachable:
+                                    # Alvo está inacessível!
+                                    if became_unreachable_time is None:
+                                        became_unreachable_time = current_time
+                                        if debug_mode:
+                                            log(f"⚠️ Target {target_in_battlelist['name']} está INACESSÍVEL (fora de valid_candidates) - iniciando timer de {RETARGET_DELAY}s")
+
+                                    unreachable_duration = current_time - became_unreachable_time
+
+                                    if unreachable_duration >= RETARGET_DELAY:
+                                        log(f"🔄 Target inacessível por {RETARGET_DELAY}s - forçando retarget")
+
+                                        # Limpa memória do cliente
+                                        pm.write_int(target_addr, 0)
+
+                                        # Para monitoramento
+                                        if current_monitored_id != 0:
+                                            monitor.stop_and_report()
+                                            current_monitored_id = 0
+
+                                        # Encontra alvo mais próximo
+                                        nearest = find_nearest_reachable_target(
+                                            valid_candidates, my_x, my_y, current_target_id
+                                        )
+
+                                        if nearest:
+                                            nearest_dist = max(abs(nearest['abs_x'] - my_x), abs(nearest['abs_y'] - my_y))
+                                            log(f"⚔️ RETARGET: {nearest['name']} (dist: {nearest_dist} sqm)")
+                                            packet.attack(pm, base_addr, nearest["id"])
+                                            current_target_id = nearest["id"]
+                                            current_monitored_id = nearest["id"]
+                                            last_target_data = nearest.copy()
+                                            monitor.start(nearest["id"], nearest["name"], nearest["hp"])
+                                            became_unreachable_time = None
+                                            next_attack_time = 0
+                                        else:
+                                            log("⚠️ Nenhum alvo acessível disponível - aguardando")
+                                            became_unreachable_time = None
+
+                                        time.sleep(SCAN_DELAY)
+                                        continue
+                                else:
+                                    # Alvo se tornou acessível novamente
+                                    if became_unreachable_time is not None:
+                                        if debug_mode:
+                                            log(f"✅ Target {target_in_battlelist['name']} está acessível novamente")
+                                        became_unreachable_time = None
+                    else:
+                        # Alvo não está na battle list - está despawned/morto
+                        if debug_mode: print("-> Alvo não está mais na battle list (despawned).")
+                        became_unreachable_time = None
 
            # CENÁRIO B: Alvo Sumiu
             elif current_target_id == 0 and current_monitored_id != 0:
@@ -241,13 +519,14 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
                     monitor.stop_and_report()
                     current_monitored_id = 0
                     last_target_data = None
+                    became_unreachable_time = None
                     should_attack_new = True 
                 
                 else:
                     log("💀 Alvo eliminado.")
                     
                     if last_target_data and loot_enabled:
-                        time.sleep(random.uniform(0.6, 0.8))
+                        time.sleep(random.uniform(0.8, 1.0))
                         
                         # CHAMA FUNÇÃO COM LÓGICA DE INDEX DINÂMICO
                         success = open_corpse_via_packet(pm, base_addr, last_target_data, player_id, log_func=log)
@@ -261,7 +540,8 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
 
                     monitor.stop_and_report()
                     current_monitored_id = 0
-                    last_target_data = None 
+                    last_target_data = None
+                    became_unreachable_time = None
                     should_attack_new = True
 
             # Cenário C: Ninguém atacando
@@ -269,6 +549,7 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
                 if current_monitored_id != 0:
                     monitor.stop_and_report()
                     current_monitored_id = 0
+                    became_unreachable_time = None
                 should_attack_new = True
 
             # 4. AÇÃO

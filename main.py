@@ -90,7 +90,8 @@ BOT_SETTINGS = {
     "alarm_floor": "Padrão",
     "alarm_hp_enabled": False,
     "alarm_hp_percent": 50,
-    "alarm_chat_enabled": False,    # <--- NOVO
+    "alarm_visual_enabled": True,   # <--- NOVO
+    "alarm_chat_enabled": True,    # <--- NOVO
     "alarm_chat_gm": True,          # <--- NOVO
     
     # Loot
@@ -306,23 +307,28 @@ def clear_player_name_cache():
 
 def update_waypoint_display():
     """Atualiza a lista visual de waypoints na janela de Settings (Thread-Safe)."""
-    
+
     def _refresh_ui():
         global txt_waypoints_settings
-        
+
         # Se a janela de settings não estiver aberta ou o widget não existir, ignora
         if txt_waypoints_settings is None:
             return
         try:
             if not txt_waypoints_settings.winfo_exists():
                 return
-        except: 
+        except:
             return # Widget destruído
-        
+
         # Atualiza o conteúdo
         txt_waypoints_settings.configure(state="normal")
         txt_waypoints_settings.delete("1.0", "end")
-        
+
+        # Header com contador
+        total = len(current_waypoints_ui)
+        header = f"═══ WAYPOINTS (Total: {total}) ═══\n\n"
+        txt_waypoints_settings.insert("end", header)
+
         if not current_waypoints_ui:
             txt_waypoints_settings.insert("end", "Lista vazia.\n")
         else:
@@ -331,7 +337,7 @@ def update_waypoint_display():
                 # Formatação: 1. [WALK] 32300, 32100, 7
                 line = f"{idx+1}. [{act}] {wp['x']}, {wp['y']}, {wp['z']}\n"
                 txt_waypoints_settings.insert("end", line)
-                
+
         txt_waypoints_settings.configure(state="disabled")
         txt_waypoints_settings.see("end")
 
@@ -371,17 +377,20 @@ def refresh_cavebot_scripts_combo(selected=None):
 def add_waypoint_entry(action, x, y, z):
     """Função central para adicionar waypoint e atualizar UI e Backend."""
     global current_waypoints_ui, cavebot_instance
-    
+
     # Cria o dicionário do waypoint
     new_wp = {'action': action, 'x': x, 'y': y, 'z': z}
     current_waypoints_ui.append(new_wp)
-    
+
     # Atualiza o Cavebot em tempo real se ele estiver rodando
     if cavebot_instance:
         cavebot_instance.load_waypoints(current_waypoints_ui)
-    
+
     # Atualiza a tela
     update_waypoint_display()
+
+    # Log mais informativo
+    log(f"✅ WP #{len(current_waypoints_ui)} adicionado: ({x}, {y}, {z})")
 
 def add_manual_waypoint(dx, dy, action_type):
     """
@@ -396,11 +405,187 @@ def add_manual_waypoint(dx, dy, action_type):
         px, py, pz = get_player_pos(pm, base_addr)
         target_x = px + dx
         target_y = py + dy
-        
+
         add_waypoint_entry(action_type, target_x, target_y, pz)
-        
+
     except Exception as e:
         log(f"Erro ao adicionar WP manual: {e}")
+
+def open_insert_coords_dialog():
+    """Abre janela para inserir coordenadas X, Y, Z manualmente."""
+    dialog = ctk.CTkToplevel(app)
+    dialog.title("Inserir Waypoint")
+    dialog.geometry("300x220")
+    dialog.resizable(False, False)
+    dialog.transient(app)  # Modal
+    dialog.grab_set()
+    dialog.attributes('-topmost', True)  # Sempre no topo
+    dialog.lift()  # Traz para o topo
+    dialog.focus()
+
+    # Título
+    ctk.CTkLabel(dialog, text="Inserir Coordenadas", font=("Verdana", 12, "bold")).pack(pady=(10, 15))
+
+    # Frame de inputs
+    frame_inputs = ctk.CTkFrame(dialog, fg_color="transparent")
+    frame_inputs.pack(pady=5, padx=20, fill="x")
+
+    # X
+    ctk.CTkLabel(frame_inputs, text="X:", font=("Verdana", 10)).grid(row=0, column=0, sticky="w", pady=5)
+    entry_x = ctk.CTkEntry(frame_inputs, width=180, font=("Verdana", 10))
+    entry_x.grid(row=0, column=1, padx=(10, 0), pady=5)
+
+    # Y
+    ctk.CTkLabel(frame_inputs, text="Y:", font=("Verdana", 10)).grid(row=1, column=0, sticky="w", pady=5)
+    entry_y = ctk.CTkEntry(frame_inputs, width=180, font=("Verdana", 10))
+    entry_y.grid(row=1, column=1, padx=(10, 0), pady=5)
+
+    # Z
+    ctk.CTkLabel(frame_inputs, text="Z:", font=("Verdana", 10)).grid(row=2, column=0, sticky="w", pady=5)
+    entry_z = ctk.CTkEntry(frame_inputs, width=180, font=("Verdana", 10))
+    entry_z.grid(row=2, column=1, padx=(10, 0), pady=5)
+
+    # Função de confirmação
+    def confirm_coords():
+        try:
+            x = int(entry_x.get().strip())
+            y = int(entry_y.get().strip())
+            z = int(entry_z.get().strip())
+
+            add_waypoint_entry("walk", x, y, z)
+            log(f"✅ Waypoint inserido: ({x}, {y}, {z})")
+            dialog.destroy()
+        except ValueError:
+            log("❌ Coordenadas inválidas! Use apenas números inteiros.")
+
+    # Botões
+    frame_buttons = ctk.CTkFrame(dialog, fg_color="transparent")
+    frame_buttons.pack(pady=(10, 10), fill="x", padx=20)
+
+    ctk.CTkButton(frame_buttons, text="✅ Adicionar", command=confirm_coords,
+                 fg_color="#2CC985", hover_color="#1FA86E", width=120).pack(side="left", padx=5)
+
+    ctk.CTkButton(frame_buttons, text="❌ Cancelar", command=dialog.destroy,
+                 fg_color="#FF5555", hover_color="#CC4444", width=120).pack(side="right", padx=5)
+
+    # Foco no primeiro campo
+    entry_x.focus()
+
+def remove_last_waypoint():
+    """Remove o último waypoint da lista."""
+    global current_waypoints_ui, cavebot_instance
+
+    if not current_waypoints_ui:
+        log("⚠️ Lista de waypoints já está vazia.")
+        return
+
+    removed_wp = current_waypoints_ui.pop()  # Remove último
+
+    if cavebot_instance:
+        cavebot_instance.load_waypoints(current_waypoints_ui)
+
+    update_waypoint_display()
+    log(f"🗑️ Removido WP #{len(current_waypoints_ui) + 1}: ({removed_wp['x']}, {removed_wp['y']}, {removed_wp['z']})")
+
+def open_remove_specific_dialog():
+    """Abre janela para inserir o número do waypoint a ser removido."""
+    if not current_waypoints_ui:
+        log("⚠️ Lista de waypoints está vazia.")
+        return
+
+    dialog = ctk.CTkToplevel(app)
+    dialog.title("Remover Waypoint")
+    dialog.geometry("320x160")
+    dialog.resizable(False, False)
+    dialog.transient(app)
+    dialog.grab_set()
+    dialog.attributes('-topmost', True)  # Sempre no topo
+    dialog.lift()  # Traz para o topo
+    dialog.focus()
+
+    # Título
+    ctk.CTkLabel(dialog, text="Remover Waypoint Específico", font=("Verdana", 12, "bold")).pack(pady=(10, 10))
+
+    # Frame de input
+    frame_input = ctk.CTkFrame(dialog, fg_color="transparent")
+    frame_input.pack(pady=5, padx=20, fill="x")
+
+    ctk.CTkLabel(frame_input, text=f"Digite o número (1-{len(current_waypoints_ui)}):",
+                font=("Verdana", 10)).pack(anchor="w", pady=(0, 5))
+
+    entry_index = ctk.CTkEntry(frame_input, width=260, font=("Verdana", 11))
+    entry_index.pack(fill="x")
+
+    # Função de confirmação
+    def confirm_remove():
+        try:
+            index = int(entry_index.get().strip())
+
+            if index < 1 or index > len(current_waypoints_ui):
+                log(f"❌ Número inválido! Escolha entre 1 e {len(current_waypoints_ui)}.")
+                return
+
+            # Remove waypoint (índice 1-based → 0-based)
+            removed_wp = current_waypoints_ui.pop(index - 1)
+
+            if cavebot_instance:
+                cavebot_instance.load_waypoints(current_waypoints_ui)
+
+            update_waypoint_display()
+            log(f"🗑️ Removido WP #{index}: ({removed_wp['x']}, {removed_wp['y']}, {removed_wp['z']})")
+            dialog.destroy()
+        except ValueError:
+            log("❌ Entrada inválida! Use apenas números inteiros.")
+
+    # Botões
+    frame_buttons = ctk.CTkFrame(dialog, fg_color="transparent")
+    frame_buttons.pack(pady=(10, 10), fill="x", padx=20)
+
+    ctk.CTkButton(frame_buttons, text="🗑️ Remover", command=confirm_remove,
+                 fg_color="#FF5555", hover_color="#CC4444", width=120).pack(side="left", padx=5)
+
+    ctk.CTkButton(frame_buttons, text="❌ Cancelar", command=dialog.destroy,
+                 fg_color="#808080", hover_color="#606060", width=120).pack(side="right", padx=5)
+
+    entry_index.focus()
+
+def generate_route_visualization():
+    """Gera visualização da rota completa dos waypoints carregados."""
+    global current_waypoints_ui
+
+    if not current_waypoints_ui:
+        log("⚠️ Nenhum waypoint carregado. Carregue um script primeiro.")
+        return
+
+    try:
+        from utils.visualize_path import create_route_visualization
+        from config import MAPS_DIRECTORY
+
+        log(f"🎨 Gerando visualização de {len(current_waypoints_ui)} waypoints...")
+
+        # Gera imagens
+        output_dir = Path("cavebot_maps")
+        output_dir.mkdir(exist_ok=True)
+
+        prefix = output_dir / "rota"
+        files = create_route_visualization(MAPS_DIRECTORY, current_waypoints_ui, str(prefix))
+
+        if files:
+            log(f"✅ {len(files)} imagens geradas!")
+            # Abre todas as imagens geradas
+            import os
+            for filepath in files:
+                try:
+                    os.startfile(filepath)
+                except Exception as e:
+                    log(f"⚠️ Erro ao abrir {filepath}: {e}")
+        else:
+            log("❌ Nenhuma imagem foi gerada.")
+
+    except Exception as e:
+        log(f"❌ Erro ao gerar visualização: {e}")
+        import traceback
+        traceback.print_exc()
 
 def auto_recorder_loop():
     """Thread que monitora movimento e grava waypoints."""
@@ -633,14 +818,9 @@ def start_cavebot_thread():
                 if pm and label_cavebot_status and label_cavebot_status.winfo_exists():
                     try:
                         px, py, pz = get_player_pos(pm, base_addr)
-                        wp_list = cavebot_instance._waypoints if cavebot_instance._waypoints else []
-                        wp_idx = cavebot_instance._current_index if cavebot_instance._waypoints else -1
-
-                        if wp_list and 0 <= wp_idx < len(wp_list):
-                            wp = wp_list[wp_idx]
-                            label_text = f"📍 Posição: ({px}, {py}, {pz})"
-                        else:
-                            label_text = f"📍 Posição: ({px}, {py}, {pz}) | 🎯 Sem waypoints"
+                        #wp_list = cavebot_instance._waypoints if cavebot_instance._waypoints else []
+                        #wp_idx = cavebot_instance._current_index if cavebot_instance._waypoints else -1
+                        label_text = f"📍Pos: ({px}, {py}, {pz})"
 
                         label_cavebot_status.configure(text=label_text)
                     except:
@@ -760,13 +940,15 @@ def start_alarm_thread():
     # Config Provider
     alarm_cfg = lambda: {
         'enabled': switch_alarm.get(),
-        'safe_list': BOT_SETTINGS['safe'], 
+        'safe_list': BOT_SETTINGS['safe'],
         'range': BOT_SETTINGS['alarm_range'],
         'floor': BOT_SETTINGS['alarm_floor'],
         'hp_enabled': BOT_SETTINGS['alarm_hp_enabled'],
         'hp_percent': BOT_SETTINGS['alarm_hp_percent'],
+        'visual_enabled': BOT_SETTINGS['alarm_visual_enabled'],
         'chat_enabled': BOT_SETTINGS['alarm_chat_enabled'],
-        'chat_gm': BOT_SETTINGS['alarm_chat_gm']
+        'chat_gm': BOT_SETTINGS['alarm_chat_gm'],
+        'debug_mode': BOT_SETTINGS['debug_mode']
     }
 
     check_run = lambda: state.is_running and state.is_connected
@@ -969,17 +1151,17 @@ def auto_loot_thread():
 
 def combat_loot_monitor_thread():
     """
-    Thread dedicada para monitorar estado de combate e loot.
+    Thread dedicada para monitorar estado de combate.
     Atualiza bot_state.py para coordenação entre módulos a cada 300ms.
-    """
-    from modules.auto_loot import scan_containers
 
-    log("🔍 Combat/Loot Monitor iniciado")
+    NOTA: state.has_open_loot é gerenciado DENTRO de auto_loot.py
+    (não é responsabilidade deste monitor thread)
+    """
+    log("🔍 Combat Monitor iniciado")
 
     while state.is_running:
         if not state.is_connected or pm is None:
             state.set_combat_state(False)
-            state.set_loot_state(False)
             time.sleep(1)
             continue
 
@@ -988,12 +1170,6 @@ def combat_loot_monitor_thread():
             target_id = pm.read_int(base_addr + TARGET_ID_PTR)
             in_combat = (target_id != 0)
             state.set_combat_state(in_combat)
-
-            # Verifica loot (containers abertos acima do índice de "minhas bags")
-            my_containers_count = BOT_SETTINGS.get('loot_containers', 2)
-            containers = scan_containers(pm, base_addr)
-            has_loot = any(c.index >= my_containers_count and c.amount > 0 for c in containers)
-            state.set_loot_state(has_loot)
 
         except Exception as e:
             # Silencioso para não poluir logs
@@ -1639,6 +1815,18 @@ def open_settings():
     # Divisória
     ctk.CTkFrame(tab_alarm, height=1, fg_color="#444").pack(fill="x", padx=10, pady=10)
 
+    # --- VISUAL ALARM ---
+    ctk.CTkLabel(tab_alarm, text="Monitorar Criaturas (Visual):", **UI['H1']).pack(anchor="w", padx=10, pady=(0,5))
+
+    switch_visual = ctk.CTkSwitch(tab_alarm, text="Alarme Visual", command=lambda: None, progress_color="#00D9FF", **UI['BODY'])
+    switch_visual.pack(anchor="w", padx=UI['PAD_INDENT'], pady=2)
+    if BOT_SETTINGS.get('alarm_visual_enabled', True): switch_visual.select()
+
+    ctk.CTkLabel(tab_alarm, text="↳ Detecta criaturas/players não-seguros na tela.", **UI['HINT']).pack(anchor="w", padx=45)
+
+    # Divisória
+    ctk.CTkFrame(tab_alarm, height=1, fg_color="#444").pack(fill="x", padx=10, pady=10)
+
     # --- CHAT ALARM ---
     ctk.CTkLabel(tab_alarm, text="Monitorar Chat (Default):", **UI['H1']).pack(anchor="w", padx=10, pady=(0,5))
 
@@ -1665,6 +1853,9 @@ def open_settings():
             BOT_SETTINGS['alarm_hp_enabled'] = bool(switch_hp_alarm.get())
             hp_val = int(entry_hp_pct.get())
             BOT_SETTINGS['alarm_hp_percent'] = hp_val
+
+            # Visual
+            BOT_SETTINGS['alarm_visual_enabled'] = bool(switch_visual.get())
 
             # Chat
             BOT_SETTINGS['alarm_chat_enabled'] = bool(switch_chat.get())
@@ -1948,7 +2139,7 @@ def open_settings():
     frame_cb_root = ctk.CTkFrame(tab_cavebot, fg_color="transparent")
     frame_cb_root.pack(fill="both", expand=True, padx=4, pady=4)
     frame_cb_root.grid_columnconfigure(0, weight=1)
-    frame_cb_root.grid_columnconfigure(1, weight=1)
+    frame_cb_root.grid_columnconfigure(1, weight=2)
 
     # --- COLUNA ESQUERDA: CONTROLES E MATRIZ ---
     frame_cb_left = ctk.CTkFrame(frame_cb_root, fg_color="transparent")
@@ -1973,44 +2164,33 @@ def open_settings():
     
     ctk.CTkFrame(frame_cb_left, height=2, fg_color="#444").pack(fill="x", pady=10)
 
-    # 2. Waypoint Manual (Matriz)
-    ctk.CTkLabel(frame_cb_left, text="Adicionar Manualmente", **UI['H1']).pack(anchor="w", pady=(0,2))
-    
-    # Dropdown de Ação
-    ctk.CTkLabel(frame_cb_left, text="Tipo de Ação:", **UI['BODY']).pack(anchor="w")
-    combo_action = ctk.CTkComboBox(frame_cb_left, values=["walk", "rope", "shovel", "use", "stand"], **UI['COMBO'])
-    combo_action.set("walk")
-    combo_action.pack(anchor="w", pady=5)
-    
-    ctk.CTkLabel(frame_cb_left, text="Direção (Relativa):", **UI['BODY']).pack(anchor="w", pady=(5,2))
-    
-    # Matriz 3x3 de Botões
-    frame_matrix = ctk.CTkFrame(frame_cb_left, fg_color="transparent")
-    frame_matrix.pack(anchor="center", pady=5)
-    
-    # Helper para criar botão da matriz
-    def mk_btn(parent, txt, dx, dy, color="#333"):
-        return ctk.CTkButton(parent, text=txt, fg_color=color,
-                             command=lambda: add_manual_waypoint(dx, dy, combo_action.get()),
-                             **UI['BTN_GRID'])
+    # 2. Adição Manual - SIMPLIFICADO
+    ctk.CTkLabel(frame_cb_left, text="Adição Manual", **UI['H1']).pack(anchor="w", pady=(0,2))
 
-    # Grid Layout (Norte é Y-1 no Tibia geralmente, mas depende da perspectiva.
-    # Assumindo sistema de coordenadas padrão: Y diminui para o Norte, X aumenta para Leste)
-    # NW (x-1, y-1) | N (x, y-1) | NE (x+1, y-1)
-    # W  (x-1, y)   | C (x, y)   | E  (x+1, y)
-    # SW (x-1, y+1) | S (x, y+1) | SE (x+1, y+1)
-    
-    mk_btn(frame_matrix, "NW", -1, -1).grid(row=0, column=0, padx=2, pady=2)
-    mk_btn(frame_matrix, "N",   0, -1).grid(row=0, column=1, padx=2, pady=2)
-    mk_btn(frame_matrix, "NE",  1, -1).grid(row=0, column=2, padx=2, pady=2)
-    
-    mk_btn(frame_matrix, "W",  -1,  0).grid(row=1, column=0, padx=2, pady=2)
-    mk_btn(frame_matrix, "📍",  0,  0, "#2CC985").grid(row=1, column=1, padx=2, pady=2) # Center/Stand
-    mk_btn(frame_matrix, "E",   1,  0).grid(row=1, column=2, padx=2, pady=2)
-    
-    mk_btn(frame_matrix, "SW", -1,  1).grid(row=2, column=0, padx=2, pady=2)
-    mk_btn(frame_matrix, "S",   0,  1).grid(row=2, column=1, padx=2, pady=2)
-    mk_btn(frame_matrix, "SE",  1,  1).grid(row=2, column=2, padx=2, pady=2)
+    ctk.CTkLabel(frame_cb_left, text="Clique no botão ou insira coordenadas:",
+                **UI['HINT']).pack(anchor="w", pady=(0, 5))
+
+    # Botão: Adicionar WP na posição atual
+    btn_add_here = ctk.CTkButton(
+        frame_cb_left,
+        text="Adicionar WP",
+        command=lambda: add_manual_waypoint(0, 0, "walk"),  # dx=0, dy=0 = posição atual
+        fg_color="#2CC985",
+        hover_color="#1FA86E",
+        **UI['BUTTON_SM']
+    )
+    btn_add_here.pack(fill="x", padx=20, pady=5)
+
+    # Botão: Inserir coordenadas manualmente
+    btn_add_coords = ctk.CTkButton(
+        frame_cb_left,
+        text="Inserir Coords (X, Y, Z)",
+        command=open_insert_coords_dialog,
+        fg_color="#3B8ED0",
+        hover_color="#2B6EA0",
+        **UI['BUTTON_SM']
+    )
+    btn_add_coords.pack(fill="x", padx=20, pady=(5, 0))
 
     # --- COLUNA DIREITA: LISTA E ARQUIVOS ---
     frame_cb_right = ctk.CTkFrame(frame_cb_root, fg_color="transparent")
@@ -2057,7 +2237,49 @@ def open_settings():
     # Lista (Log)
     txt_waypoints_settings = ctk.CTkTextbox(frame_cb_right, font=("Consolas", 10), state="disabled")
     txt_waypoints_settings.pack(fill="both", expand=True, pady=5)
-    
+
+    # Frame para botões de remoção (lado a lado)
+    frame_remove_buttons = ctk.CTkFrame(frame_cb_right, fg_color="transparent")
+    frame_remove_buttons.pack(fill="x", pady=(5, 0))
+    frame_remove_buttons.grid_columnconfigure(0, weight=1)
+    frame_remove_buttons.grid_columnconfigure(1, weight=1)
+
+    # Botão: Remover Último WP
+    btn_remove_last = ctk.CTkButton(
+        frame_remove_buttons,
+        text="Remover Último",
+        command=remove_last_waypoint,
+        fg_color="#FF5555",
+        hover_color="#CC4444",
+        height=30,
+        font=("Verdana", 9)
+    )
+    btn_remove_last.grid(row=0, column=0, padx=(0, 5), sticky="ew")
+
+    # Botão: Remover Específico (com input)
+    btn_remove_specific = ctk.CTkButton(
+        frame_remove_buttons,
+        text="❌Remover WP #",
+        command=open_remove_specific_dialog,
+        fg_color="#D95050",
+        hover_color="#B03030",
+        height=30,
+        font=("Verdana", 9)
+    )
+    btn_remove_specific.grid(row=0, column=1, padx=(5, 0), sticky="ew")
+
+    # Botão: Gerar Visualização da Rota
+    btn_visualize = ctk.CTkButton(
+        frame_remove_buttons,
+        text="🗺️ Gerar Imagem da Rota",
+        command=generate_route_visualization,
+        fg_color="#4A90E2",
+        hover_color="#357ABD",
+        height=30,
+        font=("Verdana", 9)
+    )
+    btn_visualize.grid(row=1, column=0, columnspan=2, padx=(0, 0), sticky="ew", pady=(5, 0))
+
     # Inicializa lista visual
     update_waypoint_display()
 
@@ -2200,17 +2422,38 @@ def toggle_xray():
     canvas.pack(fill="both", expand=True)
     update_xray()
 
-def on_close():
-    print("Encerrando bot e threads...")
+def on_reload():
+    """Reload: Fecha o bot e reinicia o main.py com código atualizado."""
+    print("🔄 Iniciando reload...")
     state.stop()
-    clear_player_name_cache() 
-    
+    clear_player_name_cache()
+
     try:
         if app:
             app.quit()
             app.destroy()
     except: pass
-    
+
+    import subprocess
+    import sys
+    import os
+
+    # Reinicia o processo main.py com caminho absoluto
+    script_path = os.path.abspath(__file__)
+    subprocess.Popen([sys.executable, script_path])
+    os._exit(0)
+
+def on_close():
+    print("Encerrando bot e threads...")
+    state.stop()
+    clear_player_name_cache()
+
+    try:
+        if app:
+            app.quit()
+            app.destroy()
+    except: pass
+
     import os
     os._exit(0)   
 
@@ -2246,7 +2489,12 @@ frame_header.pack(pady=(10, 5), fill="x", padx=10)
 btn_xray = ctk.CTkButton(frame_header, text="Raio-X", command=toggle_xray, width=25, height=25, fg_color="#303030", font=("Verdana", 10))
 btn_xray.pack(side="right", padx=5)
 
-btn_settings = ctk.CTkButton(frame_header, text="⚙️ Config.", command=open_settings, 
+# Botão de Reload (visível apenas se RELOAD_BUTTON = True em config.py)
+if config.RELOAD_BUTTON:
+    btn_reload = ctk.CTkButton(frame_header, text="🔄", command=on_reload, width=35, height=25, fg_color="#303030", hover_color="#505050", font=("Verdana", 10))
+    btn_reload.pack(side="right", padx=5)
+
+btn_settings = ctk.CTkButton(frame_header, text="⚙️ Config.", command=open_settings,
                              width=100, height=30, fg_color="#303030", hover_color="#505050",
                              font=("Verdana", 11, "bold"))
 btn_settings.pack(side="left")

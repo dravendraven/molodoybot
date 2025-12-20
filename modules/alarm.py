@@ -10,6 +10,9 @@ from core.config_utils import make_config_getter
 TELEGRAM_INTERVAL_NORMAL = 60
 TELEGRAM_INTERVAL_GM = 10
 
+# Offset do ponteiro do console (Baseado no seu input: 0x71DD18 - 0x400000)
+OFFSET_CONSOLE_PTR = 0x31DD18
+
 
 def get_my_name(pm, base_addr):
     """
@@ -28,15 +31,21 @@ def get_last_chat_entry(pm, base_addr):
     Lê a última entrada do canal Default.
     Retorna: (autor_string, mensagem_string)
     """
+    try:        
+        # TENTATIVA 1: Via Ponteiro (Correção baseada no seu debug)
+        # Lê o endereço da estrutura do console primeiro
+        console_struct = pm.read_int(base_addr + OFFSET_CONSOLE_PTR)
+        if console_struct > 0:
+            author_str = pm.read_string(console_struct + 0xF0, 128)
+            msg_str = pm.read_string(console_struct + 0x118, 128)
+            return author_str, msg_str
+    except:
+        pass
+
     try:
-        # Lê o ponteiro do console
-        console_ptr = pm.read_int(base_addr + OFFSET_CONSOLE_PTR)
-        if console_ptr == 0: return None, None
-        
-        # Lê as strings nos offsets
-        author_str = pm.read_string(console_ptr + OFFSET_CONSOLE_AUTHOR, 128)
-        msg_str = pm.read_string(console_ptr + OFFSET_CONSOLE_MSG, 128)
-        
+        # TENTATIVA 2: Estático (Fallback para config antiga)
+        author_str = pm.read_string(base_addr + OFFSET_CONSOLE_AUTHOR, 128)
+        msg_str = pm.read_string(base_addr + OFFSET_CONSOLE_MSG, 128)
         return author_str, msg_str
     except:
         return None, None
@@ -77,12 +86,15 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks):
         safe_list = get_cfg('safe_list', [])
         alarm_range = get_cfg('range', 8)
         floor_mode = get_cfg('floor', "Padrão")
-        
+
         hp_check_enabled = get_cfg('hp_enabled', False)
         hp_threshold = get_cfg('hp_percent', 50)
-        
+
+        visual_enabled = get_cfg('visual_enabled', True)
+
         chat_enabled = get_cfg('chat_enabled', False)
         chat_gm_enabled = get_cfg('chat_gm', True)
+        debug_mode = get_cfg('debug_mode', False)
 
         try:
             current_name = get_my_name(pm, base_addr)
@@ -114,6 +126,10 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks):
             if chat_enabled or chat_gm_enabled:
                 author, msg = get_last_chat_entry(pm, base_addr)
                 
+                # DEBUG: Mostra no terminal o que o bot está lendo
+                if debug_mode and (author or msg):
+                    print(f"[DEBUG CHAT] Author: '{author}' | Msg: '{msg}'")
+
                 # Se mensagem é nova
                 if author and msg and (msg != last_seen_msg or author != last_seen_author):
                     last_seen_msg = msg
@@ -146,51 +162,52 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks):
             # =================================================================
             # C. VERIFICAÇÃO VISUAL (CRIATURAS)
             # =================================================================
-            list_start = base_addr + TARGET_ID_PTR + REL_FIRST_ID
-            my_x, my_y, my_z = get_player_pos(pm, base_addr)
-            
             visual_danger = False
             visual_danger_name = ""
             is_visual_gm = False
 
-            for i in range(MAX_CREATURES):
-                slot = list_start + (i * STEP_SIZE)
-                try:
-                    c_id = pm.read_int(slot)
-                    if c_id > 0: 
-                        name_raw = pm.read_string(slot + OFFSET_NAME, 32)
-                        name = name_raw.split('\x00')[0].strip()
-                        if name == current_name: continue
+            if visual_enabled:
+                list_start = base_addr + TARGET_ID_PTR + REL_FIRST_ID
+                my_x, my_y, my_z = get_player_pos(pm, base_addr)
 
-                        vis = pm.read_int(slot + OFFSET_VISIBLE)
-                        cz = pm.read_int(slot + OFFSET_Z)
-                        
-                        valid_floor = False
-                        if floor_mode == "Padrão": valid_floor = (cz == my_z)
-                        elif floor_mode == "Superior (+1)": valid_floor = (cz == my_z or cz == my_z - 1)
-                        elif floor_mode == "Inferior (-1)": valid_floor = (cz == my_z or cz == my_z + 1)
-                        else: valid_floor = (abs(cz - my_z) <= 1)
+                for i in range(MAX_CREATURES):
+                    slot = list_start + (i * STEP_SIZE)
+                    try:
+                        c_id = pm.read_int(slot)
+                        if c_id > 0:
+                            name_raw = pm.read_string(slot + OFFSET_NAME, 32)
+                            name = name_raw.split('\x00')[0].strip()
+                            if name == current_name: continue
 
-                        if vis != 0 and valid_floor:
-                            # Detecta GM Visualmente
-                            if any(name.startswith(prefix) for prefix in GM_PREFIXES):
-                                visual_danger = True
-                                is_visual_gm = True
-                                visual_danger_name = f"GAMEMASTER {name}"
-                                break
-                            
-                            # Detecta Monstro/Player
-                            is_safe_creature = any(s in name for s in safe_list)
-                            if not is_safe_creature:
-                                cx = pm.read_int(slot + OFFSET_X)
-                                cy = pm.read_int(slot + OFFSET_Y)
-                                dist = max(abs(my_x - cx), abs(my_y - cy))
-                                
-                                if dist <= alarm_range:
+                            vis = pm.read_int(slot + OFFSET_VISIBLE)
+                            cz = pm.read_int(slot + OFFSET_Z)
+
+                            valid_floor = False
+                            if floor_mode == "Padrão": valid_floor = (cz == my_z)
+                            elif floor_mode == "Superior (+1)": valid_floor = (cz == my_z or cz == my_z - 1)
+                            elif floor_mode == "Inferior (-1)": valid_floor = (cz == my_z or cz == my_z + 1)
+                            else: valid_floor = (abs(cz - my_z) <= 1)
+
+                            if vis != 0 and valid_floor:
+                                # Detecta GM Visualmente
+                                if any(name.startswith(prefix) for prefix in GM_PREFIXES):
                                     visual_danger = True
-                                    visual_danger_name = f"{name} ({dist} sqm)"
+                                    is_visual_gm = True
+                                    visual_danger_name = f"GAMEMASTER {name}"
                                     break
-                except: continue
+
+                                # Detecta Monstro/Player
+                                is_safe_creature = any(s in name for s in safe_list)
+                                if not is_safe_creature:
+                                    cx = pm.read_int(slot + OFFSET_X)
+                                    cy = pm.read_int(slot + OFFSET_Y)
+                                    dist = max(abs(my_x - cx), abs(my_y - cy))
+
+                                    if dist <= alarm_range:
+                                        visual_danger = True
+                                        visual_danger_name = f"{name} ({dist} sqm)"
+                                        break
+                    except: continue
 
             # =================================================================
             # D. CONSOLIDAÇÃO DE ESTADO

@@ -132,18 +132,40 @@ class MemoryMap:
         """
         Retorna o tile na posição relativa (rel_x, rel_y) ao player, com suporte a chunks adjacentes.
 
-        Ignora validação de bounds e usa wrap-around para ler tiles visíveis que estão
-        em chunks diferentes (crucial para fisher que precisa ver toda tela 15x11).
+        IMPORTANTE: Leituras confiáveis apenas para |rel_x| <= 7 e |rel_y| <= 7.
+        Tiles além desse range podem ser lidos incorretamente devido a wrap-around.
 
         Retorna None apenas se dados de memória não forem válidos.
         """
+        from config import DEBUG_MEMORY_MAP
+
         # Validação de calibração
         if not self.is_calibrated or self.center_index == -1:
             return None
 
+        # ===== NOVO: VALIDAÇÃO DE RANGE =====
+        # Tiles visíveis na tela: -7 a +7 (15x15 aprox)
+        # Além disso, wrap-around pode ler tiles errados
+        MAX_RELIABLE_RANGE = 7
+
+        if abs(rel_x) > MAX_RELIABLE_RANGE or abs(rel_y) > MAX_RELIABLE_RANGE:
+            if DEBUG_MEMORY_MAP:
+                print(f"[MemoryMap] ⚠️ AVISO: Leitura de tile FORA DO RANGE CONFIÁVEL!")
+                print(f"[MemoryMap]   Coordenada relativa: ({rel_x}, {rel_y})")
+                print(f"[MemoryMap]   Range confiável: ±{MAX_RELIABLE_RANGE} SQM")
+                print(f"[MemoryMap]   Retornando: None (não confiável)")
+            return None  # Retorna None para indicar que tile não é confiável
+
         # Cálcula a posição no chunk atual
         target_x = 8 + rel_x + self.offset_x
         target_y = 6 + rel_y + self.offset_y
+
+        # ===== NOVO: LOG DE DEBUG =====
+        if DEBUG_MEMORY_MAP and (abs(rel_x) > 5 or abs(rel_y) > 5):
+            print(f"[MemoryMap] Leitura de tile distante:")
+            print(f"[MemoryMap]   rel=({rel_x}, {rel_y})")
+            print(f"[MemoryMap]   offset=({self.offset_x}, {self.offset_y})")
+            print(f"[MemoryMap]   target=({target_x}, {target_y})")
 
         # Usa wrap-around para cobrir chunks adjacentes
         # Tiles visíveis na tela podem estar em chunks diferentes
@@ -151,10 +173,21 @@ class MemoryMap:
         final_y = target_y % 14
         final_z = self.offset_z
 
+        # ===== NOVO: LOG DE WRAP-AROUND =====
+        if DEBUG_MEMORY_MAP and (abs(rel_x) > 5 or abs(rel_y) > 5):
+            print(f"[MemoryMap]   final=({final_x}, {final_y}) [após wrap]")
+
         # Cálcula índice com wrap-around
         index = final_x + (final_y * 18) + (final_z * 18 * 14)
 
         if 0 <= index < TOTAL_TILES and self.tiles[index]:
-            return self.tiles[index]
+            tile = self.tiles[index]
+
+            # ===== NOVO: LOG DA PILHA DE ITEMS =====
+            if DEBUG_MEMORY_MAP and (abs(rel_x) > 5 or abs(rel_y) > 5):
+                print(f"[MemoryMap]   index={index}")
+                print(f"[MemoryMap]   items={tile.items if tile else 'None'}")
+
+            return tile
 
         return None

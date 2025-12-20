@@ -20,7 +20,7 @@ class AStarWalker:
         self.max_depth = max_depth
         self.debug = debug
 
-    def get_next_step(self, target_rel_x, target_rel_y):
+    def get_next_step(self, target_rel_x, target_rel_y, activate_fallback=True):
         """
         Calcula o PRIMEIRO passo (dx, dy) para chegar no destino relativo.
         Se não encontrar caminho completo, tenta fallback para passo na direção correta.
@@ -84,7 +84,7 @@ class AStarWalker:
                     # Custo 25 faz com que o bot prefira andar 2 tiles retos (10+10=20)
                     # do que 1 diagonal, evitando o delay de "exhaust" do char.
                     # Ele só usará diagonal se os vizinhos retos estiverem bloqueados.
-                    move_cost = 35
+                    move_cost = 40
                 else:
                     move_cost = 10
 
@@ -142,10 +142,14 @@ class AStarWalker:
                 print(f"[A*]   Iterations: {iterations}, closed_set size: {len(closed_set)}, walkable_count: {walkable_count}")
 
         # FALLBACK: Se A* não encontrou caminho, tenta dar um passo em direção ao waypoint
-        # (Útil quando o target está fora do chunk visível)
-        if walkable_count > 0:
+        # (Útil quando o target está fora do chunk visível - ex: Cavebot)
+        if activate_fallback and walkable_count > 0:
+            if self.debug:
+                print(f"[A*] ⚠️ Usando fallback step (destino possivelmente fora do chunk)")
             return self._get_fallback_step(target_rel_x, target_rel_y)
-            print(f"[A*] ⚠️ Fallback step para direção ({target_rel_x}, {target_rel_y})")
+
+        if self.debug and not activate_fallback and walkable_count > 0:
+            print(f"[A*] ⚠️ FALLBACK DESABILITADO por parâmetro (activate_fallback=False)")
 
         return None
 
@@ -204,3 +208,72 @@ class AStarWalker:
         # O último da lista é o filho direto do start (o primeiro passo)
         first = path[-1]
         return (first.x, first.y)
+    
+
+    # Adicione dentro da classe AStarWalker em core/astar_walker.py
+    
+    def get_full_path(self, target_rel_x, target_rel_y):
+        """
+        Retorna a lista completa de passos [(dx, dy), (dx, dy)...] até o destino.
+        """
+        if target_rel_x == 0 and target_rel_y == 0:
+            return []
+
+        # Usa uma lista aberta de prioridade
+        start_node = Node(0, 0)
+        open_list = []
+        heapq.heappush(open_list, start_node)
+        
+        # Dicionário para rastrear nós visitados e reconstruir caminho
+        # Key: (x,y), Value: Node
+        visited = {(0,0): start_node}
+        
+        # Limite de segurança para não travar o bot em rotas impossíveis
+        iterations = 0
+
+        while open_list and iterations < self.max_depth:
+            current_node = heapq.heappop(open_list)
+            iterations += 1
+
+            # Chegou no destino?
+            if current_node.x == target_rel_x and current_node.y == target_rel_y:
+                return self._reconstruct_path_list(current_node)
+
+            # Só expande vizinhos se não estourou o limite de custo (G)
+            if current_node.g > 200: # Exemplo de limite de custo
+                continue
+
+            # Expande vizinhos (use self.neighbors que deve incluir diagonais)
+            # IMPORTANTE: Garanta que self.neighbors tenha diagonais no __init__
+            for dx, dy in [(-1,0),(1,0),(0,-1),(0,1), (-1,-1),(1,-1),(-1,1),(1,1)]:
+                nx, ny = current_node.x + dx, current_node.y + dy
+                is_target_node = (nx == target_rel_x and ny == target_rel_y)
+                # Verifica colisão
+                props = self.analyzer.get_tile_properties(nx, ny)
+                if not props['walkable'] and not is_target_node:
+                    continue
+
+                # Custo: 10 para reto, 14 para diagonal
+                move_cost = 40 if dx != 0 and dy != 0 else 10
+                new_g = current_node.g + move_cost
+                
+                if (nx, ny) not in visited or new_g < visited[(nx, ny)].g:
+                    # Heurística simples
+                    h = math.sqrt((target_rel_x - nx)**2 + (target_rel_y - ny)**2) * 10
+                    neighbor = Node(nx, ny, parent=current_node, g=new_g, h=h)
+                    
+                    visited[(nx, ny)] = neighbor
+                    heapq.heappush(open_list, neighbor)
+
+        return []
+
+    def _reconstruct_path_list(self, node):
+        path = []
+        curr = node
+        while curr.parent:
+            dx = curr.x - curr.parent.x
+            dy = curr.y - curr.parent.y
+            path.append((dx, dy))
+            curr = curr.parent
+        path.reverse()
+        return path

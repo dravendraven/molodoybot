@@ -9,6 +9,7 @@ armazenado pelo caller após primeira leitura bem-sucedida.
 """
 
 from config import (
+    BATTLELIST_BEGIN_ADDRESS,
     TARGET_ID_PTR,
     REL_FIRST_ID,
     STEP_SIZE,
@@ -19,8 +20,55 @@ from config import (
     OFFSET_Y,
     OFFSET_Z,
     OFFSET_HP,
+    OFFSET_SPEED,
 )
 
+def get_player_speed(pm, base_addr) -> int:
+    """
+    Escaneia a Battle List (endereço fixo) procurando pelo próprio player 
+    para ler o Speed atual.
+    
+    Args:
+        pm: Instância do Pymem
+        base_addr: Endereço base do módulo Tibia
+        
+    Returns:
+        int: Velocidade atual do player (ex: 220). 
+             Retorna 220 (padrão) se não encontrar.
+    """
+    try:
+        # 1. Ler o ID do Player Logado
+        player_id = pm.read_int(base_addr + OFFSET_PLAYER_ID)
+        
+        if player_id == 0:
+            return 220 # Não logado ou erro
+            
+        # 2. Endereço inicial da Battle List
+        battle_list_addr = base_addr + BATTLELIST_BEGIN_ADDRESS
+        
+        # 3. Iterar pela lista
+        for i in range(MAX_CREATURES):
+            # Calcula endereço da criatura atual
+            creature_addr = battle_list_addr + (i * STEP_SIZE)
+            
+            # Lê o ID (Offset 0x00 da estrutura da criatura)
+            creature_id = pm.read_int(creature_addr)
+            
+            # Se for o nosso player
+            if creature_id == player_id:
+                speed = pm.read_int(creature_addr + OFFSET_SPEED)
+                return speed
+            
+            # Otimização: ID 0 indica fim da lista válida (em listas contíguas)
+            # Nota: Em alguns servidores a lista pode ter buracos, se tiver dúvidas, remova este if.
+            if creature_id == 0:
+                break
+                
+    except Exception as e:
+        print(f"[PlayerCore] Erro ao ler speed: {e}")
+        
+    # Valor de fallback seguro (velocidade normal de char lvl baixo)
+    return 220
 
 def get_player_id(pm, base_addr: int) -> int:
     """

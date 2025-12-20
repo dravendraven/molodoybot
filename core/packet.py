@@ -313,3 +313,19 @@ def close_container(pm, container_id):
     pb.add_byte(container_id)
     pb.add_call(FUNC_SEND_PACKET, 1)
     inject_packet(pm, pb.get_code())
+
+def stop(pm):
+    """
+    Envia o pacote de STOP (Parar personagem).
+    Usa o OpCode definido no início do arquivo (OP_STOP = 0xBE).
+    """
+    pb = PacketBuilder()
+    
+    # 1. Cria o pacote com o OpCode de Stop
+    pb.add_call(FUNC_CREATE_PACKET, OP_STOP)
+    
+    # 2. Envia o pacote (tamanho 1, pois Stop não tem payload)
+    pb.add_call(FUNC_SEND_PACKET, 1)
+    
+    # 3. Injeta o código na memória do jogo
+    inject_packet(pm, pb.get_code())
