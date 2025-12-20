@@ -44,6 +44,7 @@ class BotState:
         self._is_gm_detected: bool = False
         self._resume_timestamp: float = 0.0
         self._pause_reason: str = ""  # "MONSTER", "PLAYER", "GM", "MANUAL"
+        self._cavebot_active: bool = False  # Flag para ignorar pausa de alarme quando Cavebot ativo
         
         # ===== Estado de Execução =====
         self._bot_running: bool = True
@@ -76,7 +77,13 @@ class BotState:
             if not value:
                 self._char_name = ""
                 self._char_id = 0
-    
+
+    @property
+    def cavebot_active(self) -> bool:
+        """Retorna True se Cavebot está ativo."""
+        with self._lock:
+            return self._cavebot_active
+
     # =========================================================================
     # SEGURANÇA - Métodos principais
     # =========================================================================
@@ -84,15 +91,23 @@ class BotState:
     def is_safe(self) -> bool:
         """
         Verifica se é seguro executar ações do bot.
-        
+
         Considera:
         - Flag is_safe_to_bot
         - Cooldown (resume_timestamp)
-        
+        - Estado do Cavebot (se ativo, ignora alarme)
+
         Returns:
             True se pode executar ações, False caso contrário
+
+        EXCEÇÃO: Se Cavebot estiver ativo, retorna True mesmo com alarme
+        para permitir que módulos continuem operando durante navegação.
         """
         with self._lock:
+            # Se Cavebot ativo, permite módulos continuarem independente do alarme
+            if self._cavebot_active:
+                return True
+
             if not self._is_safe_to_bot:
                 return False
             if time.time() < self._resume_timestamp:
@@ -146,7 +161,21 @@ class BotState:
         """
         with self._lock:
             self._resume_timestamp = time.time() + seconds
-    
+
+    def set_cavebot_state(self, active: bool):
+        """
+        Define se Cavebot está ativo.
+
+        Quando True, is_safe() sempre retorna True independente do alarme,
+        permitindo que módulos (Trainer, Loot, Runemaker) continuem operando
+        durante navegação.
+
+        Args:
+            active: True para ativar, False para desativar
+        """
+        with self._lock:
+            self._cavebot_active = active
+
     # =========================================================================
     # SEGURANÇA - Propriedades de leitura
     # =========================================================================

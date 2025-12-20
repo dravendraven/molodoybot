@@ -1,6 +1,5 @@
 # core/astar_walker.py
 import heapq
-import math
 
 class Node:
     def __init__(self, x, y, parent=None, g=0, h=0):
@@ -84,7 +83,7 @@ class AStarWalker:
                     # Custo 25 faz com que o bot prefira andar 2 tiles retos (10+10=20)
                     # do que 1 diagonal, evitando o delay de "exhaust" do char.
                     # Ele só usará diagonal se os vizinhos retos estiverem bloqueados.
-                    move_cost = 40
+                    move_cost = 30
                 else:
                     move_cost = 10
 
@@ -96,9 +95,9 @@ class AStarWalker:
 
                 total_cost = move_cost + tile_cost
                 new_g = current_node.g + total_cost
-                # Aumentar peso da heurística para melhor guiar a busca
-                # Com diagonal_cost=40, precisamos de h mais forte
-                new_h = math.sqrt((nx - target_rel_x)**2 + (ny - target_rel_y)**2) * 20
+                # Heurística Manhattan para grid-based pathfinding (Tibia)
+                # Manhattan distance é mais apropriado que Euclidiano para movimento em tiles
+                new_h = (abs(nx - target_rel_x) + abs(ny - target_rel_y)) * 10
 
                 new_node = Node(nx, ny, current_node, new_g, new_h)
                 heapq.heappush(open_list, new_node)
@@ -165,8 +164,8 @@ class AStarWalker:
             (-1, -1), (-1, 1), (1, -1), (1, 1)
         ]
 
-        # Distância atual até o target (antes de dar qualquer passo)
-        current_distance = math.sqrt(target_rel_x**2 + target_rel_y**2)
+        # Distância atual até o target usando Manhattan distance (grid-based)
+        current_distance = abs(target_rel_x) + abs(target_rel_y)
 
         best_step = None
         best_distance = float('inf')
@@ -177,11 +176,11 @@ class AStarWalker:
             if not props['walkable']:
                 continue
 
-            # Calcula distância até o destino SE der este passo
+            # Calcula distância até o destino SE der este passo usando Manhattan distance
             # (dx, dy) é a posição após o passo
             new_x = dx
             new_y = dy
-            new_distance = math.sqrt((new_x - target_rel_x)**2 + (new_y - target_rel_y)**2)
+            new_distance = abs(new_x - target_rel_x) + abs(new_y - target_rel_y)
 
             # CRÍTICO: SÓ considera passos que reduzem a distância
             # (evita andar para trás ou ficar no mesmo lugar)
@@ -254,12 +253,14 @@ class AStarWalker:
                     continue
 
                 # Custo: 10 para reto, 14 para diagonal
-                move_cost = 40 if dx != 0 and dy != 0 else 10
+                move_cost = 30 if dx != 0 and dy != 0 else 10
                 new_g = current_node.g + move_cost
                 
                 if (nx, ny) not in visited or new_g < visited[(nx, ny)].g:
-                    # Heurística simples
-                    h = math.sqrt((target_rel_x - nx)**2 + (target_rel_y - ny)**2) * 10
+                    # Heurística Manhattan para grid-based pathfinding
+                    dist_x = abs(target_rel_x - nx)
+                    dist_y = abs(target_rel_y - ny)
+                    h = (dist_x + dist_y) * 10
                     neighbor = Node(nx, ny, parent=current_node, g=new_g, h=h)
                     
                     visited[(nx, ny)] = neighbor

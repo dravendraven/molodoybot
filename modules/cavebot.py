@@ -144,10 +144,12 @@ class Cavebot:
 
     def start(self):
         self.enabled = True
+        state.set_cavebot_state(True)  # Notifica que Cavebot está ativo
         print("[Cavebot] Iniciado.")
 
     def stop(self):
         self.enabled = False
+        state.set_cavebot_state(False)  # Notifica que Cavebot está inativo
         print("[Cavebot] Parado.")
 
     def run_cycle(self):
@@ -545,34 +547,26 @@ class Cavebot:
 
     def _advance_waypoint(self):
         """
-        Avança para o próximo waypoint em uma lógica circular/bidirecional.
+        Avança para o próximo waypoint em lógica SEMPRE FORWARD e CIRCULAR.
 
         Comportamento:
-        - Começa indo para frente: 0 → 1 → 2 → ... → n-1
-        - Quando atinge o final, inverte: n-1 → n-2 → ... → 0
-        - Quando volta ao início, inverte novamente: 0 → 1 → ...
+        - Sempre vai para frente: 0 → 1 → 2 → ... → n-1 → 0 → 1 → ...
+        - Loop infinito sem inversão de direção
+        - Simples e previsível
 
-        Garante que o bot nunca pule de um waypoint para outro sem seguir a sequência.
+        Garante navegação circular e linear sem mudança de direção.
         """
         if not self._waypoints:
             return
 
         n_waypoints = len(self._waypoints)
 
-        # Avança na direção atual
-        self._current_index += self._direction
+        # Avança sempre para o próximo (forward)
+        self._current_index = (self._current_index + 1) % n_waypoints
 
-        # Verifica se precisa inverter a direção
-        if self._current_index >= n_waypoints:
-            # Chegou no final (tentou ir além do último), inverte
-            self._direction = -1
-            self._current_index = n_waypoints - 2  # Volta para o penúltimo
-            print(f"[Cavebot] 🔄 Invertendo direção (backward): indo para WP {self._current_index}")
-        elif self._current_index < 0:
-            # Voltou ao início (tentou ir antes do primeiro), inverte
-            self._direction = 1
-            self._current_index = 1  # Pula para o segundo
-            print(f"[Cavebot] 🔄 Invertendo direção (forward): indo para WP {self._current_index}")
+        if self._current_index == 0:
+            # Completou um loop e voltou ao início
+            print(f"[Cavebot] 🔁 Loop completo! Reiniciando do WP #0")
 
     def _move_step(self, dx, dy):
         """Envia o pacote de andar."""

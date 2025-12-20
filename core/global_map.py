@@ -1,6 +1,5 @@
 import os
 import heapq
-import math
 import time
 
 class GlobalMap:
@@ -129,9 +128,10 @@ class GlobalMap:
                     if (nx, ny) not in cost_so_far or new_cost < cost_so_far[(nx, ny)]:
                         cost_so_far[(nx, ny)] = new_cost
                         
-                        # Heurística Manhatan ou Euclidiana ajustada para escala 10
-                        # Euclidiana é melhor para grids com diagonais
-                        h_cost = int(math.sqrt((ex-nx)**2 + (ey-ny)**2) * 10)
+                        # Heurística Manhattan para grid-based pathfinding
+                        # Manhattan distance é mais apropriado para movimento em tiles (Tibia)
+
+                        h_cost = (abs(ex - nx) + abs(ey - ny)) * 10
                         priority = new_cost + h_cost
                         
                         heapq.heappush(open_list, (priority, h_cost, nx, ny))
@@ -242,7 +242,7 @@ class GlobalMap:
         closest_point = result['closest_point']
         barriers = result['barrier_colors']
         
-        dist_remaining = math.sqrt((ex - closest_point[0])**2 + (ey - closest_point[1])**2)
+        dist_remaining = abs(ex - closest_point[0]) + abs(ey - closest_point[1])
         print(f"❌ O bot travou a {dist_remaining:.1f} sqm do destino.")
         print(f"📍 Ponto mais próximo alcançado: {closest_point}")
         print(f"🎨 Cores das barreiras encontradas: {list(barriers)}")
@@ -272,8 +272,8 @@ class GlobalMap:
             cx, cy = queue.pop(0)
             steps += 1
             
-            # Atualiza o ponto mais próximo do destino que conseguimos chegar
-            dist = math.sqrt((ex - cx)**2 + (ey - cy)**2)
+            # Atualiza o ponto mais próximo do destino que conseguimos chegar (Manhattan distance)
+            dist = abs(ex - cx) + abs(ey - cy)
             if dist < closest_dist:
                 closest_dist = dist
                 closest_point = (cx, cy)
