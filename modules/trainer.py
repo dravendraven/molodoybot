@@ -21,7 +21,7 @@ from core.astar_walker import AStarWalker
 SCAN_DELAY = 0.5
 
 # Retargeting Configuration
-RETARGET_DELAY = 2.5  # Segundos para aguardar antes de retargetar alvo inacessível
+RETARGET_DELAY = 1.5  # Segundos para aguardar antes de retargetar alvo inacessível
 REACHABILITY_CHECK_INTERVAL = 1.0  # Frequência de verificação de acessibilidade
 
 def get_my_char_name(pm, base_addr):

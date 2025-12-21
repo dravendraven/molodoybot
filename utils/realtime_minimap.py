@@ -16,7 +16,7 @@ class RealtimeMinimapVisualizer:
     This achieves 10-20x performance improvement for real-time updates.
     """
 
-    def __init__(self, maps_dir, walkable_colors, color_palette, target_size=200):
+    def __init__(self, maps_dir, walkable_colors, color_palette, fixed_size=150):
         """
         Initialize the minimap visualizer.
 
@@ -24,13 +24,13 @@ class RealtimeMinimapVisualizer:
             maps_dir: Directory containing .map chunk files
             walkable_colors: Set or list of IDs that are walkable
             color_palette: Dict mapping byte values to RGB tuples
-            target_size: Target size in pixels for the minimap (default 200x200)
+            fixed_size: Fixed size in pixels for the minimap (always 150x150)
         """
         self.maps_dir = maps_dir
         self.walkable_colors = set(walkable_colors)
         self.color_palette = color_palette
         self.default_color = (80, 80, 80)
-        self.target_size = target_size  # Target image size (200x200 for GUI fit)
+        self.fixed_size = fixed_size  # Fixed image size (always 150x150)
 
         # Cache of rendered base maps (terrain layer only)
         # Key: (floor_z, min_x, min_y, max_x, max_y) -> PIL.Image
@@ -115,23 +115,11 @@ class RealtimeMinimapVisualizer:
 
     def _calculate_pixels_per_tile(self, tile_width, tile_height):
         """
-        Calculate dynamic pixels_per_tile to fit target_size.
-
-        Returns pixels_per_tile (min 2, max 4 for GUI fit).
-        Enforces minimum of 2 pixels per tile to ensure tiles are visible.
-        Maximum of 4 pixels per tile to keep minimap compact (200x200 max).
+        Calculate pixels_per_tile to fit bbox into fixed_size.
+        Uses the larger dimension to ensure everything fits in the square.
         """
-        # Calculate what pixels_per_tile would fit the target size
-        ppt_width = self.target_size / tile_width
-        ppt_height = self.target_size / tile_height
-
-        # Use the smaller value to ensure both dimensions fit
-        pixels_per_tile = min(ppt_width, ppt_height)
-
-        # Clamp between 2 and 4 pixels per tile (max 4 to fit in 200x200)
-        pixels_per_tile = max(2, min(4, int(pixels_per_tile)))
-
-        return pixels_per_tile
+        max_tiles = max(tile_width, tile_height)
+        return self.fixed_size / max_tiles
 
     def _render_base_terrain(self, floor_z, bbox):
         """
@@ -144,12 +132,11 @@ class RealtimeMinimapVisualizer:
         tile_width = max_x - min_x + 1
         tile_height = max_y - min_y + 1
 
-        # Dynamic zoom: calculate pixels_per_tile to fit target_size
+        # Calculate pixels_per_tile to fit in fixed_size
         pixels_per_tile = self._calculate_pixels_per_tile(tile_width, tile_height)
-        width = tile_width * pixels_per_tile
-        height = tile_height * pixels_per_tile
 
-        img = Image.new('RGB', (width, height), (0, 0, 0))
+        # FIXED SIZE: always fixed_size x fixed_size (150x150)
+        img = Image.new('RGB', (self.fixed_size, self.fixed_size), (0, 0, 0))
         pixels = img.load()
 
         # Calculate which chunks are needed
@@ -193,6 +180,7 @@ class RealtimeMinimapVisualizer:
         """
         Render a single 256x256 chunk to the image pixels.
         Only renders pixels within the bounding box.
+        Supports fractional pixels_per_tile for dynamic zoom.
         """
         min_x, min_y, max_x, max_y = bbox
         base_x = cx * 256
@@ -219,13 +207,17 @@ class RealtimeMinimapVisualizer:
                 # Apply 60% brightness to terrain tiles
                 color = tuple(int(c * 0.6) for c in base_color)
 
-                # Draw NxN pixel block for this tile
-                start_px = rel_tile_x * pixels_per_tile
-                start_py = rel_tile_y * pixels_per_tile
+                # Calculate pixel range for this tile (handles fractional pixels_per_tile)
+                start_px = int(rel_tile_x * pixels_per_tile)
+                start_py = int(rel_tile_y * pixels_per_tile)
+                end_px = int((rel_tile_x + 1) * pixels_per_tile)
+                end_py = int((rel_tile_y + 1) * pixels_per_tile)
 
-                for px in range(pixels_per_tile):
-                    for py in range(pixels_per_tile):
-                        pixels[start_px + px, start_py + py] = color
+                # Draw pixel block for this tile (at least 1 pixel)
+                for px in range(start_px, max(end_px, start_px + 1)):
+                    for py in range(start_py, max(end_py, start_py + 1)):
+                        if 0 <= px < self.fixed_size and 0 <= py < self.fixed_size:
+                            pixels[px, py] = color
 
     # ========== OVERLAY DRAWING METHODS ==========
 
@@ -241,13 +233,14 @@ class RealtimeMinimapVisualizer:
                 rel_tile_x = wx - min_x
                 rel_tile_y = wy - min_y
 
-                # Center of the 4x4 tile block
-                center_px = rel_tile_x * pixels_per_tile + pixels_per_tile // 2
-                center_py = rel_tile_y * pixels_per_tile + pixels_per_tile // 2
+                # Center of the tile block (handles fractional pixels_per_tile)
+                center_px = int(rel_tile_x * pixels_per_tile + pixels_per_tile / 2)
+                center_py = int(rel_tile_y * pixels_per_tile + pixels_per_tile / 2)
 
-                # Draw 3x3 pixel blue marker centered on tile
-                for dx in range(-1, 2):
-                    for dy in range(-1, 2):
+                # Draw marker (size adapts to pixels_per_tile, minimum 1 pixel)
+                marker_size = max(1, int(pixels_per_tile / 2))
+                for dx in range(-marker_size, marker_size + 1):
+                    for dy in range(-marker_size, marker_size + 1):
                         px = center_px + dx
                         py = center_py + dy
                         if 0 <= px < img.width and 0 <= py < img.height:
@@ -279,14 +272,14 @@ class RealtimeMinimapVisualizer:
                         rel_tile_x = tx - min_x
                         rel_tile_y = ty - min_y
 
-                        # Fill entire 4x4 tile with color
-                        start_px = rel_tile_x * pixels_per_tile
-                        start_py = rel_tile_y * pixels_per_tile
+                        # Fill tile with color (handles fractional pixels_per_tile)
+                        start_px = int(rel_tile_x * pixels_per_tile)
+                        start_py = int(rel_tile_y * pixels_per_tile)
+                        end_px = int((rel_tile_x + 1) * pixels_per_tile)
+                        end_py = int((rel_tile_y + 1) * pixels_per_tile)
 
-                        for dx in range(pixels_per_tile):
-                            for dy in range(pixels_per_tile):
-                                px = start_px + dx
-                                py = start_py + dy
+                        for px in range(start_px, max(end_px, start_px + 1)):
+                            for py in range(start_py, max(end_py, start_py + 1)):
                                 if 0 <= px < img.width and 0 <= py < img.height:
                                     pixels[px, py] = color
 
@@ -303,16 +296,16 @@ class RealtimeMinimapVisualizer:
                 rel_tile_x = x - min_x
                 rel_tile_y = y - min_y
 
-                # Fill entire tile with pink (not just center pixel)
-                start_px = rel_tile_x * pixels_per_tile
-                start_py = rel_tile_y * pixels_per_tile
+                # Fill tile with pink (handles fractional pixels_per_tile)
+                start_px = int(rel_tile_x * pixels_per_tile)
+                start_py = int(rel_tile_y * pixels_per_tile)
+                end_px = int((rel_tile_x + 1) * pixels_per_tile)
+                end_py = int((rel_tile_y + 1) * pixels_per_tile)
 
-                for dx in range(pixels_per_tile):
-                    for dy in range(pixels_per_tile):
-                        px = start_px + dx
-                        py = start_py + dy
+                for px in range(start_px, max(end_px, start_px + 1)):
+                    for py in range(start_py, max(end_py, start_py + 1)):
                         if 0 <= px < img.width and 0 <= py < img.height:
-                            pixels[px, py] = (255, 20, 147)  # Deep Pink - FILL TILE
+                            pixels[px, py] = (255, 20, 147)  # Deep Pink
 
     def _draw_local_cache(self, img, player_pos, local_cache, bbox, pixels_per_tile):
         """
@@ -321,10 +314,10 @@ class RealtimeMinimapVisualizer:
         """
         pixels = img.load()
         min_x, min_y, max_x, max_y = bbox
-        px, py, pz = player_pos
+        player_x, player_y, pz = player_pos
 
         # Trace path from current position
-        curr_x, curr_y = px, py
+        curr_x, curr_y = player_x, player_y
 
         for dx, dy in local_cache[:5]:  # Only next 5 steps
             curr_x += dx
@@ -334,16 +327,16 @@ class RealtimeMinimapVisualizer:
                 rel_tile_x = curr_x - min_x
                 rel_tile_y = curr_y - min_y
 
-                # Fill entire tile with cyan (not just center pixel)
-                start_px = rel_tile_x * pixels_per_tile
-                start_py = rel_tile_y * pixels_per_tile
+                # Fill tile with cyan (handles fractional pixels_per_tile)
+                start_px = int(rel_tile_x * pixels_per_tile)
+                start_py = int(rel_tile_y * pixels_per_tile)
+                end_px = int((rel_tile_x + 1) * pixels_per_tile)
+                end_py = int((rel_tile_y + 1) * pixels_per_tile)
 
-                for dx_offset in range(pixels_per_tile):
-                    for dy_offset in range(pixels_per_tile):
-                        px_coord = start_px + dx_offset
-                        py_coord = start_py + dy_offset
-                        if 0 <= px_coord < img.width and 0 <= py_coord < img.height:
-                            pixels[px_coord, py_coord] = (0, 255, 255)  # Cyan - FILL TILE
+                for px in range(start_px, max(end_px, start_px + 1)):
+                    for py in range(start_py, max(end_py, start_py + 1)):
+                        if 0 <= px < img.width and 0 <= py < img.height:
+                            pixels[px, py] = (0, 255, 255)  # Cyan
 
     def _draw_current_target(self, img, target_wp, bbox, pixels_per_tile):
         """Highlight current target waypoint (yellow, fills entire tile)."""
@@ -355,14 +348,14 @@ class RealtimeMinimapVisualizer:
             rel_tile_x = tx - min_x
             rel_tile_y = ty - min_y
 
-            # Fill entire 4x4 tile with yellow
-            start_px = rel_tile_x * pixels_per_tile
-            start_py = rel_tile_y * pixels_per_tile
+            # Fill tile with yellow (handles fractional pixels_per_tile)
+            start_px = int(rel_tile_x * pixels_per_tile)
+            start_py = int(rel_tile_y * pixels_per_tile)
+            end_px = int((rel_tile_x + 1) * pixels_per_tile)
+            end_py = int((rel_tile_y + 1) * pixels_per_tile)
 
-            for dx in range(pixels_per_tile):
-                for dy in range(pixels_per_tile):
-                    px = start_px + dx
-                    py = start_py + dy
+            for px in range(start_px, max(end_px, start_px + 1)):
+                for py in range(start_py, max(end_py, start_py + 1)):
                     if 0 <= px < img.width and 0 <= py < img.height:
                         pixels[px, py] = (255, 255, 0)  # Yellow
 
@@ -370,22 +363,22 @@ class RealtimeMinimapVisualizer:
         """Mark player position (white, fills entire tile)."""
         pixels = img.load()
         min_x, min_y, max_x, max_y = bbox
-        px, py, pz = player_pos
+        player_x, player_y, _ = player_pos
 
-        if min_x <= px <= max_x and min_y <= py <= max_y:
-            rel_tile_x = px - min_x
-            rel_tile_y = py - min_y
+        if min_x <= player_x <= max_x and min_y <= player_y <= max_y:
+            rel_tile_x = player_x - min_x
+            rel_tile_y = player_y - min_y
 
-            # Fill entire 4x4 tile with white
-            start_px = rel_tile_x * pixels_per_tile
-            start_py = rel_tile_y * pixels_per_tile
+            # Fill tile with white (handles fractional pixels_per_tile)
+            start_px = int(rel_tile_x * pixels_per_tile)
+            start_py = int(rel_tile_y * pixels_per_tile)
+            end_px = int((rel_tile_x + 1) * pixels_per_tile)
+            end_py = int((rel_tile_y + 1) * pixels_per_tile)
 
-            for dx in range(pixels_per_tile):
-                for dy in range(pixels_per_tile):
-                    px_coord = start_px + dx
-                    py_coord = start_py + dy
-                    if 0 <= px_coord < img.width and 0 <= py_coord < img.height:
-                        pixels[px_coord, py_coord] = (255, 255, 255)  # White
+            for px in range(start_px, max(end_px, start_px + 1)):
+                for py in range(start_py, max(end_py, start_py + 1)):
+                    if 0 <= px < img.width and 0 <= py < img.height:
+                        pixels[px, py] = (255, 255, 255)  # White
 
     # ========== UTILITY METHODS ==========
 
@@ -467,8 +460,8 @@ class RealtimeMinimapVisualizer:
         return (min_x, min_y, max_x, max_y)
 
     def _create_placeholder_image(self):
-        """Create placeholder image when no waypoints exist on current floor."""
-        img = Image.new('RGB', (200, 100), (40, 40, 40))
+        """Create placeholder image with fixed size."""
+        img = Image.new('RGB', (self.fixed_size, self.fixed_size), (40, 40, 40))
         return img
 
     def clear_cache(self):

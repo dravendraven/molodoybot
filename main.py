@@ -20,6 +20,7 @@ matplotlib.use("TkAgg") # Define o backend para funcionar com Tkinter
 import sys
 import traceback
 import ctypes
+import tkinter as tk
 from tkinter import filedialog # Para salvar/abrir arquivos
 from pathlib import Path
 
@@ -2426,125 +2427,157 @@ def toggle_graph():
 
 def toggle_xray():
     global xray_window
-    
+
+    print("[XRAY] toggle_xray() chamado")
+
     if xray_window is not None:
+        print("[XRAY] Fechando janela existente")
         xray_window.destroy()
         xray_window = None
-        btn_xray.configure(fg_color="#303030") 
+        btn_xray.configure(fg_color="#303030")
         return
 
-    btn_xray.configure(fg_color="#2CC985") 
-    
+    print("[XRAY] Criando nova janela X-Ray")
+    btn_xray.configure(fg_color="#2CC985")
+
     xray_window = ctk.CTkToplevel(app)
-    xray_window.overrideredirect(True) 
+    xray_window.overrideredirect(True)
     xray_window.attributes("-topmost", True)
-    xray_window.attributes("-transparentcolor", "black") 
+    xray_window.attributes("-transparentcolor", "black")
     xray_window.config(bg="black")
-    
+    print("[XRAY] Janela criada com sucesso")
+
     def update_xray():
-        if not xray_window or not xray_window.winfo_exists(): return
-        
+        if not xray_window or not xray_window.winfo_exists():
+            print("[XRAY] Janela não existe mais, saindo")
+            return
+
         try:
             hwnd = win32gui.FindWindow("TibiaClient", None) or win32gui.FindWindow(None, "Tibia")
-            
+            #print(f"[XRAY] hwnd={hwnd}")
+
+            if not hwnd:
+                #print("[XRAY] Tibia não encontrado")
+                xray_window.after(100, update_xray)
+                return
+
             active_hwnd = win32gui.GetForegroundWindow()
             if hwnd and active_hwnd != hwnd:
                 canvas.delete("all")
                 xray_window.after(100, update_xray)
                 return
-            
-            if hwnd:
-                rect = win32gui.GetWindowRect(hwnd) 
-                win_x, win_y = rect[0], rect[1]
-                
-                client_point = win32gui.ClientToScreen(hwnd, (0, 0))
-                client_x, client_y = client_point
 
-                offset_x = client_x - win_x
-                offset_y = client_y - win_y
+            rect = win32gui.GetWindowRect(hwnd)
+            win_x, win_y = rect[0], rect[1]
 
-                w = rect[2] - rect[0]
-                h = rect[3] - rect[1]
-                xray_window.geometry(f"{w}x{h}+{rect[0]}+{rect[1]}")
-                
-                canvas.delete("all")
-                
-                if pm is not None:
-                    gv = get_game_view(pm, base_addr)
-                    my_x, my_y, my_z = get_player_pos(pm, base_addr)
-                    
-                    if hud_overlay_data and gv:
-                        for item in hud_overlay_data:
-                            dx = item.get('dx')
-                            dy = item.get('dy')
-                            raw_color = item.get('color', '#FFFFFF')
-                            text = item.get('text', '') 
+            client_point = win32gui.ClientToScreen(hwnd, (0, 0))
+            client_x, client_y = client_point
 
-                            # CORREÇÃO 1: Tkinter não aceita Alpha (#RRGGBBAA). 
-                            # Se vier com 9 chars (ex: #00FF0022), cortamos para 7 (#00FF00).
-                            # Para simular "transparência", usamos stipple se a cor original tinha alpha.
-                            color = raw_color[:7] if len(raw_color) > 7 else raw_color
-                            is_transparent = len(raw_color) > 7
-                            
-                            raw_cx = gv['center'][0] + (dx * gv['sqm'])
-                            raw_cy = gv['center'][1] + (dy * gv['sqm'])
-                            
-                            cx = raw_cx + offset_x
-                            cy = raw_cy + offset_y
+            offset_x = client_x - win_x
+            offset_y = client_y - win_y
 
-                            size = gv['sqm'] / 2 
-                            
-                            # CORREÇÃO 2: Estilo "Ghost" (Pontilhado) se for transparente
-                            # stipple='gray50' faz o quadrado ficar meio invisível
-                            stipple_val = 'gray50' if is_transparent else ''
-                            width_val = 1 if is_transparent else 2
+            w = rect[2] - rect[0]
+            h = rect[3] - rect[1]
+            xray_window.geometry(f"{w}x{h}+{rect[0]}+{rect[1]}")
 
-                            canvas.create_rectangle(cx - size, cy - size, cx + size, cy + size, 
-                                                  outline=color, width=width_val, stipple=stipple_val)
-                            
-                            # CORREÇÃO 3: Removemos o 'else' que forçava o texto FISHER
-                            if text:
-                                canvas.create_text(cx+1, cy+1, text=text, fill="black", font=("Verdana", 8, "bold"))
-                                canvas.create_text(cx, cy, text=text, fill=color, font=("Verdana", 8, "bold"))
+            canvas.delete("all")
 
-                    current_name = get_player_name(pm, base_addr)
-                    first = base_addr + TARGET_ID_PTR + REL_FIRST_ID
-                    
-                    for i in range(MAX_CREATURES):
-                        slot = first + (i * STEP_SIZE)
-                        if pm.read_int(slot) > 0:
-                            vis = pm.read_int(slot + OFFSET_VISIBLE)
-                            if vis == 1:
-                                cz = pm.read_int(slot + OFFSET_Z)
-                                if cz != my_z: 
-                                    name = pm.read_string(slot + OFFSET_NAME, 32).split('\x00')[0]
-                                    if name == current_name: continue
-                                    
-                                    cx_creature = pm.read_int(slot + OFFSET_X)
-                                    cy_creature = pm.read_int(slot + OFFSET_Y)
-                                    
-                                    dx_c = cx_creature - my_x
-                                    dy_c = cy_creature - my_y
-                                    
-                                    if gv:
-                                        raw_sx = gv['center'][0] + (dx_c * gv['sqm'])
-                                        raw_sy = gv['center'][1] + (dy_c * gv['sqm'])
-                                        
-                                        sx = raw_sx + offset_x
-                                        sy = raw_sy + offset_y
-                                        
-                                        color = COLOR_FLOOR_ABOVE if cz < my_z else COLOR_FLOOR_BELOW
-                                        tag = "▲" if cz < my_z else "▼"
-                                        zdiff = my_z - cz
-                                        
-                                        canvas.create_text(sx, sy - 40, text=f"{tag} {zdiff}\n{name}", fill=color, font=("Verdana", 10, "bold"))
-                                        canvas.create_rectangle(sx-20, sy-20, sx+20, sy+20, outline=color, width=2)
-        except: pass
-        
-        xray_window.after(50, update_xray)
-    
-    canvas = ctk.CTkCanvas(xray_window, bg="black", highlightthickness=0)
+            #print(f"[XRAY] pm={pm}, base_addr={base_addr}")
+
+            if pm is not None:
+                gv = get_game_view(pm, base_addr)
+                my_x, my_y, my_z = get_player_pos(pm, base_addr)
+                #print(f"[XRAY] gv={gv}, pos=({my_x},{my_y},{my_z})")
+
+                if hud_overlay_data and gv:
+                    #print(f"[XRAY] HUD overlay: {len(hud_overlay_data)} itens")
+                    for item in hud_overlay_data:
+                        dx = item.get('dx')
+                        dy = item.get('dy')
+                        raw_color = item.get('color', '#FFFFFF')
+                        text = item.get('text', '')
+
+                        color = raw_color[:7] if len(raw_color) > 7 else raw_color
+                        is_transparent = len(raw_color) > 7
+
+                        raw_cx = gv['center'][0] + (dx * gv['sqm'])
+                        raw_cy = gv['center'][1] + (dy * gv['sqm'])
+
+                        cx = raw_cx + offset_x
+                        cy = raw_cy + offset_y
+
+                        size = gv['sqm'] / 2
+
+                        stipple_val = 'gray50' if is_transparent else ''
+                        width_val = 1 if is_transparent else 2
+
+                        canvas.create_rectangle(cx - size, cy - size, cx + size, cy + size,
+                                              outline=color, width=width_val, stipple=stipple_val)
+
+                        if text:
+                            canvas.create_text(cx+1, cy+1, text=text, fill="black", font=("Verdana", 8, "bold"))
+                            canvas.create_text(cx, cy, text=text, fill=color, font=("Verdana", 8, "bold"))
+
+                current_name = get_player_name()
+                first = base_addr + TARGET_ID_PTR + REL_FIRST_ID
+
+                creatures_found = 0
+                creatures_other_floor = 0
+
+                for i in range(MAX_CREATURES):
+                    slot = first + (i * STEP_SIZE)
+                    creature_id = pm.read_int(slot)
+                    if creature_id > 0:
+                        creatures_found += 1
+                        vis = pm.read_int(slot + OFFSET_VISIBLE)
+                        cz = pm.read_int(slot + OFFSET_Z)
+                        name = pm.read_string(slot + OFFSET_NAME, 32).split('\x00')[0]
+
+                        # Debug: mostrar todas as criaturas (descomente para debug)
+                        # if i < 5:
+                        #     print(f"[XRAY] Slot {i}: {name} vis={vis} z={cz} (my_z={my_z})")
+
+                        # Apenas criaturas visíveis (vis=1) e em outros andares
+                        if vis == 1 and cz != my_z:
+                            creatures_other_floor += 1
+                            if name == current_name: continue
+
+                            cx_creature = pm.read_int(slot + OFFSET_X)
+                            cy_creature = pm.read_int(slot + OFFSET_Y)
+
+                            dx_c = cx_creature - my_x
+                            dy_c = cy_creature - my_y
+
+                            if gv:
+                                raw_sx = gv['center'][0] + (dx_c * gv['sqm'])
+                                raw_sy = gv['center'][1] + (dy_c * gv['sqm'])
+
+                                sx = raw_sx + offset_x
+                                sy = raw_sy + offset_y
+
+                                color = COLOR_FLOOR_ABOVE if cz < my_z else COLOR_FLOOR_BELOW
+                                tag = "▲" if cz < my_z else "▼"
+                                zdiff = my_z - cz
+
+                                #print(f"[XRAY] DESENHANDO: {name} em ({sx},{sy}) cor={color}")
+                                canvas.create_text(sx, sy - 40, text=f"{tag} {zdiff}\n{name}", fill=color, font=("Verdana", 10, "bold"))
+                                canvas.create_rectangle(sx-20, sy-20, sx+20, sy+20, outline=color, width=2)
+
+                #wprint(f"[XRAY] Total: {creatures_found} criaturas, {creatures_other_floor} em outros andares")
+            else:
+                print("[XRAY] pm is None!")
+
+        except Exception as e:
+            print(f"[XRAY] ERRO: {e}")
+            import traceback
+            traceback.print_exc()
+
+        xray_window.after(500, update_xray)  # 500ms para não spammar logs
+
+    print("[XRAY] Criando canvas")
+    canvas = tk.Canvas(xray_window, bg="black", highlightthickness=0)
     canvas.pack(fill="both", expand=True)
+    print("[XRAY] Canvas criado, iniciando update_xray()")
     update_xray()
 
 def on_reload():
@@ -2666,7 +2699,7 @@ def update_minimap_loop():
     try:
         # Check if Cavebot is active (panel is hidden when inactive, just reschedule)
         if not cavebot_instance or not switch_cavebot.get():
-            app.after(3000, update_minimap_loop)
+            app.after(1000, update_minimap_loop)
             return
 
         # Collect Cavebot data (thread-safe)
@@ -2705,7 +2738,7 @@ def update_minimap_loop():
             global_route,
             local_cache,
             current_wp_index=current_idx,
-            enable_dynamic_zoom=False
+            enable_dynamic_zoom=True
         )
 
         # Limit max size to prevent breaking layout
@@ -2747,6 +2780,9 @@ def update_minimap_loop():
             status_color = "#9696FF"  # Light blue for cooldown
 
         minimap_status_label.configure(text=status_text, text_color=status_color)
+
+        # Auto-resize GUI to fit minimap content
+        app.after(50, auto_resize_window)
 
     except Exception as e:
         print(f"[Minimap] Erro ao atualizar: {e}")
@@ -2976,7 +3012,7 @@ threading.Thread(target=auto_recorder_loop, daemon=True).start()
 update_stats_visibility()
 
 # Iniciar loop de atualização do minimap
-app.after(3000, update_minimap_loop)
+app.after(1000, update_minimap_loop)
 
 log("🚀 Iniciado.")
 app.mainloop()
