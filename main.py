@@ -2662,7 +2662,7 @@ def update_minimap_loop():
         # Check if Cavebot is active
         if not cavebot_instance or not switch_cavebot.get():
             minimap_label.configure(
-                image="",
+                image=None,
                 text="⏸️ Cavebot Desativado"
             )
             app.after(3000, update_minimap_loop)
@@ -2678,7 +2678,7 @@ def update_minimap_loop():
 
             if not all_waypoints:
                 minimap_label.configure(
-                    image="",
+                    image=None,
                     text="📍 Nenhum Waypoint Configurado"
                 )
                 app.after(3000, update_minimap_loop)
@@ -2724,7 +2724,7 @@ def update_minimap_loop():
     except Exception as e:
         print(f"[Minimap] Erro ao atualizar: {e}")
         minimap_label.configure(
-            image="",
+            image=None,
             text=f"❌ Erro: {str(e)[:50]}"
         )
 

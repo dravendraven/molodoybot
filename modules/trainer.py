@@ -153,7 +153,7 @@ class EngagementDetector:
         ]
         self.hp_history[creature_id].append((now, hp))
 
-    def is_engaged_with_other(self, creature, my_name, my_pos, all_entities, my_target_id, targets_list):
+    def is_engaged_with_other(self, creature, my_name, my_pos, all_entities, my_target_id, targets_list, debug=False, log_func=print):
         """
         Detecta se criatura está engajada com outro player.
 
@@ -170,6 +170,12 @@ class EngagementDetector:
         # Distância da criatura até mim (Chebyshev distance - SQM)
         creature_dist_to_bot = max(abs(creature_x - my_x), abs(creature_y - my_y))
 
+        if debug:
+            log_func(f"  [DETECT] Iniciando comparação de distâncias")
+            log_func(f"  [DETECT]   Criatura: ({creature_x}, {creature_y})")
+            log_func(f"  [DETECT]   Bot: ({my_x}, {my_y})")
+            log_func(f"  [DETECT]   Distância criatura→bot: {creature_dist_to_bot} SQM")
+
         # Método 1: Comparação de distância relativa (PRINCIPAL)
         for entity in all_entities:
             # Skip self (pela criatura)
@@ -184,17 +190,31 @@ class EngagementDetector:
             # Assume que se está em targets_list, é uma criatura, não um player
             is_target_creature = any(target in entity['name'] for target in targets_list)
             if is_target_creature:
+                if debug:
+                    log_func(f"  [DETECT] Skip: Criatura alvo '{entity['name']}'")
                 continue
 
             # Se chegou aqui, é potencialmente um player real
+            if debug:
+                log_func(f"  [DETECT] Comparando com: '{entity['name']}' (ID:{entity['id']})")
+
             # Calcula distância da criatura até este potencial player
             player_x, player_y = entity['abs_x'], entity['abs_y']
             creature_dist_to_player = max(abs(creature_x - player_x), abs(creature_y - player_y))
 
+            if debug:
+                log_func(f"  [DETECT]   Posição: ({player_x}, {player_y})")
+                log_func(f"  [DETECT]   Distância criatura→entidade: {creature_dist_to_player} SQM")
+
             # REGRA SIMPLES: Se criatura está mais perto do player que de mim
             if creature_dist_to_player < creature_dist_to_bot:
                 reason = f"Mais próxima de '{entity['name']}' ({creature_dist_to_player} SQM) que do bot ({creature_dist_to_bot} SQM)"
+                if debug:
+                    log_func(f"  [DETECT]   ⚠️ ENGAGED! {reason}")
                 return (True, reason)
+            else:
+                if debug:
+                    log_func(f"  [DETECT]   ✓ Não mais próxima desta entidade")
 
         # Método 2: HP decrescente sem ser meu alvo (COMPLEMENTAR)
         if creature['id'] != my_target_id:
@@ -208,7 +228,12 @@ class EngagementDetector:
                     # Se perdeu > KS_HP_LOSS_THRESHOLD em KS_HISTORY_DURATION, está sendo atacado
                     if hp_loss > KS_HP_LOSS_THRESHOLD:
                         reason = f"HP caiu {hp_loss:.1f}% em {KS_HISTORY_DURATION}s (não é meu alvo)"
+                        if debug:
+                            log_func(f"  [DETECT] ⚠️ HP Loss detected: {reason}")
                         return (True, reason)
+
+        if debug:
+            log_func(f"  [DETECT] ✅ Resultado final: NÃO ENGAJADA")
 
         return (False, None)
 
@@ -218,6 +243,7 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
     get_cfg = make_config_getter(config)
 
     current_monitored_id = 0
+    current_target_id = 0  # Inicializado aqui para uso consistente
     last_target_data = None
     next_attack_time = 0
 
@@ -260,6 +286,19 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
         loot_enabled = get_cfg('loot_enabled', False)
         targets_list = get_cfg('targets', [])
         ignore_first = get_cfg('ignore_first', False)
+        ks_enabled = get_cfg('ks_prevention_enabled', KS_PREVENTION_ENABLED)
+
+        # Log de configuração anti-KS (apenas primeira iteração)
+        if debug_mode and mapper is None:
+            log("="*70)
+            log("[TRAINER] Configuração Anti Kill-Steal")
+            log("="*70)
+            log(f"  Enabled: {ks_enabled}")
+            if ks_enabled:
+                log(f"  HP Loss Threshold: {KS_HP_LOSS_THRESHOLD}%")
+                log(f"  History Duration: {KS_HISTORY_DURATION}s")
+                log(f"  Detection: Distance comparison + HP tracking")
+            log("="*70)
 
         # Inicializa componentes de pathfinding na primeira iteração com debug_mode
         if mapper is None:
@@ -283,12 +322,22 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
                 continue
             
             mapper.read_full_map(player_id)
+
+            # Lê target ID ANTES do scan para uso correto no KS check
+            current_target_id = pm.read_int(target_addr)
+
             # 2. SCAN
             valid_candidates = []
             visual_line_count = 0
             all_visible_entities = []  # Todas as entidades visíveis (para KS detection)
 
-            if debug_mode: print(f"\n--- INÍCIO DO SCAN (Meu Z: {my_z}) ---")
+            if debug_mode:
+                print(f"\n{'='*70}")
+                print(f"--- INÍCIO DO SCAN (Z: {my_z}) ---")
+                print(f"  My Position: ({my_x}, {my_y}, {my_z})")
+                print(f"  Current Target ID: {current_target_id}")
+                print(f"  KS Prevention: {ks_enabled}")
+                print(f"{'='*70}\n")
 
             for i in range(MAX_CREATURES):
                 slot = list_start + (i * STEP_SIZE)
@@ -360,21 +409,49 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
 
                                     if is_reachable:
                                         # NOVO: Verifica KS prevention antes de adicionar ao candidatos
-                                        ks_enabled = get_cfg('ks_prevention_enabled', KS_PREVENTION_ENABLED)
                                         skip_ks = False
 
                                         if ks_enabled:
+                                            # Log pré-KS check
+                                            if debug_mode:
+                                                print(f"\n[KS CHECK] Avaliando {name} (ID:{c_id})")
+                                                print(f"[KS CHECK]   Posição: ({cx}, {cy}) | Rel: ({rel_x}, {rel_y})")
+                                                print(f"[KS CHECK]   HP: {hp}%")
+                                                print(f"[KS CHECK]   Meu Target Atual: {current_target_id}")
+                                                print(f"[KS CHECK]   Entidades Visíveis: {len(all_visible_entities)}")
+
+                                                if len(all_visible_entities) > 0:
+                                                    print(f"[KS CHECK]   Lista de Entidades:")
+                                                    for idx, ent in enumerate(all_visible_entities):
+                                                        ent_dist = max(abs(ent['abs_x'] - my_x), abs(ent['abs_y'] - my_y))
+                                                        is_player_guess = not any(t in ent['name'] for t in targets_list)
+                                                        entity_type = "PLAYER?" if is_player_guess else "CREATURE"
+                                                        print(f"    [{idx:2d}] {ent['name']:25s} | "
+                                                              f"ID:{ent['id']:6d} | "
+                                                              f"Pos:({ent['abs_x']:5d},{ent['abs_y']:5d}) | "
+                                                              f"Dist:{ent_dist:2d} SQM | "
+                                                              f"HP:{ent['hp']:3d}% | "
+                                                              f"Type:{entity_type}")
+
                                             is_engaged, ks_reason = engagement_detector.is_engaged_with_other(
                                                 {'id': c_id, 'abs_x': cx, 'abs_y': cy, 'hp': hp},
                                                 current_name,
                                                 (my_x, my_y),
                                                 all_visible_entities,
                                                 current_target_id,
-                                                targets_list
+                                                targets_list,
+                                                debug=debug_mode,
+                                                log_func=print
                                             )
 
+                                            # Log pós-KS check
+                                            if debug_mode:
+                                                if is_engaged:
+                                                    print(f"[KS CHECK]   Resultado: ❌ SKIP - {ks_reason}\n")
+                                                else:
+                                                    print(f"[KS CHECK]   Resultado: ✅ PASS - Sem engagement detectado\n")
+
                                             if is_engaged:
-                                                if debug_mode: print(f"      ⚠️ SKIP KS: {name} - {ks_reason}")
                                                 skip_ks = True
 
                                         if not skip_ks:
@@ -396,7 +473,6 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
             if debug_mode:
                 print(f"--- FIM DO SCAN ---")
 
-            current_target_id = pm.read_int(target_addr)
             should_attack_new = False
 
             # Cenário A: Já estou atacando
