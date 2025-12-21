@@ -197,6 +197,7 @@ FLOOR_CHANGE = {
     
     # --- DESCER ---
     'DOWN': {
+        385, # buraco
         604, # buraco descer
         469, # rampa montanha
         432, 433, # Buraco Aberto
@@ -206,7 +207,12 @@ FLOOR_CHANGE = {
         293, 294, # Buracos de caverna
         594, 595  # Buraco de pá aberto
     },
-    
+
+    # --- DESCER (Requer "Use" no tile) ---
+    'DOWN_USE': {
+        435  # Sewer Grate (requer use para descer)
+    },
+
     # --- FERRAMENTAS ---
     'SHOVEL': {
         593, 606, 608 # Buracos fechados

@@ -94,13 +94,13 @@ class MapAnalyzer:
     def scan_for_floor_change(self, target_z, current_z, range_sqm=7):
         """Busca escadas/buracos ao redor."""
         required_dir = 'UP' if target_z < current_z else 'DOWN'
-        
+
         # Define quais tipos de tiles servem para o objetivo
         valid_types = []
         if required_dir == 'UP':
             valid_types = ['UP_WALK', 'UP_USE', 'ROPE']
         else:
-            valid_types = ['DOWN', 'SHOVEL']
+            valid_types = ['DOWN', 'DOWN_USE', 'SHOVEL']
 
         best_option = None
         min_dist = 999

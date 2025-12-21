@@ -25,7 +25,7 @@ TELEGRAM_CHAT_ID = "452514119"
 # ==============================================================================
 # GUI SETTINGS
 # ==============================================================================
-RELOAD_BUTTON = False  # Exibe botão de reload na interface (desabilitar para release)
+RELOAD_BUTTON = True  # Exibe botão de reload na interface (desabilitar para release)
 
 TARGET_MONSTERS = ["Rotworm", "Minotaur"]
 SAFE_CREATURES = ["Minotaur", "Rotworm", "Troll", "Wolf", "Deer", "Rabbit", "Spider", "Poison Spider", "Bug", "Rat", "Bear", "Wasp", "Orc"]

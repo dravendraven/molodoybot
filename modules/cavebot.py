@@ -35,6 +35,17 @@ MOVE_OPCODES = {
 }
 
 class Cavebot:
+    # Estados possíveis do cavebot
+    STATE_IDLE = "idle"
+    STATE_WALKING = "walking"
+    STATE_FLOOR_CHANGE = "floor_change"
+    STATE_RECALCULATING = "recalculating"
+    STATE_STUCK = "stuck"
+    STATE_COMBAT_COOLDOWN = "combat_cooldown"
+    STATE_FLOOR_COOLDOWN = "floor_cooldown"
+    STATE_PAUSED = "paused"
+    STATE_WAYPOINT_REACHED = "waypoint_reached"
+
     def __init__(self, pm, base_addr):
         self.pm = pm
         self.base_addr = base_addr
@@ -70,6 +81,10 @@ class Cavebot:
         self.cached_speed = 250    # Cache de velocidade para não ler battle list todo frame
         self.last_speed_check = 0  # Timestamp da última leitura de speed
         self.last_floor_change_time = 0  # Timestamp do último floor change (subir/descer andar)
+
+        # --- ESTADO PARA MINIMAP (NOVO) ---
+        self.current_state = self.STATE_IDLE
+        self.state_message = ""  # Mensagem detalhada para exibição
 
     def load_waypoints(self, waypoints_list):
         """
@@ -166,12 +181,16 @@ class Cavebot:
 
         # NOVO: Pausa APENAS se GM detectado (não pausa para criaturas/players)
         if state.is_gm_detected:
+            self.current_state = self.STATE_PAUSED
+            self.state_message = "⏸️ Pausado (GM detectado)"
             # Reseta cooldown para evitar movimento imediato ao retomar
             self.last_action_time = time.time()
             return
 
         # NOVO: Pausa enquanto runemaker está ativo
         if state.is_runemaking:
+            self.current_state = self.STATE_PAUSED
+            self.state_message = "⏸️ Pausado (Runemaker ativo)"
             self.last_action_time = time.time()
             if DEBUG_PATHFINDING:
                 print(f"[Cavebot] ⏸️ PAUSA: Runemaker ativo")
@@ -193,8 +212,10 @@ class Cavebot:
         # NOVO: Cooldown de 1s após combate/loot para estabilização
         # Evita race condition: matar criatura → delay 1s → abrir loot → próximo combate
         if time.time() - state.last_combat_time < COOLDOWN_AFTER_COMBAT:
+            remaining = COOLDOWN_AFTER_COMBAT - (time.time() - state.last_combat_time)
+            self.current_state = self.STATE_COMBAT_COOLDOWN
+            self.state_message = f"⏰ Cooldown pós-combate ({remaining:.1f}s)"
             if DEBUG_PATHFINDING:
-                remaining = 1.0 - (time.time() - state.last_combat_time)
                 print(f"[Cavebot] ⏸️ Cooldown pós-combate: {remaining:.1f}s")
             self.last_action_time = time.time()
             return
@@ -207,8 +228,10 @@ class Cavebot:
         # Aguarda 1 segundo após subir/descer para permitir combate no novo andar
         FLOOR_CHANGE_COOLDOWN = 1.0
         if time.time() - self.last_floor_change_time < FLOOR_CHANGE_COOLDOWN:
+            remaining = FLOOR_CHANGE_COOLDOWN - (time.time() - self.last_floor_change_time)
+            self.current_state = self.STATE_FLOOR_COOLDOWN
+            self.state_message = "⏰ Cooldown pós-stairs"
             if DEBUG_PATHFINDING:
-                remaining = FLOOR_CHANGE_COOLDOWN - (time.time() - self.last_floor_change_time)
                 print(f"[Cavebot] ⏸️ Cooldown pós-floor-change: {remaining:.1f}s")
             self.last_action_time = time.time()
             return
@@ -241,6 +264,8 @@ class Cavebot:
         dist = math.sqrt((wp['x'] - px)**2 + (wp['y'] - py)**2)
 
         if dist <= 1.5 and wp['z'] == pz:
+            self.current_state = self.STATE_WAYPOINT_REACHED
+            self.state_message = f"✅ Waypoint #{current_index + 1} alcançado"
             print(f"[Cavebot] ✅ Chegou no WP {current_index}: ({wp['x']}, {wp['y']}, {wp['z']})")
             with self._waypoints_lock:
                 self._advance_waypoint()
@@ -253,6 +278,8 @@ class Cavebot:
         # ======================================================================
         if wp['z'] != pz:
             direction = "↑ SUBIR" if wp['z'] < pz else "↓ DESCER"
+            self.current_state = self.STATE_FLOOR_CHANGE
+            self.state_message = f"🪜 Mudança de andar ({direction} para Z={wp['z']})"
             if DEBUG_PATHFINDING:
                 print(f"[🪜 FLOOR CHANGE] Necessário {direction}: Z atual={pz} → Z alvo={wp['z']}")
 
@@ -336,6 +363,8 @@ class Cavebot:
                 reason = "Stuck Local (Tentando desvio)"
         
         if need_global:
+            self.current_state = self.STATE_RECALCULATING
+            self.state_message = "🔄 Recalculando rota global..."
             print(f"[Nav] 🌍 Calculando Rota Global... Motivo: {reason}")
             # Ao recalcular global, limpamos o cache local
             self.local_path_cache = []
@@ -406,6 +435,12 @@ class Cavebot:
                 
                 if props['walkable']:
                     # Caminho livre! Executa passo fluido.
+                    # Set walking state
+                    with self._waypoints_lock:
+                        wp_num = self._current_index + 1
+                    self.current_state = self.STATE_WALKING
+                    self.state_message = f"🚶 Andando até WP #{wp_num}"
+
                     self._execute_smooth_step(dx, dy)
                     self.local_path_index += 1
                     return
@@ -450,20 +485,29 @@ class Cavebot:
             # Enche o cache!
             self.local_path_cache = full_path
             self.local_path_index = 0
-            
+
             # Executa o primeiro passo imediatamente
             dx, dy = self.local_path_cache[0]
+
+            # Set walking state
+            with self._waypoints_lock:
+                wp_num = self._current_index + 1
+            self.current_state = self.STATE_WALKING
+            self.state_message = f"🚶 Andando até WP #{wp_num}"
+
             self._execute_smooth_step(dx, dy)
             self.local_path_index += 1
-            
+
             if self.global_recalc_counter > 0:
                 print(f"[Nav] ✓ Movimento local com sucesso. Resetando stuck.")
                 self.global_recalc_counter = 0
         else:
             # Falha Local
             self.global_recalc_counter += 1
+            self.current_state = self.STATE_STUCK
+            self.state_message = f"⚠️ Bloqueio local, tentando global... ({self.global_recalc_counter}/{GLOBAL_RECALC_LIMIT})"
             print(f"[Nav] ⚠️ Bloqueio Local! ({self.global_recalc_counter}/{GLOBAL_RECALC_LIMIT})")
-            
+
             if self.global_recalc_counter >= GLOBAL_RECALC_LIMIT:
                 self._handle_hard_stuck(dest_x, dest_y, dest_z, my_x, my_y)
 
@@ -610,6 +654,25 @@ class Cavebot:
                 time.sleep(1)  # Tempo para o servidor processar teleport
             return
 
+        if ftype == 'DOWN_USE':
+            # Sewer grate e similares: requer USE para descer
+            chebyshev = max(abs(rel_x), abs(rel_y))
+
+            if chebyshev == 0:
+                # Já estamos em cima do sewer grate, apenas usa
+                print(f"[Cavebot] Em cima do sewer grate, executando USE. Chebyshev = {chebyshev}")
+                self._use_down_tile(target_pos, special_id, 0, 0)
+            elif chebyshev == 1:
+                # Adjacente (inclui cardinal e diagonal): usa à distância
+                print(f"[Cavebot] Adjacente ao sewer grate (cardinal ou diagonal), executando USE à distância. Chebyshev = {chebyshev}")
+                self._use_down_tile(target_pos, special_id, rel_x, rel_y)
+            else:
+                # Mais longe: alinhar para adjacência e tentar novamente
+                print(f"[Cavebot] Longe do sewer grate (Chebyshev = {chebyshev}), alinhando para adjacência.")
+                if not self._ensure_cardinal_adjacent(rel_x, rel_y, label="sewer grate"):
+                    return
+            return
+
         if ftype == 'UP_USE':
             chebyshev = max(abs(rel_x), abs(rel_y))
             if chebyshev == 0:
@@ -702,6 +765,30 @@ class Cavebot:
         print(f"[Cavebot] Ação: USAR LADDER (ID: {ladder_id}, target_pos: {target_pos}, rel_x {rel_x}, rel_y {rel_y}, stack_pos: {stack_pos})")
         # CRÍTICO: Aguarda o servidor processar a mudança de andar
         # Ladders teletransportam o jogador assim que o servidor processa
+        time.sleep(0.6)
+
+    def _use_down_tile(self, target_pos, tile_id, rel_x=0, rel_y=0):
+        """Executa o packet de USE em tiles que descem (sewer grate, etc.)."""
+        if tile_id == 0:
+            print("[Cavebot] Sewer grate sem ID especial, abortando USE.")
+            return
+
+        stack_pos = 0
+        down_tile = self.memory_map.get_tile_visible(rel_x, rel_y)
+
+        if down_tile and down_tile.items:
+            # Procura o stackpos real do ID do sewer grate (última ocorrência = topo)
+            for idx, item_id in enumerate(down_tile.items):
+                if item_id == tile_id:
+                    stack_pos = idx
+        else:
+            print("[Cavebot] Tile do sewer grate não encontrado na memória, usando stack_pos=0.")
+
+        use_item(self.pm, target_pos, tile_id, stack_pos=stack_pos)
+        print(f"[Cavebot] Ação: USAR SEWER GRATE (ID: {tile_id}, target_pos: {target_pos}, rel_x {rel_x}, rel_y {rel_y}, stack_pos: {stack_pos})")
+
+        # CRÍTICO: Aguarda o servidor processar a mudança de andar
+        # Sewer grates teletransportam o jogador assim que o servidor processa
         time.sleep(0.6)
 
     def _get_adjacent_use_tile(self, ladder_rel_x, ladder_rel_y):
@@ -837,6 +924,8 @@ class Cavebot:
 
             if self.stuck_counter >= self.stuck_threshold:
                 stuck_time = self.stuck_counter * self.walk_delay
+                self.current_state = self.STATE_STUCK
+                self.state_message = f"🧱 Stuck! Pulando WP #{current_index + 1}"
                 print(f"[Cavebot] ⚠️ STUCK! {stuck_time:.1f}s parado no mesmo tile ({px}, {py}, {pz})")
 
                 # Estratégia de recuperação: Pula para próximo waypoint

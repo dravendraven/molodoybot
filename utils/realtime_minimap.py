@@ -16,7 +16,7 @@ class RealtimeMinimapVisualizer:
     This achieves 10-20x performance improvement for real-time updates.
     """
 
-    def __init__(self, maps_dir, walkable_colors, color_palette):
+    def __init__(self, maps_dir, walkable_colors, color_palette, target_size=200):
         """
         Initialize the minimap visualizer.
 
@@ -24,11 +24,13 @@ class RealtimeMinimapVisualizer:
             maps_dir: Directory containing .map chunk files
             walkable_colors: Set or list of IDs that are walkable
             color_palette: Dict mapping byte values to RGB tuples
+            target_size: Target size in pixels for the minimap (default 200x200)
         """
         self.maps_dir = maps_dir
         self.walkable_colors = set(walkable_colors)
         self.color_palette = color_palette
         self.default_color = (80, 80, 80)
+        self.target_size = target_size  # Target image size (200x200 for GUI fit)
 
         # Cache of rendered base maps (terrain layer only)
         # Key: (floor_z, min_x, min_y, max_x, max_y) -> PIL.Image
@@ -39,7 +41,8 @@ class RealtimeMinimapVisualizer:
         self.chunk_cache = {}
 
     def generate_minimap(self, player_pos, target_wp, all_waypoints,
-                        global_route=None, local_cache=None):
+                        global_route=None, local_cache=None, current_wp_index=None,
+                        enable_dynamic_zoom=True):
         """
         Generate a real-time minimap image.
 
@@ -49,6 +52,10 @@ class RealtimeMinimapVisualizer:
             all_waypoints: List of all configured waypoints
             global_route: [(x, y, z), ...] global path (optional)
             local_cache: [(dx, dy), ...] local A* steps (optional)
+            current_wp_index: Index of current target waypoint (optional)
+            enable_dynamic_zoom: If True, shows only nearby waypoints (WP n-2 to n+1).
+                                If False, shows all waypoints on floor (full view).
+                                Default: True
 
         Returns:
             PIL.Image: Minimap image ready for display
@@ -61,27 +68,30 @@ class RealtimeMinimapVisualizer:
         if not floor_waypoints:
             return self._create_placeholder_image()
 
-        # Step 2: Calculate bounding box
-        bbox = self._calculate_bbox(floor_waypoints, player_pos, padding=30)
+        # Step 2: Calculate bounding box (ZOOM mode if enabled and index provided)
+        if enable_dynamic_zoom and current_wp_index is not None:
+            bbox = self._calculate_zoom_bbox(all_waypoints, player_pos, current_wp_index, margin=12)
+        else:
+            bbox = self._calculate_bbox(floor_waypoints, player_pos, padding=30)
 
-        # Step 3: Get base map (cached or render new)
-        base_img = self._get_base_map(pz, bbox)
+        # Step 3: Get base map (cached or render new) with dynamic zoom
+        base_img, pixels_per_tile = self._get_base_map(pz, bbox)
 
         # Step 4: Create copy for overlay drawing
         overlay_img = base_img.copy()
 
         # Step 5: Draw overlays in order (background to foreground)
-        self._draw_all_waypoints(overlay_img, floor_waypoints, bbox)
-        self._draw_floor_transitions(overlay_img, all_waypoints, pz, bbox)
+        self._draw_all_waypoints(overlay_img, floor_waypoints, bbox, pixels_per_tile)
+        self._draw_floor_transitions(overlay_img, all_waypoints, pz, bbox, pixels_per_tile)
 
         if global_route:
-            self._draw_global_route(overlay_img, global_route, pz, bbox)
+            self._draw_global_route(overlay_img, global_route, pz, bbox, pixels_per_tile)
 
         if local_cache:
-            self._draw_local_cache(overlay_img, player_pos, local_cache, bbox)
+            self._draw_local_cache(overlay_img, player_pos, local_cache, bbox, pixels_per_tile)
 
-        self._draw_current_target(overlay_img, target_wp, bbox)
-        self._draw_player_position(overlay_img, player_pos, bbox)
+        self._draw_current_target(overlay_img, target_wp, bbox, pixels_per_tile)
+        self._draw_player_position(overlay_img, player_pos, bbox, pixels_per_tile)
 
         return overlay_img
 
@@ -91,23 +101,53 @@ class RealtimeMinimapVisualizer:
         """
         Get cached base map or render new one.
 
-        Returns a copy to avoid modifying the cached version.
+        Returns tuple: (image_copy, pixels_per_tile)
         """
         cache_key = (floor_z, *bbox)
 
         if cache_key not in self.base_map_cache:
-            self.base_map_cache[cache_key] = self._render_base_terrain(floor_z, bbox)
+            img, ppt = self._render_base_terrain(floor_z, bbox)
+            self.base_map_cache[cache_key] = (img, ppt)
+        else:
+            img, ppt = self.base_map_cache[cache_key]
 
-        return self.base_map_cache[cache_key].copy()
+        return img.copy(), ppt
+
+    def _calculate_pixels_per_tile(self, tile_width, tile_height):
+        """
+        Calculate dynamic pixels_per_tile to fit target_size.
+
+        Returns pixels_per_tile (min 2, max 4 for GUI fit).
+        Enforces minimum of 2 pixels per tile to ensure tiles are visible.
+        Maximum of 4 pixels per tile to keep minimap compact (200x200 max).
+        """
+        # Calculate what pixels_per_tile would fit the target size
+        ppt_width = self.target_size / tile_width
+        ppt_height = self.target_size / tile_height
+
+        # Use the smaller value to ensure both dimensions fit
+        pixels_per_tile = min(ppt_width, ppt_height)
+
+        # Clamp between 2 and 4 pixels per tile (max 4 to fit in 200x200)
+        pixels_per_tile = max(2, min(4, int(pixels_per_tile)))
+
+        return pixels_per_tile
 
     def _render_base_terrain(self, floor_z, bbox):
         """
         Render the terrain layer (base map without overlays).
         This is the expensive operation that we cache.
+
+        Returns tuple: (image, pixels_per_tile)
         """
         min_x, min_y, max_x, max_y = bbox
-        width = max_x - min_x + 1
-        height = max_y - min_y + 1
+        tile_width = max_x - min_x + 1
+        tile_height = max_y - min_y + 1
+
+        # Dynamic zoom: calculate pixels_per_tile to fit target_size
+        pixels_per_tile = self._calculate_pixels_per_tile(tile_width, tile_height)
+        width = tile_width * pixels_per_tile
+        height = tile_height * pixels_per_tile
 
         img = Image.new('RGB', (width, height), (0, 0, 0))
         pixels = img.load()
@@ -121,9 +161,9 @@ class RealtimeMinimapVisualizer:
             for cy in range(start_cy, end_cy + 1):
                 chunk_data = self._load_chunk(cx, cy, floor_z)
                 if chunk_data:
-                    self._render_chunk_to_image(pixels, chunk_data, cx, cy, bbox)
+                    self._render_chunk_to_image(pixels, chunk_data, cx, cy, bbox, pixels_per_tile)
 
-        return img
+        return img, pixels_per_tile
 
     def _load_chunk(self, cx, cy, z):
         """Load chunk from disk (with cache)."""
@@ -149,7 +189,7 @@ class RealtimeMinimapVisualizer:
 
         return None
 
-    def _render_chunk_to_image(self, pixels, chunk_data, cx, cy, bbox):
+    def _render_chunk_to_image(self, pixels, chunk_data, cx, cy, bbox, pixels_per_tile):
         """
         Render a single 256x256 chunk to the image pixels.
         Only renders pixels within the bounding box.
@@ -168,18 +208,29 @@ class RealtimeMinimapVisualizer:
 
             # Only render if within bounding box
             if min_x <= tile_x <= max_x and min_y <= tile_y <= max_y:
-                # Convert to image coordinates
-                img_x = tile_x - min_x
-                img_y = tile_y - min_y
+                # Convert to image coordinates (in tiles)
+                rel_tile_x = tile_x - min_x
+                rel_tile_y = tile_y - min_y
 
                 # Get color for this tile
-                color = self.color_palette.get(byte_val, self.default_color)
-                pixels[img_x, img_y] = color
+                base_color = self.color_palette.get(byte_val, self.default_color)
+
+                # Reduce saturation/brightness to make overlays stand out
+                # Apply 60% brightness to terrain tiles
+                color = tuple(int(c * 0.6) for c in base_color)
+
+                # Draw NxN pixel block for this tile
+                start_px = rel_tile_x * pixels_per_tile
+                start_py = rel_tile_y * pixels_per_tile
+
+                for px in range(pixels_per_tile):
+                    for py in range(pixels_per_tile):
+                        pixels[start_px + px, start_py + py] = color
 
     # ========== OVERLAY DRAWING METHODS ==========
 
-    def _draw_all_waypoints(self, img, waypoints, bbox):
-        """Draw all waypoints on current floor (blue circles, 2x2 pixels)."""
+    def _draw_all_waypoints(self, img, waypoints, bbox, pixels_per_tile):
+        """Draw all waypoints on current floor (blue circles, centered on tile)."""
         pixels = img.load()
         min_x, min_y, max_x, max_y = bbox
 
@@ -187,16 +238,22 @@ class RealtimeMinimapVisualizer:
             wx, wy = wp['x'], wp['y']
 
             if min_x <= wx <= max_x and min_y <= wy <= max_y:
-                rel_x = wx - min_x
-                rel_y = wy - min_y
+                rel_tile_x = wx - min_x
+                rel_tile_y = wy - min_y
 
-                # Draw 2x2 blue square
+                # Center of the 4x4 tile block
+                center_px = rel_tile_x * pixels_per_tile + pixels_per_tile // 2
+                center_py = rel_tile_y * pixels_per_tile + pixels_per_tile // 2
+
+                # Draw 3x3 pixel blue marker centered on tile
                 for dx in range(-1, 2):
                     for dy in range(-1, 2):
-                        if 0 <= rel_x + dx < img.width and 0 <= rel_y + dy < img.height:
-                            pixels[rel_x + dx, rel_y + dy] = (50, 150, 255)  # Blue
+                        px = center_px + dx
+                        py = center_py + dy
+                        if 0 <= px < img.width and 0 <= py < img.height:
+                            pixels[px, py] = (50, 150, 255)  # Blue
 
-    def _draw_floor_transitions(self, img, all_waypoints, current_z, bbox):
+    def _draw_floor_transitions(self, img, all_waypoints, current_z, bbox, pixels_per_tile):
         """
         Mark floor transitions (stairs/ladders).
         Magenta (255, 0, 255) for going up, Cyan (0, 255, 255) for going down.
@@ -219,17 +276,22 @@ class RealtimeMinimapVisualizer:
                     color = (255, 0, 255) if is_up else (0, 255, 255)
 
                     if min_x <= tx <= max_x and min_y <= ty <= max_y:
-                        rel_x = tx - min_x
-                        rel_y = ty - min_y
+                        rel_tile_x = tx - min_x
+                        rel_tile_y = ty - min_y
 
-                        # Draw 3x3 square
-                        for dx in range(-1, 2):
-                            for dy in range(-1, 2):
-                                if 0 <= rel_x + dx < img.width and 0 <= rel_y + dy < img.height:
-                                    pixels[rel_x + dx, rel_y + dy] = color
+                        # Fill entire 4x4 tile with color
+                        start_px = rel_tile_x * pixels_per_tile
+                        start_py = rel_tile_y * pixels_per_tile
 
-    def _draw_global_route(self, img, global_route, current_z, bbox):
-        """Draw global route (green path)."""
+                        for dx in range(pixels_per_tile):
+                            for dy in range(pixels_per_tile):
+                                px = start_px + dx
+                                py = start_py + dy
+                                if 0 <= px < img.width and 0 <= py < img.height:
+                                    pixels[px, py] = color
+
+    def _draw_global_route(self, img, global_route, current_z, bbox, pixels_per_tile):
+        """Draw global route (pink path - fills entire tiles)."""
         pixels = img.load()
         min_x, min_y, max_x, max_y = bbox
 
@@ -238,13 +300,23 @@ class RealtimeMinimapVisualizer:
 
         for x, y in route_on_floor:
             if min_x <= x <= max_x and min_y <= y <= max_y:
-                rel_x = x - min_x
-                rel_y = y - min_y
-                pixels[rel_x, rel_y] = (0, 255, 0)  # Green
+                rel_tile_x = x - min_x
+                rel_tile_y = y - min_y
 
-    def _draw_local_cache(self, img, player_pos, local_cache, bbox):
+                # Fill entire tile with pink (not just center pixel)
+                start_px = rel_tile_x * pixels_per_tile
+                start_py = rel_tile_y * pixels_per_tile
+
+                for dx in range(pixels_per_tile):
+                    for dy in range(pixels_per_tile):
+                        px = start_px + dx
+                        py = start_py + dy
+                        if 0 <= px < img.width and 0 <= py < img.height:
+                            pixels[px, py] = (255, 20, 147)  # Deep Pink - FILL TILE
+
+    def _draw_local_cache(self, img, player_pos, local_cache, bbox, pixels_per_tile):
         """
-        Draw next local A* steps (cyan, 5 steps ahead).
+        Draw next local A* steps (cyan, 5 steps ahead - fills entire tiles).
         Converts relative steps to absolute coordinates for drawing.
         """
         pixels = img.load()
@@ -259,43 +331,128 @@ class RealtimeMinimapVisualizer:
             curr_y += dy
 
             if min_x <= curr_x <= max_x and min_y <= curr_y <= max_y:
-                rel_x = curr_x - min_x
-                rel_y = curr_y - min_y
-                pixels[rel_x, rel_y] = (0, 255, 255)  # Cyan
+                rel_tile_x = curr_x - min_x
+                rel_tile_y = curr_y - min_y
 
-    def _draw_current_target(self, img, target_wp, bbox):
-        """Highlight current target waypoint (yellow, 4x4 square)."""
+                # Fill entire tile with cyan (not just center pixel)
+                start_px = rel_tile_x * pixels_per_tile
+                start_py = rel_tile_y * pixels_per_tile
+
+                for dx_offset in range(pixels_per_tile):
+                    for dy_offset in range(pixels_per_tile):
+                        px_coord = start_px + dx_offset
+                        py_coord = start_py + dy_offset
+                        if 0 <= px_coord < img.width and 0 <= py_coord < img.height:
+                            pixels[px_coord, py_coord] = (0, 255, 255)  # Cyan - FILL TILE
+
+    def _draw_current_target(self, img, target_wp, bbox, pixels_per_tile):
+        """Highlight current target waypoint (yellow, fills entire tile)."""
         pixels = img.load()
         min_x, min_y, max_x, max_y = bbox
         tx, ty = target_wp['x'], target_wp['y']
 
         if min_x <= tx <= max_x and min_y <= ty <= max_y:
-            rel_x = tx - min_x
-            rel_y = ty - min_y
+            rel_tile_x = tx - min_x
+            rel_tile_y = ty - min_y
 
-            # Draw 4x4 yellow square
-            for dx in range(-2, 3):
-                for dy in range(-2, 3):
-                    if 0 <= rel_x + dx < img.width and 0 <= rel_y + dy < img.height:
-                        pixels[rel_x + dx, rel_y + dy] = (255, 255, 0)  # Yellow
+            # Fill entire 4x4 tile with yellow
+            start_px = rel_tile_x * pixels_per_tile
+            start_py = rel_tile_y * pixels_per_tile
 
-    def _draw_player_position(self, img, player_pos, bbox):
-        """Mark player position (white, 3x3 square)."""
+            for dx in range(pixels_per_tile):
+                for dy in range(pixels_per_tile):
+                    px = start_px + dx
+                    py = start_py + dy
+                    if 0 <= px < img.width and 0 <= py < img.height:
+                        pixels[px, py] = (255, 255, 0)  # Yellow
+
+    def _draw_player_position(self, img, player_pos, bbox, pixels_per_tile):
+        """Mark player position (white, fills entire tile)."""
         pixels = img.load()
         min_x, min_y, max_x, max_y = bbox
         px, py, pz = player_pos
 
         if min_x <= px <= max_x and min_y <= py <= max_y:
-            rel_x = px - min_x
-            rel_y = py - min_y
+            rel_tile_x = px - min_x
+            rel_tile_y = py - min_y
 
-            # Draw 3x3 white square
-            for dx in range(-1, 2):
-                for dy in range(-1, 2):
-                    if 0 <= rel_x + dx < img.width and 0 <= rel_y + dy < img.height:
-                        pixels[rel_x + dx, rel_y + dy] = (255, 255, 255)  # White
+            # Fill entire 4x4 tile with white
+            start_px = rel_tile_x * pixels_per_tile
+            start_py = rel_tile_y * pixels_per_tile
+
+            for dx in range(pixels_per_tile):
+                for dy in range(pixels_per_tile):
+                    px_coord = start_px + dx
+                    py_coord = start_py + dy
+                    if 0 <= px_coord < img.width and 0 <= py_coord < img.height:
+                        pixels[px_coord, py_coord] = (255, 255, 255)  # White
 
     # ========== UTILITY METHODS ==========
+
+    def _calculate_zoom_bbox(self, all_waypoints, player_pos, current_wp_index, margin=12):
+        """
+        Calculate zoomed bounding box showing only nearby waypoints.
+
+        Shows waypoints from index-2 to index+1 relative to current target.
+        This creates a "zoomed in" view of the relevant route section.
+
+        Args:
+            all_waypoints: Full waypoint list
+            player_pos: (x, y, z)
+            current_wp_index: Index of current target waypoint
+            margin: Tiles to add around visible waypoints
+
+        Returns:
+            (min_x, min_y, max_x, max_y) bounding box
+        """
+        if current_wp_index is None or len(all_waypoints) == 0:
+            # Fallback to old behavior if no index provided
+            return self._calculate_bbox(all_waypoints, player_pos, padding=margin)
+
+        # Get current floor
+        pz = player_pos[2]
+
+        # Define range of waypoints to show (n-2 to n+1)
+        start_idx = max(0, current_wp_index - 2)
+        end_idx = min(len(all_waypoints), current_wp_index + 2)  # +2 because range is exclusive
+
+        # Get visible waypoints on current floor
+        visible_wps = [
+            wp for wp in all_waypoints[start_idx:end_idx]
+            if wp['z'] == pz
+        ]
+
+        # If no waypoints on current floor, include nearby floor waypoints for context
+        if not visible_wps:
+            visible_wps = all_waypoints[start_idx:end_idx]
+
+        # Include player position
+        all_xs = [wp['x'] for wp in visible_wps] + [player_pos[0]]
+        all_ys = [wp['y'] for wp in visible_wps] + [player_pos[1]]
+
+        # Ensure minimum bbox size (at least 30x30 tiles)
+        min_size = 30
+
+        min_x = min(all_xs) - margin
+        max_x = max(all_xs) + margin
+        min_y = min(all_ys) - margin
+        max_y = max(all_ys) + margin
+
+        # Enforce minimum size
+        width = max_x - min_x
+        height = max_y - min_y
+
+        if width < min_size:
+            center_x = (min_x + max_x) / 2
+            min_x = int(center_x - min_size / 2)
+            max_x = int(center_x + min_size / 2)
+
+        if height < min_size:
+            center_y = (min_y + max_y) / 2
+            min_y = int(center_y - min_size / 2)
+            max_y = int(center_y + min_size / 2)
+
+        return (min_x, min_y, max_x, max_y)
 
     def _calculate_bbox(self, waypoints, player_pos, padding=30):
         """Calculate bounding box that encompasses all waypoints and player."""

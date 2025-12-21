@@ -122,7 +122,10 @@ BOT_SETTINGS = {
     "rune_human_max": 300,  # Segundos máximos de espera
 
     # KS Prevention
-    "ks_prevention_enabled": True
+    "ks_prevention_enabled": True,
+
+    # Console Log
+    "console_log_visible": True
 }
 
 _cached_player_name = ""
@@ -179,11 +182,15 @@ if os.path.exists("bot_config.json"):
             BOT_SETTINGS.update(data)
             
             # Correção específica para Tuplas (JSON salva como lista)
-            if "rune_work_pos" in BOT_SETTINGS: 
+            if "rune_work_pos" in BOT_SETTINGS:
                 BOT_SETTINGS["rune_work_pos"] = tuple(BOT_SETTINGS["rune_work_pos"])
-            if "rune_safe_pos" in BOT_SETTINGS: 
+            if "rune_safe_pos" in BOT_SETTINGS:
                 BOT_SETTINGS["rune_safe_pos"] = tuple(BOT_SETTINGS["rune_safe_pos"])
-                
+
+            # Sincroniza console_log_visible com valor padrão se não existir
+            if "console_log_visible" not in BOT_SETTINGS:
+                BOT_SETTINGS["console_log_visible"] = True
+
         print("Configurações carregadas.")
     except Exception as e:
         print(f"Erro ao carregar: {e}")
@@ -207,12 +214,14 @@ regen_tracker = RegenTracker()
 # MINIMAP VISUALIZATION (REALTIME)
 # ==============================================================================
 minimap_visualizer = None
-minimap_panel_expanded = False
+minimap_container = None  # Frame container do minimap (para show/hide automático)
 minimap_label = None
+minimap_title_label = None
+minimap_status_label = None
 minimap_image_ref = None
 
-# Log visibility toggle
-log_visible = True
+# Log visibility toggle (inicializado após load_config)
+log_visible = True  # Será atualizado por BOT_SETTINGS['console_log_visible']
 
 # ==============================================================================
 # 4. FUNÇÕES UTILITÁRIAS E HELPERS
@@ -795,9 +804,11 @@ def toggle_cavebot_func():
         # Garante que os WPs estão carregados
         cavebot_instance.load_waypoints(current_waypoints_ui)
         cavebot_instance.start()
+        show_minimap_panel()
         log("🚀 CAVEBOT: ATIVADO")
     else:
         cavebot_instance.stop()
+        hide_minimap_panel()
         log("⏸️ CAVEBOT: PAUSADO")
 
 # ==============================================================================
@@ -1621,6 +1632,7 @@ def toggle_log_visibility():
     global log_visible, txt_log
 
     log_visible = not log_visible
+    BOT_SETTINGS['console_log_visible'] = log_visible
 
     if log_visible:
         txt_log.pack(side="bottom", fill="x", padx=5, pady=5, expand=True)
@@ -1778,7 +1790,7 @@ def open_settings():
 
     switch_log = ctk.CTkSwitch(frame_switches, text="Console Log", command=on_log_toggle, progress_color="#00FF00", **UI['BODY'])
     switch_log.pack(anchor="w", pady=UI['PAD_ITEM'])
-    if log_visible: switch_log.select()
+    if BOT_SETTINGS.get('console_log_visible', True): switch_log.select()
 
     def save_geral():
         BOT_SETTINGS['vocation'] = combo_voc.get()
@@ -2580,51 +2592,45 @@ def on_fisher_toggle():
 # ==============================================================================
 
 def create_minimap_panel():
-    """Create collapsible minimap panel in main window."""
-    global minimap_panel_expanded, minimap_label, minimap_visualizer
+    """Create minimap panel (shown automatically when cavebot is active)."""
+    global minimap_container, minimap_label, minimap_title_label, minimap_status_label, minimap_visualizer
 
-    # Container frame
-    frame_minimap_container = ctk.CTkFrame(
+    # Container frame (NÃO empacotado - será mostrado quando cavebot ligar)
+    minimap_container = ctk.CTkFrame(
         main_frame,
-        fg_color="transparent",
+        fg_color="#1a1a1a",
         border_color="#303030",
         border_width=1,
         corner_radius=6
     )
-    frame_minimap_container.pack(padx=10, pady=5, fill="x")
+    # NÃO chamar pack() aqui - minimap começa escondido
 
-    # Header with toggle button
-    frame_minimap_header = ctk.CTkFrame(frame_minimap_container, fg_color="transparent")
-    frame_minimap_header.pack(fill="x", padx=5, pady=5)
-
-    lbl_minimap_title = ctk.CTkLabel(
-        frame_minimap_header,
-        text="🗺️ Minimap Cavebot",
+    # Title label (waypoint info)
+    minimap_title_label = ctk.CTkLabel(
+        minimap_container,
+        text="",
         font=("Verdana", 11, "bold"),
-        text_color="#00BFFF"
+        text_color="#FFFFFF"
     )
-    lbl_minimap_title.pack(side="left")
-
-    btn_toggle_minimap = ctk.CTkButton(
-        frame_minimap_header,
-        text="▼ Expandir",
-        width=100,
-        height=24,
-        command=lambda: toggle_minimap_panel(frame_minimap_content, btn_toggle_minimap)
-    )
-    btn_toggle_minimap.pack(side="right")
-
-    # Content frame (initially hidden)
-    frame_minimap_content = ctk.CTkFrame(frame_minimap_container, fg_color="#1a1a1a")
+    minimap_title_label.pack(pady=(8, 0))
 
     # Label to display minimap image
     minimap_label = ctk.CTkLabel(
-        frame_minimap_content,
+        minimap_container,
         text="⏳ Aguardando Cavebot...",
         font=("Verdana", 10),
         text_color="#888888"
     )
-    minimap_label.pack(padx=10, pady=10)
+    minimap_label.pack(padx=10, pady=5)
+
+    # Status label (below image)
+    minimap_status_label = ctk.CTkLabel(
+        minimap_container,
+        text="",
+        font=("Verdana", 10),
+        text_color="#AAAAAA"
+    )
+    minimap_status_label.pack(pady=(0, 8))
 
     # Initialize visualizer
     from utils.realtime_minimap import RealtimeMinimapVisualizer
@@ -2635,20 +2641,19 @@ def create_minimap_panel():
         COLOR_PALETTE
     )
 
-    return frame_minimap_container
+def show_minimap_panel():
+    """Show minimap panel and resize GUI."""
+    global minimap_container
+    if minimap_container and not minimap_container.winfo_ismapped():
+        minimap_container.pack(fill="x", padx=10, pady=5)
+        app.after(100, auto_resize_window)
 
-def toggle_minimap_panel(content_frame, toggle_button):
-    """Expand/collapse minimap panel."""
-    global minimap_panel_expanded
-
-    if minimap_panel_expanded:
-        content_frame.pack_forget()
-        toggle_button.configure(text="▼ Expandir")
-        minimap_panel_expanded = False
-    else:
-        content_frame.pack(fill="both", expand=True, padx=5, pady=5)
-        toggle_button.configure(text="▲ Colapsar")
-        minimap_panel_expanded = True
+def hide_minimap_panel():
+    """Hide minimap panel and resize GUI."""
+    global minimap_container
+    if minimap_container and minimap_container.winfo_ismapped():
+        minimap_container.pack_forget()
+        app.after(100, auto_resize_window)
 
 def update_minimap_loop():
     """Auto-scheduled loop to update minimap every 3 seconds."""
@@ -2659,12 +2664,8 @@ def update_minimap_loop():
         return
 
     try:
-        # Check if Cavebot is active
+        # Check if Cavebot is active (panel is hidden when inactive, just reschedule)
         if not cavebot_instance or not switch_cavebot.get():
-            minimap_label.configure(
-                image=None,
-                text="⏸️ Cavebot Desativado"
-            )
             app.after(3000, update_minimap_loop)
             return
 
@@ -2675,6 +2676,9 @@ def update_minimap_loop():
             with cavebot_instance._waypoints_lock:
                 all_waypoints = cavebot_instance._waypoints.copy()
                 current_idx = cavebot_instance._current_index
+
+            # Collect cavebot status (thread-safe string read)
+            cavebot_status = cavebot_instance.state_message
 
             if not all_waypoints:
                 minimap_label.configure(
@@ -2699,7 +2703,9 @@ def update_minimap_loop():
             target_wp,
             all_waypoints,
             global_route,
-            local_cache
+            local_cache,
+            current_wp_index=current_idx,
+            enable_dynamic_zoom=False
         )
 
         # Limit max size to prevent breaking layout
@@ -2717,9 +2723,30 @@ def update_minimap_loop():
             size=(pil_img.width, pil_img.height)
         )
 
-        # Update widget
+        # Update widgets
         minimap_label.configure(image=ctk_img, text="")
         minimap_image_ref = ctk_img  # Keep reference for garbage collection
+
+        # Update title label
+        wp_num = current_idx + 1
+        minimap_title_label.configure(text=f"Indo até Waypoint #{wp_num}/{len(all_waypoints)}")
+
+        # Update status label with color coding
+        status_text = cavebot_status if cavebot_status else ""
+        status_color = "#FFFFFF"  # Default white
+
+        if "Stuck" in status_text or "⚠️" in status_text or "🧱" in status_text:
+            status_color = "#FF6464"  # Red for warnings/stuck
+        elif "✅" in status_text or "alcançado" in status_text:
+            status_color = "#64FF64"  # Green for success
+        elif "Recalculando" in status_text or "🔄" in status_text:
+            status_color = "#FFC864"  # Yellow for processing
+        elif "Pausado" in status_text or "⏸️" in status_text:
+            status_color = "#C8C8C8"  # Gray for paused
+        elif "Cooldown" in status_text or "⏰" in status_text:
+            status_color = "#9696FF"  # Light blue for cooldown
+
+        minimap_status_label.configure(text=status_text, text_color=status_color)
 
     except Exception as e:
         print(f"[Minimap] Erro ao atualizar: {e}")
@@ -2919,8 +2946,11 @@ widget.pack(fill="both", expand=True, padx=1, pady=2)
 create_minimap_panel()
 
 # LOG
+# Sincroniza log_visible com BOT_SETTINGS
+log_visible = BOT_SETTINGS.get('console_log_visible', True)
 txt_log = ctk.CTkTextbox(main_frame, height=120, font=("Consolas", 11), fg_color="#151515", text_color="#00FF00", border_width=1)
-txt_log.pack(side="bottom", fill="x", padx=5, pady=5, expand=True)
+if log_visible:
+    txt_log.pack(side="bottom", fill="x", padx=5, pady=5, expand=True)
 
 # ==============================================================================
 # 8. EXECUÇÃO PRINCIPAL
