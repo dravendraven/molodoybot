@@ -184,9 +184,11 @@ def fishing_loop(pm, base_addr, hwnd, check_running=None, log_callback=None,
                         log_msg(f"✅ Cap recuperada. Retomando...")
                         cap_paused = False
 
-            # NOVO: Pausa durante combate e loot
-            # Fisher deve pausar para permitir defesa e não interferir com auto-loot
-            if state.is_in_combat or state.has_open_loot:
+            # Pausa durante atividades de alta prioridade
+            # - Combate: Permite defesa do personagem
+            # - Loot: Evita conflito com auto-loot
+            # - Runemaking: Evita conflito com ciclo de fabricação de runas
+            if state.is_in_combat or state.has_open_loot or state.is_runemaking:
                 time.sleep(0.5)
                 continue
 

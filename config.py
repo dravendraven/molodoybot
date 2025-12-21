@@ -367,16 +367,25 @@ class AlertType:
 OP_CLOSE_CONTAINER = 0x87  # Packet para fechar containers de loot
 
 # ==============================================================================
+# KILL-STEAL (KS) PREVENTION
+# ==============================================================================
+KS_PREVENTION_ENABLED = True          # Master toggle para evitar atacar criaturas já engajadas
+KS_HP_LOSS_THRESHOLD = 15             # % HP loss em 5s que indica combate com outro player
+KS_HISTORY_DURATION = 5.0             # Segundos de histórico de HP a manter
+# NOTA: Detecção usa comparação RELATIVA de distâncias:
+# Se dist(criatura → player) < dist(criatura → bot), então skip
+
+# ==============================================================================
 # DEBUG CONFIG (PATHFINDING & NAVIGATION)
 # ==============================================================================
 # Ativa logs detalhados do A* quando não encontra caminho
-DEBUG_PATHFINDING = True
+DEBUG_PATHFINDING = False
 
 # Ativa logs detalhados de leituras de memória (tiles distantes)
 DEBUG_MEMORY_MAP = False  # Caro de performance, ativar apenas quando necessário
 
 # Ativa logs detalhados do GlobalMap pathfinding
-DEBUG_GLOBAL_MAP = True  # Ativa logs quando GlobalMap tenta encontrar rotas
+DEBUG_GLOBAL_MAP = False  # Ativa logs quando GlobalMap tenta encontrar rotas
 
 # ==============================================================================
 ### GLOBAL MAP

@@ -120,6 +120,9 @@ BOT_SETTINGS = {
     "rune_movement": True,
     "rune_human_min": 15,   # Segundos mínimos de espera
     "rune_human_max": 300,  # Segundos máximos de espera
+
+    # KS Prevention
+    "ks_prevention_enabled": True
 }
 
 _cached_player_name = ""
@@ -150,6 +153,9 @@ combo_cavebot_scripts = None
 # NOVAS VARIÁVEIS PARA O RECORDER
 is_recording_waypoints = False
 last_recorded_pos = (0, 0, 0)
+
+# Waypoint Editor
+_waypoint_editor_window = None
 
 # Variáveis de Controle de Retorno (Segurança)
 #resume_actions_timestamp = 0
@@ -595,6 +601,55 @@ def generate_route_visualization():
 
     except Exception as e:
         log(f"❌ Erro ao gerar visualização: {e}")
+        import traceback
+        traceback.print_exc()
+
+def open_waypoint_editor_window():
+    """Abre a janela do editor visual de waypoints."""
+    global current_waypoints_ui, cavebot_instance, app, pm, base_addr, _waypoint_editor_window
+
+    try:
+        from utils.waypoint_editor import WaypointEditorWindow
+        from config import MAPS_DIRECTORY
+
+        # Callback para quando o usuário salva no editor
+        def on_editor_save(new_waypoints):
+            global current_waypoints_ui, cavebot_instance
+            current_waypoints_ui = new_waypoints
+            if cavebot_instance:
+                cavebot_instance.load_waypoints(new_waypoints)
+            update_waypoint_display()
+            log(f"✅ Editor: {len(new_waypoints)} waypoints atualizados.")
+
+        # Determine initial position for editor
+        # Priority: 1) First waypoint if loaded, 2) Current player position
+        current_pos = None
+        if current_waypoints_ui and len(current_waypoints_ui) > 0:
+            # Use first waypoint position if waypoints are loaded
+            first_wp = current_waypoints_ui[0]
+            current_pos = (first_wp['x'], first_wp['y'], first_wp['z'])
+        elif state.is_connected and pm:
+            # Otherwise use current player position if connected
+            try:
+                current_pos = get_player_pos(pm, base_addr)
+            except:
+                current_pos = None
+
+        # Abre a janela do editor (armazena globalmente para manter viva)
+        _waypoint_editor_window = WaypointEditorWindow(
+            parent_window=app,
+            maps_directory=MAPS_DIRECTORY,
+            current_waypoints=current_waypoints_ui.copy() if current_waypoints_ui else [],
+            on_save_callback=on_editor_save,
+            current_pos=current_pos
+        )
+
+        log("🗺️ Editor Visual de Waypoints aberto.")
+
+    except ImportError as e:
+        log(f"❌ Erro ao importar editor: {e}")
+    except Exception as e:
+        log(f"❌ Erro ao abrir editor: {e}")
         import traceback
         traceback.print_exc()
 
@@ -1784,6 +1839,20 @@ def open_settings():
 
     ctk.CTkLabel(frame_tr_ignore, text="↳ Ignora o primeiro alvo (útil para Monk).", **UI['HINT']).pack(anchor="w", padx=40)
 
+    # Anti Kill-Steal Prevention
+    frame_tr_ks = ctk.CTkFrame(tab_trainer, fg_color="transparent")
+    frame_tr_ks.pack(fill="x", padx=10, pady=5)
+
+    def on_ks_toggle():
+        BOT_SETTINGS['ks_prevention_enabled'] = bool(switch_ks.get())
+        log(f"🛡️ Anti Kill-Steal: {'Ativado' if BOT_SETTINGS['ks_prevention_enabled'] else 'Desativado'}")
+
+    switch_ks = ctk.CTkSwitch(frame_tr_ks, text="Ativar Anti Kill-Steal", command=on_ks_toggle, progress_color="#FF6B6B", **UI['BODY'])
+    switch_ks.pack(anchor="w")
+    if BOT_SETTINGS.get('ks_prevention_enabled', True): switch_ks.select()
+
+    ctk.CTkLabel(frame_tr_ks, text="↳ Evita atacar criaturas mais próximas de outros players.", **UI['HINT']).pack(anchor="w", padx=40)
+
     def save_trainer():
         try:
             BOT_SETTINGS['trainer_min_delay'] = float(entry_tr_min.get().replace(',', '.'))
@@ -2312,6 +2381,18 @@ def open_settings():
     )
     btn_visualize.grid(row=1, column=0, columnspan=2, padx=(0, 0), sticky="ew", pady=(5, 0))
 
+    # Botão: Editor Visual de Waypoints
+    btn_editor = ctk.CTkButton(
+        frame_remove_buttons,
+        text="🗺️ Editor Visual de Waypoints",
+        command=open_waypoint_editor_window,
+        fg_color="#2E8B57",
+        hover_color="#228B45",
+        height=30,
+        font=("Verdana", 9)
+    )
+    btn_editor.grid(row=2, column=0, columnspan=2, padx=(0, 0), sticky="ew", pady=(5, 0))
+
     # Inicializa lista visual
     update_waypoint_display()
 
@@ -2547,7 +2628,7 @@ def create_minimap_panel():
 
     # Initialize visualizer
     from utils.realtime_minimap import RealtimeMinimapVisualizer
-    from utils.visualize_path import COLOR_PALETTE
+    from utils.color_palette import COLOR_PALETTE
     minimap_visualizer = RealtimeMinimapVisualizer(
         MAPS_DIRECTORY,
         WALKABLE_COLORS,

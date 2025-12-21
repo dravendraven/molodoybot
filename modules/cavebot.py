@@ -611,15 +611,18 @@ class Cavebot:
             return
 
         if ftype == 'UP_USE':
-            manhattan = abs(rel_x) + abs(rel_y)
-            if manhattan == 0:
+            chebyshev = max(abs(rel_x), abs(rel_y))
+            if chebyshev == 0:
                 # Já estamos em cima da ladder, apenas usa.
+                print(f"[Cavebot] Em cima da ladder, executando USE. Chebyshev = {chebyshev}")
                 self._use_ladder_tile(target_pos, special_id, 0, 0)
-            elif manhattan == 1:
-                # Adjacente cardinal: usa à distância.
+            elif chebyshev == 1:
+                # Adjacente (inclui cardinal e diagonal): usa à distância.
+                print(f"[Cavebot] Adjacente à ladder (cardinal ou diagonal), executando USE à distância. Chebyshev = {chebyshev}")
                 self._use_ladder_tile(target_pos, special_id, rel_x, rel_y)
             else:
-                # Diagonal ou mais longe: alinhar para um tile cardinal e tentar novamente.
+                # Mais longe: alinhar para adjacência e tentar novamente.
+                print(f"[Cavebot] Longe da ladder (Chebyshev = {chebyshev}), alinhando para adjacência.")
                 if not self._ensure_cardinal_adjacent(rel_x, rel_y, label="ladder"):
                     return
             return
@@ -696,6 +699,7 @@ class Cavebot:
             print("[Cavebot] Tile da ladder não encontrado na memória, usando stack_pos=0.")
 
         use_item(self.pm, target_pos, ladder_id, stack_pos=stack_pos)
+        print(f"[Cavebot] Ação: USAR LADDER (ID: {ladder_id}, target_pos: {target_pos}, rel_x {rel_x}, rel_y {rel_y}, stack_pos: {stack_pos})")
         # CRÍTICO: Aguarda o servidor processar a mudança de andar
         # Ladders teletransportam o jogador assim que o servidor processa
         time.sleep(0.6)
@@ -726,21 +730,33 @@ class Cavebot:
 
     def _ensure_cardinal_adjacent(self, rel_x, rel_y, label="rope"):
         """
-        Considera adjacente qualquer tile a 1 SQM de distância (incluindo diagonais).
-        Se estiver mais longe que isso, tenta alinhar primeiro num eixo.
+        Verifica se está adjacente (Chebyshev = 1, inclui diagonal e cardinal).
+        NOTA: O nome é enganoso, mas funciona para rope/shovel que aceitam AMBOS cardinal e diagonal.
+        UP_USE também usa essa função e aceita ambos.
+        Se estiver mais longe, tenta se aproximar movendo em um eixo de cada vez.
+        Se estiver no mesmo tile (Chebyshev = 0), retorna False (inválido).
         """
         chebyshev = max(abs(rel_x), abs(rel_y))
+
         if chebyshev == 1:
+            # Já está adjacente (cardinal ou diagonal)
             return True
+
         if chebyshev == 0:
-            print(f"[Cavebot] {label.capitalize()} inválido (rel=0,0).")
+            print(f"[Cavebot] {label.capitalize()} inválido (rel=0,0 - mesmo tile do player).")
             return False
 
-        # Ajusta posicionamento tentando primeiro no eixo X.
-        if rel_x != 0:
-            self._move_step(rel_x, 0)
-        elif rel_y != 0:
-            self._move_step(0, rel_y)
+        # Está longe (Chebyshev > 1): tenta se aproximar
+        # Prioridade: move primeiro no eixo com maior distância
+        if abs(rel_x) > abs(rel_y):
+            # X é maior: move em X para chegar perto
+            print(f"[Cavebot] {label.capitalize()} longe (Chebyshev={chebyshev}), movendo no eixo X...")
+            self._move_step(1 if rel_x > 0 else -1, 0)
+        else:
+            # Y é maior ou igual: move em Y
+            print(f"[Cavebot] {label.capitalize()} longe (Chebyshev={chebyshev}), movendo no eixo Y...")
+            self._move_step(0, 1 if rel_y > 0 else -1)
+
         return False
 
     def _get_rope_source_position(self):

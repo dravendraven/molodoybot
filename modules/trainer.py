@@ -132,6 +132,87 @@ def find_nearest_reachable_target(candidates, my_x, my_y, current_id=0):
 
     return valid[0]
 
+
+class EngagementDetector:
+    """Detecta se criaturas estão engajadas com outros players via distância relativa e HP tracking."""
+
+    def __init__(self):
+        self.hp_history = {}  # {creature_id: [(timestamp, hp), ...]}
+
+    def update_hp(self, creature_id, hp):
+        """Atualiza histórico de HP com timestamp."""
+        now = time.time()
+        if creature_id not in self.hp_history:
+            self.hp_history[creature_id] = []
+
+        # Limpa histórico antigo (> KS_HISTORY_DURATION segundos)
+        cutoff = now - KS_HISTORY_DURATION
+        self.hp_history[creature_id] = [
+            (ts, h) for ts, h in self.hp_history[creature_id]
+            if ts > cutoff
+        ]
+        self.hp_history[creature_id].append((now, hp))
+
+    def is_engaged_with_other(self, creature, my_name, my_pos, all_entities, my_target_id, targets_list):
+        """
+        Detecta se criatura está engajada com outro player.
+
+        MÉTODO PRINCIPAL: Comparação de distância relativa
+        Se criatura está mais próxima de outro player do que de mim, assume-se engagement.
+
+        Returns:
+            tuple: (is_engaged: bool, reason: str or None)
+        """
+        creature_x, creature_y = creature['abs_x'], creature['abs_y']
+        creature_id = creature['id']
+        my_x, my_y = my_pos
+
+        # Distância da criatura até mim (Chebyshev distance - SQM)
+        creature_dist_to_bot = max(abs(creature_x - my_x), abs(creature_y - my_y))
+
+        # Método 1: Comparação de distância relativa (PRINCIPAL)
+        for entity in all_entities:
+            # Skip self (pela criatura)
+            if entity['id'] == creature_id:
+                continue
+
+            # Skip self (player)
+            if entity['name'] == my_name:
+                continue
+
+            # Skip se é criatura alvo (monster/creature do jogo)
+            # Assume que se está em targets_list, é uma criatura, não um player
+            is_target_creature = any(target in entity['name'] for target in targets_list)
+            if is_target_creature:
+                continue
+
+            # Se chegou aqui, é potencialmente um player real
+            # Calcula distância da criatura até este potencial player
+            player_x, player_y = entity['abs_x'], entity['abs_y']
+            creature_dist_to_player = max(abs(creature_x - player_x), abs(creature_y - player_y))
+
+            # REGRA SIMPLES: Se criatura está mais perto do player que de mim
+            if creature_dist_to_player < creature_dist_to_bot:
+                reason = f"Mais próxima de '{entity['name']}' ({creature_dist_to_player} SQM) que do bot ({creature_dist_to_bot} SQM)"
+                return (True, reason)
+
+        # Método 2: HP decrescente sem ser meu alvo (COMPLEMENTAR)
+        if creature['id'] != my_target_id:
+            if creature['id'] in self.hp_history:
+                history = self.hp_history[creature['id']]
+                if len(history) >= 2:
+                    oldest_hp = history[0][1]
+                    current_hp = creature['hp']
+                    hp_loss = oldest_hp - current_hp
+
+                    # Se perdeu > KS_HP_LOSS_THRESHOLD em KS_HISTORY_DURATION, está sendo atacado
+                    if hp_loss > KS_HP_LOSS_THRESHOLD:
+                        reason = f"HP caiu {hp_loss:.1f}% em {KS_HISTORY_DURATION}s (não é meu alvo)"
+                        return (True, reason)
+
+        return (False, None)
+
+
 def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
 
     get_cfg = make_config_getter(config)
@@ -148,6 +229,9 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
     mapper = None
     analyzer = None
     walker = None
+
+    # Anti Kill-Steal Detection
+    engagement_detector = EngagementDetector()
 
     while True:
         if check_running and not check_running(): 
@@ -201,10 +285,11 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
             mapper.read_full_map(player_id)
             # 2. SCAN
             valid_candidates = []
-            visual_line_count = 0 
+            visual_line_count = 0
+            all_visible_entities = []  # Todas as entidades visíveis (para KS detection)
 
             if debug_mode: print(f"\n--- INÍCIO DO SCAN (Meu Z: {my_z}) ---")
-            
+
             for i in range(MAX_CREATURES):
                 slot = list_start + (i * STEP_SIZE)
                 try:
@@ -217,11 +302,11 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
                         cx = pm.read_int(slot + OFFSET_X)
                         cy = pm.read_int(slot + OFFSET_Y)
                         hp = pm.read_int(slot + OFFSET_HP)
-                        
+
                         dist_x = abs(my_x - cx)
                         dist_y = abs(my_y - cy)
                         is_in_range = (dist_x <= attack_range and dist_y <= attack_range)
-                
+
                         if debug_mode: print(f"Slot {i}: {name} (Vis:{vis} Z:{z} HP:{hp} Dist:({dist_x},{dist_y}))")
 
                         if name == current_name: continue
@@ -229,12 +314,24 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
                         is_on_battle_list = (vis == 1 and z == my_z)
 
                         if is_on_battle_list:
+                            # Adiciona a lista de entidades visíveis (para KS detection)
+                            all_visible_entities.append({
+                                'id': c_id,
+                                'name': name,
+                                'abs_x': cx,
+                                'abs_y': cy,
+                                'hp': hp
+                            })
+
                             if debug_mode: print(f"   [LINHA {visual_line_count}] -> {name} (ID: {c_id})")
                             current_line = visual_line_count
-                            visual_line_count += 1 
-                            
+                            visual_line_count += 1
+
                             if any(t in name for t in targets_list):
                                 if is_in_range and hp > 0:
+
+                                    # NOVO: Atualiza histórico de HP para KS detection
+                                    engagement_detector.update_hp(c_id, hp)
 
                                     is_reachable = True
 
@@ -262,19 +359,38 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
                                             if debug_mode: print(f"      ✅ ACESSÍVEL: Next step = {next_step}")
 
                                     if is_reachable:
-                                        if debug_mode: print(f"      → CANDIDATO: HP:{hp} Dist:({dist_x},{dist_y})")
-                                        valid_candidates.append({
-                                            "id": c_id,
-                                            "name": name,
-                                            "hp": hp,
-                                            "dist_x": dist_x,
-                                            "dist_y": dist_y,
-                                            "abs_x": cx,
-                                            "abs_y": cy,
-                                            "z": z,
-                                            "is_in_range": is_in_range,
-                                            "line": current_line
-                                        })
+                                        # NOVO: Verifica KS prevention antes de adicionar ao candidatos
+                                        ks_enabled = get_cfg('ks_prevention_enabled', KS_PREVENTION_ENABLED)
+                                        skip_ks = False
+
+                                        if ks_enabled:
+                                            is_engaged, ks_reason = engagement_detector.is_engaged_with_other(
+                                                {'id': c_id, 'abs_x': cx, 'abs_y': cy, 'hp': hp},
+                                                current_name,
+                                                (my_x, my_y),
+                                                all_visible_entities,
+                                                current_target_id,
+                                                targets_list
+                                            )
+
+                                            if is_engaged:
+                                                if debug_mode: print(f"      ⚠️ SKIP KS: {name} - {ks_reason}")
+                                                skip_ks = True
+
+                                        if not skip_ks:
+                                            if debug_mode: print(f"      → CANDIDATO: HP:{hp} Dist:({dist_x},{dist_y})")
+                                            valid_candidates.append({
+                                                "id": c_id,
+                                                "name": name,
+                                                "hp": hp,
+                                                "dist_x": dist_x,
+                                                "dist_y": dist_y,
+                                                "abs_x": cx,
+                                                "abs_y": cy,
+                                                "z": z,
+                                                "is_in_range": is_in_range,
+                                                "line": current_line
+                                            })
                 except: continue
 
             if debug_mode:

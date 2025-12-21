@@ -8,27 +8,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import MAPS_DIRECTORY, WALKABLE_COLORS
 from core.global_map import GlobalMap
-
-# ============================================================================
-# PALETA DE CORES (Atualizada com novas cores comuns)
-# ============================================================================
-COLOR_PALETTE = {
-    0x00: (0, 0, 0),        # Preto
-    0x0C: (0, 60, 0),       # Verde Escuro
-    0x18: (0, 200, 0),      # Verde Claro
-    0x33: (50, 100, 200),   # Azul (Água)
-    0x72: (100, 50, 20),    # Marrom Escuro
-    0x79: (120, 80, 40),    # Marrom
-    0x81: (150, 150, 150),  # Cinza
-    0xBA: (200, 50, 50),    # Vermelho (Telhados)
-    0xD2: (255, 255, 0),    # Amarelo (Escadas)
-    0x1E: (30, 30, 30),     # Caverna escura
-    0xC0: (255, 100, 0),    # Lava
-}
-DEFAULT_COLOR = (80, 80, 80)
-
-def get_color(byte_val):
-    return COLOR_PALETTE.get(byte_val, DEFAULT_COLOR)
+from utils.color_palette import get_color
 
 def create_visualization(maps_dir, path_data, output_filename="debug_mapa.png", is_failure=False):
     """

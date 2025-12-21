@@ -79,15 +79,53 @@ def get_item_id_in_hand(pm, base_addr, slot_enum):
         return 0
     
 def unequip_hand(pm, base_addr, slot_enum, dest_container_idx=0, dest_slot=0):
+    """
+    Unequip item from hand slot and move to container.
+
+    Returns the item ID if successful, None if it failed or slot was empty.
+
+    Uses DUAL VALIDATION to handle:
+    1. Network latency (retries with exponential backoff: 0.5s, 0.8s, 1.1s)
+    2. Memory context staleness (verifies item is in container, not just hand empty)
+
+    The dual validation catches race conditions when Cavebot pauses for Runemaker,
+    which can cause Pymem to read stale memory values during context switch.
+
+    Returns:
+        int: Item ID if successfully unequipped (hand empty + item in container)
+        None: If unequip failed or slot was empty
+    """
     current_id = get_item_id_in_hand(pm, base_addr, slot_enum)
-    if current_id > 0:
-        pos_from = packet.get_inventory_pos(slot_enum)
-        pos_to = packet.get_container_pos(dest_container_idx, dest_slot)
-        packet.move_item(pm, pos_from, pos_to, current_id, 1)
-        time.sleep(0.5)
+    if current_id <= 0:
+        return None
+
+    pos_from = packet.get_inventory_pos(slot_enum)
+    pos_to = packet.get_container_pos(dest_container_idx, dest_slot)
+    packet.move_item(pm, pos_from, pos_to, current_id, 1)
+
+    # DUAL VALIDATION: Verify both hand is empty AND item in container
+    max_attempts = 3
+    for attempt in range(max_attempts):
+        time.sleep(0.5 + (attempt * 0.3))  # 0.5s, 0.8s, 1.1s waits
+
+        # Check 1: Hand slot is empty
         check_id = get_item_id_in_hand(pm, base_addr, slot_enum)
-        if check_id == 0: return current_id
-        else: return None
+        if check_id == 0:
+            # Hand is empty - verify item reached destination container
+            # This catches Cavebot context staleness issues
+            try:
+                item_data = find_item_in_containers(pm, base_addr, current_id)
+                if item_data and item_data['container_index'] == dest_container_idx:
+                    # DUAL CONFIRMATION: Hand empty + Item in correct container
+                    return current_id
+                # Item not in container yet, will retry
+                continue
+            except Exception as e:
+                # If container scan fails but hand is empty, trust hand check
+                # (hand check is more direct and reliable than container scan)
+                return current_id
+
+    # All attempts failed - item still in hand or not found in containers
     return None
 
 def reequip_hand(pm, base_addr, item_id, target_slot_enum, container_idx=0, max_retries=3):
@@ -333,9 +371,12 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                             unequipped_items = {}  # slot_enum → (item_id, dest_slot)
                             for dest_slot_idx, slot_enum in enumerate(hands_to_use):
                                 if is_safe_callback and not is_safe_callback(): break
+
                                 unequipped_item_id = unequip_hand(pm, base_addr, slot_enum, dest_container_idx=0, dest_slot=dest_slot_idx)
                                 unequipped_items[slot_enum] = (unequipped_item_id, 0)
+
                                 log_msg(f"🔓 Desarmou {slot_enum}: Item {unequipped_item_id}")
+
                                 time.sleep(1.2)
 
                             # PHASE 2: Equip blank runes
