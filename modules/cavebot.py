@@ -445,8 +445,24 @@ class Cavebot:
                     self.local_path_index += 1
                     return
                 else:
-                    # Obstáculo dinâmico detectado! O cache "mentiu". Invalida e recalcula.
-                    # print("[Nav] ⚠️ Obstáculo dinâmico (MW/Player) invalidou cache.")
+                    # Obstáculo dinâmico detectado!
+                    # OBSTACLE CLEARING: Tenta mover mesa/cadeira antes de invalidar cache
+                    if OBSTACLE_CLEARING_ENABLED:
+                        cleared = self._attempt_clear_obstacle(dx, dy)
+                        if cleared:
+                            # Re-verifica se ficou walkable após mover o item
+                            props = self.analyzer.get_tile_properties(dx, dy)
+                            if props['walkable']:
+                                # Sucesso! Executa o passo
+                                with self._waypoints_lock:
+                                    wp_num = self._current_index + 1
+                                self.current_state = self.STATE_WALKING
+                                self.state_message = f"🚶 Andando até WP #{wp_num}"
+                                self._execute_smooth_step(dx, dy)
+                                self.local_path_index += 1
+                                return
+
+                    # Não conseguiu limpar ou toggle OFF - invalida cache
                     self.local_path_cache = []
             else:
                 # Cache esgotado
@@ -910,6 +926,95 @@ class Cavebot:
         drop_pos = get_ground_pos(px, py, pz)
         move_item(self.pm, from_pos, drop_pos, top_id, 1, stack_pos=stack_pos)
         print(f"[Cavebot] Movendo item {top_id} (stack_pos={stack_pos}) para liberar rope spot.")
+        return False
+
+    # ==================================================================
+    # OBSTACLE CLEARING - Move mesas/cadeiras do caminho
+    # ==================================================================
+
+    def _attempt_clear_obstacle(self, rel_x, rel_y):
+        """
+        Tenta remover um obstáculo MOVE (mesa, cadeira) do caminho.
+        Protegido pelo toggle OBSTACLE_CLEARING_ENABLED.
+
+        Args:
+            rel_x, rel_y: Posição relativa ao player
+
+        Returns:
+            bool: True se conseguiu limpar, False caso contrário
+        """
+        if not OBSTACLE_CLEARING_ENABLED:
+            return False
+
+        obstacle = self.analyzer.get_obstacle_type(rel_x, rel_y)
+
+        if not obstacle['clearable']:
+            return False
+
+        px, py, pz = get_player_pos(self.pm, self.base_addr)
+        target_x, target_y = px + rel_x, py + rel_y
+
+        if obstacle['type'] == 'MOVE':
+            return self._push_move_item(target_x, target_y, pz, rel_x, rel_y, obstacle)
+
+        return False
+
+    def _push_move_item(self, target_x, target_y, pz, rel_x, rel_y, obstacle):
+        """
+        Empurra um item MOVE para um tile adjacente livre.
+        Estratégia: Tentar empurrar perpendicular ao caminho ou para trás.
+        """
+        px, py, _ = get_player_pos(self.pm, self.base_addr)
+
+        # Calcular direção do player para o obstáculo
+        dx = rel_x  # Direção do movimento
+        dy = rel_y
+
+        # Prioridade de empurrar:
+        # 1. Perpendicular (para os lados)
+        # 2. Na direção oposta (para trás do obstáculo)
+        # 3. Na mesma direção (se o player puder passar depois)
+        push_directions = []
+
+        # Perpendiculares primeiro (menos chance de atrapalhar caminho)
+        if dx != 0:
+            push_directions.extend([(0, 1), (0, -1)])  # Empurra para cima/baixo
+        if dy != 0:
+            push_directions.extend([(1, 0), (-1, 0)])  # Empurra para esquerda/direita
+
+        # Depois a direção oposta (empurrar para trás)
+        if dx != 0 or dy != 0:
+            push_directions.append((-dx, -dy))
+
+        # Por último, mesma direção
+        if dx != 0 or dy != 0:
+            push_directions.append((dx, dy))
+
+        for push_dx, push_dy in push_directions:
+            dest_x = target_x + push_dx
+            dest_y = target_y + push_dy
+
+            # Verificar se destino é walkable
+            dest_rel_x = dest_x - px
+            dest_rel_y = dest_y - py
+            dest_props = self.analyzer.get_tile_properties(dest_rel_x, dest_rel_y)
+
+            if dest_props['walkable']:
+                from_pos = get_ground_pos(target_x, target_y, pz)
+                to_pos = get_ground_pos(dest_x, dest_y, pz)
+
+                with PacketMutex("cavebot"):
+                    move_item(
+                        self.pm, from_pos, to_pos,
+                        obstacle['item_id'], 1,
+                        stack_pos=obstacle['stack_pos']
+                    )
+
+                print(f"[Cavebot] 📦 Moveu obstáculo {obstacle['item_id']} de ({target_x},{target_y}) para ({dest_x},{dest_y})")
+                time.sleep(0.3)  # Delay para animação do item
+                return True
+
+        print(f"[Cavebot] ⚠️ Não encontrou tile livre para empurrar obstáculo {obstacle['item_id']}")
         return False
 
     def _check_stuck(self, px, py, pz, current_index):

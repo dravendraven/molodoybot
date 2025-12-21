@@ -1,5 +1,6 @@
 import time
 import random
+import struct
 import win32gui
 
 from core import packet
@@ -17,12 +18,83 @@ from core.config_utils import make_config_getter
 from core.map_analyzer import MapAnalyzer
 from core.astar_walker import AStarWalker
 
-# Definições de Delay
-SCAN_DELAY = 0.5
+# Definições de Delay (Throttle Dinâmico)
+SCAN_DELAY_COMBAT = 0.1      # Em combate: scan máximo
+SCAN_DELAY_TARGETS = 0.2     # Tem alvos disponíveis: scan médio
+SCAN_DELAY_IDLE = 0.4        # Sem alvos: scan lento
 
 # Retargeting Configuration
 RETARGET_DELAY = 1.5  # Segundos para aguardar antes de retargetar alvo inacessível
 REACHABILITY_CHECK_INTERVAL = 1.0  # Frequência de verificação de acessibilidade
+
+# Scan Adaptativo (Early-Exit)
+INVALID_SLOT_THRESHOLD = 15  # Slots inválidos consecutivos para parar scan
+
+def parse_creature_from_bytes(raw_bytes):
+    """
+    Parseia dados de uma criatura a partir de um bloco de bytes (batch read).
+    Reduz de 7 syscalls para 1 por criatura.
+
+    Returns:
+        dict com id, name, x, y, z, hp, visible ou None se inválido
+    """
+    try:
+        # ID está no offset 0 (4 bytes, little-endian int)
+        c_id = struct.unpack_from('<I', raw_bytes, 0)[0]
+        if c_id <= 0:
+            return None
+
+        # Nome: offset 4, até 32 bytes, null-terminated
+        name_bytes = raw_bytes[OFFSET_NAME:OFFSET_NAME + 32]
+        name = name_bytes.split(b'\x00')[0].decode('latin-1', errors='ignore').strip()
+
+        # Coordenadas e stats (little-endian ints)
+        cx = struct.unpack_from('<i', raw_bytes, OFFSET_X)[0]
+        cy = struct.unpack_from('<i', raw_bytes, OFFSET_Y)[0]
+        z = struct.unpack_from('<i', raw_bytes, OFFSET_Z)[0]
+        hp = struct.unpack_from('<i', raw_bytes, OFFSET_HP)[0]
+        visible = struct.unpack_from('<i', raw_bytes, OFFSET_VISIBLE)[0]
+
+        return {
+            'id': c_id,
+            'name': name,
+            'x': cx,
+            'y': cy,
+            'z': z,
+            'hp': hp,
+            'visible': visible
+        }
+    except:
+        return None
+
+def is_valid_creature_slot(creature):
+    """
+    Validação robusta de slot de criatura para Scan Adaptativo.
+    Verifica múltiplos campos para evitar falsos positivos com "sujeira" na memória.
+
+    Returns:
+        True se o slot contém dados válidos de uma criatura
+    """
+    if creature is None:
+        return False
+
+    # HP deve estar entre 0-100 (percentual)
+    if creature['hp'] < 0 or creature['hp'] > 100:
+        return False
+
+    # Visible deve ser 0 ou 1
+    if creature['visible'] not in (0, 1):
+        return False
+
+    # Nome deve ter pelo menos 1 caractere
+    if len(creature['name']) == 0:
+        return False
+
+    # Z (andar) deve estar em range válido (0-15 no Tibia)
+    if creature['z'] < 0 or creature['z'] > 15:
+        return False
+
+    return True
 
 def get_my_char_name(pm, base_addr):
     """
@@ -132,7 +204,6 @@ def find_nearest_reachable_target(candidates, my_x, my_y, current_id=0):
 
     return valid[0]
 
-
 class EngagementDetector:
     """Detecta se criaturas estão engajadas com outros players via distância relativa e HP tracking."""
 
@@ -237,7 +308,6 @@ class EngagementDetector:
 
         return (False, None)
 
-
 def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
 
     get_cfg = make_config_getter(config)
@@ -339,18 +409,35 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
                 print(f"  KS Prevention: {ks_enabled}")
                 print(f"{'='*70}\n")
 
+            # SCAN ADAPTATIVO: contador de slots inválidos consecutivos
+            invalid_streak = 0
+
             for i in range(MAX_CREATURES):
                 slot = list_start + (i * STEP_SIZE)
                 try:
-                    c_id = pm.read_int(slot)
-                    if c_id > 0:
-                        raw = pm.read_string(slot + OFFSET_NAME, 32)
-                        name = raw.split('\x00')[0].strip()
-                        vis = pm.read_int(slot + OFFSET_VISIBLE)
-                        z = pm.read_int(slot + OFFSET_Z)
-                        cx = pm.read_int(slot + OFFSET_X)
-                        cy = pm.read_int(slot + OFFSET_Y)
-                        hp = pm.read_int(slot + OFFSET_HP)
+                    # BATCH READ: 1 syscall ao invés de 7
+                    raw_bytes = pm.read_bytes(slot, STEP_SIZE)
+                    creature = parse_creature_from_bytes(raw_bytes)
+
+                    # EARLY-EXIT: Validação robusta para detectar fim da lista
+                    if not is_valid_creature_slot(creature):
+                        invalid_streak += 1
+                        if invalid_streak >= INVALID_SLOT_THRESHOLD:
+                            if debug_mode:
+                                print(f"   [EARLY-EXIT] {invalid_streak} slots inválidos consecutivos - parando scan no slot {i}")
+                            break
+                        continue
+                    else:
+                        invalid_streak = 0  # Reset quando encontra slot válido
+
+                    if creature:
+                        c_id = creature['id']
+                        name = creature['name']
+                        vis = creature['visible']
+                        z = creature['z']
+                        cx = creature['x']
+                        cy = creature['y']
+                        hp = creature['hp']
 
                         dist_x = abs(my_x - cx)
                         dist_y = abs(my_y - cy)
@@ -555,7 +642,7 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
                                     became_unreachable_time = None  # Reseta para tentar no próximo scan
 
                                 # Pula resto do processamento do Cenário A
-                                time.sleep(SCAN_DELAY)
+                                time.sleep(SCAN_DELAY_COMBAT)
                                 continue
 
                         else:  # Alvo está acessível
@@ -588,25 +675,20 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
                     for i in range(MAX_CREATURES):
                         slot = list_start + (i * STEP_SIZE)
                         try:
-                            c_id = pm.read_int(slot)
-                            if c_id == current_target_id:
-                                # Encontrou na battle list!
-                                raw = pm.read_string(slot + OFFSET_NAME, 32)
-                                name = raw.split('\x00')[0].strip()
-                                hp = pm.read_int(slot + OFFSET_HP)
-                                cx = pm.read_int(slot + OFFSET_X)
-                                cy = pm.read_int(slot + OFFSET_Y)
-                                z = pm.read_int(slot + OFFSET_Z)
-                                vis = pm.read_int(slot + OFFSET_VISIBLE)
+                            # BATCH READ: 1 syscall ao invés de 7
+                            raw_bytes = pm.read_bytes(slot, STEP_SIZE)
+                            creature = parse_creature_from_bytes(raw_bytes)
 
+                            if creature and creature['id'] == current_target_id:
+                                # Encontrou na battle list!
                                 target_in_battlelist = {
-                                    'id': c_id,
-                                    'name': name,
-                                    'hp': hp,
-                                    'abs_x': cx,
-                                    'abs_y': cy,
-                                    'z': z,
-                                    'visible': vis
+                                    'id': creature['id'],
+                                    'name': creature['name'],
+                                    'hp': creature['hp'],
+                                    'abs_x': creature['x'],
+                                    'abs_y': creature['y'],
+                                    'z': creature['z'],
+                                    'visible': creature['visible']
                                 }
                                 break
                         except:
@@ -684,7 +766,7 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
                                             log("⚠️ Nenhum alvo acessível disponível - aguardando")
                                             became_unreachable_time = None
 
-                                        time.sleep(SCAN_DELAY)
+                                        time.sleep(SCAN_DELAY_COMBAT)
                                         continue
                                 else:
                                     # Alvo se tornou acessível novamente
@@ -774,7 +856,16 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
                             next_attack_time = 0
                             time.sleep(0.5)
 
-            time.sleep(SCAN_DELAY)
+            # Throttle dinâmico baseado no estado
+            if current_target_id != 0:
+                # EM COMBATE: scan máximo para reagir rápido a mudanças
+                time.sleep(SCAN_DELAY_COMBAT)
+            elif len(valid_candidates) > 0:
+                # TEM ALVOS: scan médio (vai atacar em breve após delay humanizado)
+                time.sleep(SCAN_DELAY_TARGETS)
+            else:
+                # SEM ALVOS: scan lento (só monitorando battle list)
+                time.sleep(SCAN_DELAY_IDLE)
 
         except Exception as e:
             print(f"[ERRO LOOP] {e}")

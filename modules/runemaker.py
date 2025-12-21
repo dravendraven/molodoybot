@@ -6,6 +6,7 @@ from core import packet
 from core.packet_mutex import PacketMutex
 from config import *
 from core.inventory_core import find_item_in_containers
+from modules.auto_loot import scan_containers
 from core.map_core import get_player_pos, get_game_view, get_screen_coord
 from modules.eater import attempt_eat
 from core.input_core import press_hotkey, left_click_at
@@ -77,8 +78,32 @@ def get_item_id_in_hand(pm, base_addr, slot_enum):
         return pm.read_int(base_addr + offset)
     except:
         return 0
+
+def get_free_slot_in_container(pm, base_addr, target_container_idx=0):
+    """
+    Encontra o próximo slot livre em um container específico.
+
+    Retorna: (container_index, free_slot) ou (None, None) se container cheio/não encontrado.
+
+    O slot livre é determinado por container.amount (quantidade de itens),
+    que corresponde ao próximo índice disponível (append no final).
+    """
+    containers = scan_containers(pm, base_addr)
+
+    for cont in containers:
+        if cont.index == target_container_idx:
+            # Verifica se tem espaço (amount < volume)
+            if cont.amount < cont.volume:
+                # Próximo slot livre = quantidade atual de itens
+                return cont.index, cont.amount
+            else:
+                # Container cheio
+                return None, None
+
+    # Container não encontrado (fechado?)
+    return None, None
     
-def unequip_hand(pm, base_addr, slot_enum, dest_container_idx=0, dest_slot=0):
+def unequip_hand(pm, base_addr, slot_enum, dest_container_idx=0, dest_slot=None):
     """
     Unequip item from hand slot and move to container.
 
@@ -91,13 +116,25 @@ def unequip_hand(pm, base_addr, slot_enum, dest_container_idx=0, dest_slot=0):
     The dual validation catches race conditions when Cavebot pauses for Runemaker,
     which can cause Pymem to read stale memory values during context switch.
 
+    Args:
+        dest_slot: If None (default), automatically finds the next free slot.
+                   If specified, uses that slot (legacy behavior).
+
     Returns:
         int: Item ID if successfully unequipped (hand empty + item in container)
-        None: If unequip failed or slot was empty
+        None: If unequip failed, slot was empty, or container is full
     """
     current_id = get_item_id_in_hand(pm, base_addr, slot_enum)
     if current_id <= 0:
         return None
+
+    # Encontra o próximo slot livre se dest_slot não foi especificado
+    if dest_slot is None:
+        _, found_slot = get_free_slot_in_container(pm, base_addr, dest_container_idx)
+        if found_slot is None:
+            print(f"[RUNEMAKER] ⚠️ Container {dest_container_idx} está cheio! Não é possível desequipar.")
+            return None
+        dest_slot = found_slot
 
     pos_from = packet.get_inventory_pos(slot_enum)
     pos_to = packet.get_container_pos(dest_container_idx, dest_slot)
@@ -367,12 +404,12 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                         with PacketMutex("runemaker"):
                             # PHASE 1: Unequip all hands and store their items
                             # (This fixes the bug where unequipped_item_id gets overwritten with "BOTH" hands)
-                            # IMPORTANT: Each hand gets unequipped to a different slot to avoid conflicts
+                            # Agora usa slot livre automaticamente via get_free_slot_in_container
                             unequipped_items = {}  # slot_enum → (item_id, dest_slot)
-                            for dest_slot_idx, slot_enum in enumerate(hands_to_use):
+                            for slot_enum in hands_to_use:
                                 if is_safe_callback and not is_safe_callback(): break
 
-                                unequipped_item_id = unequip_hand(pm, base_addr, slot_enum, dest_container_idx=0, dest_slot=dest_slot_idx)
+                                unequipped_item_id = unequip_hand(pm, base_addr, slot_enum, dest_container_idx=0)
                                 unequipped_items[slot_enum] = (unequipped_item_id, 0)
 
                                 log_msg(f"🔓 Desarmou {slot_enum}: Item {unequipped_item_id}")

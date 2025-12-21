@@ -1,5 +1,5 @@
 # core/map_analyzer.py
-from database.tiles_config import BLOCKING_IDS, AVOID_IDS, get_special_type
+from database.tiles_config import BLOCKING_IDS, AVOID_IDS, MOVE_IDS, get_special_type
 from config import DEBUG_PATHFINDING
 
 class MapAnalyzer:
@@ -90,6 +90,57 @@ class MapAnalyzer:
     
     def _make_block(self):
         return {'walkable': False, 'type': 'BLOCK', 'cost': 999}
+
+    def get_obstacle_type(self, rel_x, rel_y):
+        """
+        Analisa um tile bloqueado e retorna o tipo de obstáculo.
+        Usado pelo sistema de Obstacle Clearing do Cavebot.
+
+        Returns:
+            dict: {
+                'type': 'BLOCK' | 'MOVE' | 'CREATURE' | 'NONE',
+                'item_id': int or None,
+                'stack_pos': int (posição na pilha),
+                'clearable': bool
+            }
+        """
+        tile = self.mm.get_tile_visible(rel_x, rel_y)
+
+        if not tile or not tile.items:
+            return {'type': 'NONE', 'item_id': None, 'clearable': False}
+
+        # Varre do topo para baixo (reversed) para pegar o item mais superficial primeiro
+        for i, item_id in enumerate(reversed(tile.items)):
+            stack_pos = len(tile.items) - 1 - i
+
+            # Criatura/Player - não pode mover
+            if item_id == 99:
+                return {
+                    'type': 'CREATURE',
+                    'item_id': 99,
+                    'stack_pos': stack_pos,
+                    'clearable': False
+                }
+
+            # Item movível (mesa, cadeira, estátua)
+            if item_id in MOVE_IDS:
+                return {
+                    'type': 'MOVE',
+                    'item_id': item_id,
+                    'stack_pos': stack_pos,
+                    'clearable': True
+                }
+
+            # Bloqueio fixo (parede, água, etc)
+            if item_id in BLOCKING_IDS:
+                return {
+                    'type': 'BLOCK',
+                    'item_id': item_id,
+                    'stack_pos': stack_pos,
+                    'clearable': False
+                }
+
+        return {'type': 'NONE', 'item_id': None, 'clearable': False}
 
     def scan_for_floor_change(self, target_z, current_z, range_sqm=7):
         """Busca escadas/buracos ao redor."""

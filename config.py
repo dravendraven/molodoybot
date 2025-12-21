@@ -392,3 +392,14 @@ DEBUG_GLOBAL_MAP = False  # Ativa logs quando GlobalMap tenta encontrar rotas
 
 WALKABLE_COLORS = [24, 129, 121, 210] # Grama, Chão Padrão cinza, Chão de Dirt/Caverna, #Amarelo: escada, buraco, etc
 MAPS_DIRECTORY = r"c:\Users\vitor\Downloads\amera-client-latest"
+
+# ==============================================================================
+# OBSTACLE CLEARING CONFIG
+# ==============================================================================
+OBSTACLE_CLEARING_ENABLED = True  # Master toggle - mover mesas/cadeiras do caminho
+
+# Máximo de tentativas de limpar o mesmo tile antes de desistir
+MAX_CLEAR_ATTEMPTS_PER_TILE = 3
+
+# Cooldown entre tentativas de limpeza (segundos)
+CLEAR_ATTEMPT_COOLDOWN = 2.0

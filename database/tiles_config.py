@@ -10,6 +10,23 @@ MANUAL_BLOCKING_IDS = {
     1949, 5022, 5023, # teleports
 }
 
+# ==============================================================================
+# MOVE_IDS - Items que podem ser MOVIDOS para o lado (mesas, cadeiras, estátuas)
+# Usados pelo sistema de Obstacle Clearing do Cavebot
+# NOTA: ID 99 (criatura/player) NÃO está incluído - não pode ser movido
+# ==============================================================================
+MOVE_IDS = {
+    2025, 2029, 2030, 2043, 2044, 2045, 2046, 2047, 2048,
+    2059, 2060, 2061, 2314, 2315, 2316, 2319, 2346, 2347, 2348,
+    2349, 2350, 2351, 2352, 2353, 2431, 2432, 2433, 2434, 2441,
+    2442, 2443, 2444, 2445, 2446, 2447, 2448, 2449, 2450, 2451,
+    2452, 2453, 2454, 2465, 2466, 2467, 2468, 2472, 2480, 2481,
+    2482, 2483, 2484, 2485, 2486, 2519, 2523, 2524, 2904, 2959,
+    2960, 2961, 2962, 2963, 2964, 2975, 2976, 2979, 2982, 2986,
+    2997, 2998, 2999, 3000, 3465, 3484, 3485, 3486, 3487, 3510,
+    3511, 3512, 3513, 3514, 5046, 5055, 5056
+}
+
 GENERATED_BLOCKING_IDS = {
     99, 100, 101, 356, 357, 358, 359, 360, 361, 362, 363, 364, 365, 366, 367,
     373, 374, 375, 376, 377, 378, 379, 380, 381, 382, 383, 384, 388, 389, 390,
@@ -165,7 +182,17 @@ GENERATED_AVOID_IDS = {
 }
 
 # Combina os dois conjuntos
-BLOCKING_IDS = MANUAL_BLOCKING_IDS | GENERATED_BLOCKING_IDS
+# NOTA: MOVE_IDS são removidos de BLOCKING_IDS quando OBSTACLE_CLEARING está habilitado
+# Isso permite que o pathfinder considere tiles com mesas/cadeiras como "potencialmente walkable"
+try:
+    from config import OBSTACLE_CLEARING_ENABLED
+    if OBSTACLE_CLEARING_ENABLED:
+        BLOCKING_IDS = (MANUAL_BLOCKING_IDS | GENERATED_BLOCKING_IDS) - MOVE_IDS
+    else:
+        BLOCKING_IDS = MANUAL_BLOCKING_IDS | GENERATED_BLOCKING_IDS
+except ImportError:
+    # Fallback se config não disponível
+    BLOCKING_IDS = MANUAL_BLOCKING_IDS | GENERATED_BLOCKING_IDS
 
 # IDs que devemos evitar (Fields, Buracos, Escadas no meio do caminho)
 AVOID_IDS = GENERATED_AVOID_IDS
