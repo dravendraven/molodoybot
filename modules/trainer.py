@@ -848,22 +848,51 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
                 if len(final_candidates) > 0:
                     if next_attack_time == 0:
                         delay = random.uniform(min_delay, max_delay)
-                        next_attack_time = time.time() + delay 
-                        log(f"⏳ Aguardando {delay:.2f}s para atacar...")   
+                        next_attack_time = time.time() + delay
+                        log(f"⏳ Aguardando {delay:.2f}s para atacar...")
 
                     if time.time() >= next_attack_time:
-                        best = final_candidates[0]
-                        if best["id"] != current_target_id:
+                        # RE-VALIDAÇÃO KS: Verifica engagement no momento do ataque
+                        # Corrige cenário onde bot vê criatura antes do player
+                        best = None
+                        for candidate in final_candidates:
+                            if candidate["id"] == current_target_id:
+                                continue
+
+                            # Re-valida KS com lista ATUAL de entidades
+                            if ks_enabled:
+                                is_engaged, ks_reason = engagement_detector.is_engaged_with_other(
+                                    {'id': candidate["id"], 'abs_x': candidate["abs_x"],
+                                     'abs_y': candidate["abs_y"], 'hp': candidate["hp"]},
+                                    current_name,
+                                    (my_x, my_y),
+                                    all_visible_entities,
+                                    current_target_id,
+                                    targets_list,
+                                    debug=debug_mode,
+                                    log_func=print
+                                )
+                                if is_engaged:
+                                    log(f"⚠️ [KS RE-CHECK] {candidate['name']} engajada - pulando")
+                                    continue
+
+                            best = candidate
+                            break
+
+                        if best and best["id"] != current_target_id:
                             log(f"⚔️ ATACANDO: {best['name']}")
                             packet.attack(pm, base_addr, best["id"])
-                            
+
                             current_target_id = best["id"]
-                            current_monitored_id = best["id"] 
+                            current_monitored_id = best["id"]
                             last_target_data = best.copy()
-                            monitor.start(best["id"], best["name"], best["hp"]) 
+                            monitor.start(best["id"], best["name"], best["hp"])
 
                             next_attack_time = 0
                             time.sleep(0.5)
+                        elif not best and len(final_candidates) > 0:
+                            # Todos engajados - reseta para tentar novamente
+                            next_attack_time = 0
 
             # Throttle dinâmico baseado no estado
             if current_target_id != 0:
