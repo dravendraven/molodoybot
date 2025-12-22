@@ -1,6 +1,6 @@
 # core/map_analyzer.py
-from database.tiles_config import BLOCKING_IDS, AVOID_IDS, MOVE_IDS, get_special_type
-from config import DEBUG_PATHFINDING
+from database.tiles_config import BLOCKING_IDS, AVOID_IDS, MOVE_IDS, STACK_IDS, get_special_type
+from config import DEBUG_PATHFINDING, DEBUG_OBSTACLE_CLEARING, DEBUG_STACK_CLEARING
 
 class MapAnalyzer:
     def __init__(self, memory_map):
@@ -33,6 +33,28 @@ class MapAnalyzer:
 
         if debug_reason:
             properties['items'] = list(tile.items)  # Cópia da lista de IDs
+
+        # 1.5 VERIFICAÇÃO DE HEIGHT (Stack items - parcels, boxes)
+        # Um tile com height >= 2 é bloqueado, EXCETO se o player também tem height
+        # Fórmula: walkable = (tile_height - player_height) <= 1
+        tile_height = 0
+        for item_id in tile.items:
+            if item_id in STACK_IDS:
+                tile_height += 1
+
+        if tile_height >= 2:
+            player_height = self.get_tile_height(0, 0)  # Height do tile do player
+            height_diff = tile_height - player_height
+            if height_diff > 1:
+                # Bloqueado por altura excessiva
+                result = self._make_block()
+                if debug_reason:
+                    result['block_reason'] = 'HEIGHT_DIFF'
+                    result['height_diff'] = height_diff
+                    result['player_height'] = player_height
+                    result['tile_height'] = tile_height
+                    result['items'] = list(tile.items)
+                return result
 
         # Varre a pilha de itens do tile (Do chão até o topo)
         for item_id in tile.items:
@@ -91,6 +113,24 @@ class MapAnalyzer:
     def _make_block(self):
         return {'walkable': False, 'type': 'BLOCK', 'cost': 999}
 
+    def get_tile_height(self, rel_x, rel_y):
+        """
+        Calcula a altura (height) de um tile baseado em items STACK.
+        Cada item STACK (parcel, box, furniture package) contribui com height=1.
+
+        Returns:
+            int: Altura total do tile (0 se não tem STACK items)
+        """
+        tile = self.mm.get_tile_visible(rel_x, rel_y)
+        if not tile or not tile.items:
+            return 0
+
+        height = 0
+        for item_id in tile.items:
+            if item_id in STACK_IDS:
+                height += 1
+        return height
+
     def get_obstacle_type(self, rel_x, rel_y):
         """
         Analisa um tile bloqueado e retorna o tipo de obstáculo.
@@ -104,10 +144,22 @@ class MapAnalyzer:
                 'clearable': bool
             }
         """
+        if DEBUG_OBSTACLE_CLEARING:
+            print(f"[ObstacleClear] get_obstacle_type({rel_x},{rel_y}) chamado")
         tile = self.mm.get_tile_visible(rel_x, rel_y)
 
-        if not tile or not tile.items:
+        if not tile:
+            if DEBUG_OBSTACLE_CLEARING:
+                print(f"[ObstacleClear] get_obstacle_type: tile é None")
             return {'type': 'NONE', 'item_id': None, 'clearable': False}
+
+        if not tile.items:
+            if DEBUG_OBSTACLE_CLEARING:
+                print(f"[ObstacleClear] get_obstacle_type: tile.items está vazio")
+            return {'type': 'NONE', 'item_id': None, 'clearable': False}
+
+        if DEBUG_OBSTACLE_CLEARING:
+            print(f"[ObstacleClear] get_obstacle_type: tile.items = {list(tile.items)}")
 
         # Varre do topo para baixo (reversed) para pegar o item mais superficial primeiro
         for i, item_id in enumerate(reversed(tile.items)):
@@ -115,6 +167,8 @@ class MapAnalyzer:
 
             # Criatura/Player - não pode mover
             if item_id == 99:
+                if DEBUG_OBSTACLE_CLEARING:
+                    print(f"[ObstacleClear] get_obstacle_type: Encontrou CREATURE (99) stack_pos={stack_pos}")
                 return {
                     'type': 'CREATURE',
                     'item_id': 99,
@@ -124,6 +178,8 @@ class MapAnalyzer:
 
             # Item movível (mesa, cadeira, estátua)
             if item_id in MOVE_IDS:
+                if DEBUG_OBSTACLE_CLEARING:
+                    print(f"[ObstacleClear] get_obstacle_type: Encontrou MOVE item {item_id} stack_pos={stack_pos}")
                 return {
                     'type': 'MOVE',
                     'item_id': item_id,
@@ -131,8 +187,21 @@ class MapAnalyzer:
                     'clearable': True
                 }
 
+            # Item stackável (parcel, box, furniture package)
+            if item_id in STACK_IDS:
+                if DEBUG_STACK_CLEARING:
+                    print(f"[StackClear] get_obstacle_type: Encontrou STACK item {item_id} stack_pos={stack_pos}")
+                return {
+                    'type': 'STACK',
+                    'item_id': item_id,
+                    'stack_pos': stack_pos,
+                    'clearable': True
+                }
+
             # Bloqueio fixo (parede, água, etc)
             if item_id in BLOCKING_IDS:
+                if DEBUG_OBSTACLE_CLEARING:
+                    print(f"[ObstacleClear] get_obstacle_type: Encontrou BLOCK item {item_id} stack_pos={stack_pos}")
                 return {
                     'type': 'BLOCK',
                     'item_id': item_id,
@@ -140,6 +209,8 @@ class MapAnalyzer:
                     'clearable': False
                 }
 
+        if DEBUG_OBSTACLE_CLEARING:
+            print(f"[ObstacleClear] get_obstacle_type: Nenhum obstáculo encontrado, retornando NONE")
         return {'type': 'NONE', 'item_id': None, 'clearable': False}
 
     def scan_for_floor_change(self, target_z, current_z, range_sqm=7):

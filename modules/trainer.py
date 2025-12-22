@@ -560,6 +560,15 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
             if debug_mode:
                 print(f"--- FIM DO SCAN ---")
 
+            # PRIORIZAÇÃO POR DISTÂNCIA: Ordena candidatos pelo mais próximo primeiro
+            if valid_candidates:
+                valid_candidates.sort(key=lambda c: max(c["dist_x"], c["dist_y"]))
+                if debug_mode:
+                    print(f"[SORT] Candidatos ordenados por distância:")
+                    for idx, c in enumerate(valid_candidates):
+                        dist = max(c["dist_x"], c["dist_y"])
+                        print(f"  [{idx}] {c['name']} - {dist} sqm")
+
             should_attack_new = False
 
             # Cenário A: Já estou atacando

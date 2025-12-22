@@ -2531,7 +2531,8 @@ def toggle_xray():
                         creatures_found += 1
                         vis = pm.read_int(slot + OFFSET_VISIBLE)
                         cz = pm.read_int(slot + OFFSET_Z)
-                        name = pm.read_string(slot + OFFSET_NAME, 32).split('\x00')[0]
+                        name_bytes = pm.read_bytes(slot + OFFSET_NAME, 32)
+                        name = name_bytes.split(b'\x00')[0].decode('latin-1', errors='ignore')
 
                         # Debug: mostrar todas as criaturas (descomente para debug)
                         # if i < 5:

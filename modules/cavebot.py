@@ -161,6 +161,53 @@ class Cavebot:
     def start(self):
         self.enabled = True
         state.set_cavebot_state(True)  # Notifica que Cavebot está ativo
+
+        # NOVO: Sincroniza com estado atual do jogo ao (re)iniciar
+        # Isso garante que se o player se moveu durante pause, o cavebot
+        # usa a posição REAL da tela, não dados em cache
+        with self._waypoints_lock:
+            if self._waypoints:
+                try:
+                    # 1. Recalibra o mapa para ler posição atual da tela
+                    player_id = self.pm.read_int(self.base_addr + OFFSET_PLAYER_ID)
+                    self.memory_map.read_full_map(player_id)
+
+                    # 2. Agora lê a posição atualizada
+                    px, py, pz = get_player_pos(self.pm, self.base_addr)
+
+                    # 3. Encontra waypoint mais próximo
+                    closest_idx = 0
+                    closest_dist = float('inf')
+
+                    for i, wp in enumerate(self._waypoints):
+                        dist = math.sqrt((wp['x'] - px)**2 + (wp['y'] - py)**2)
+
+                        # Penaliza waypoints em andares diferentes
+                        if wp['z'] != pz:
+                            dist += 1000
+
+                        if dist < closest_dist:
+                            closest_dist = dist
+                            closest_idx = i
+
+                    old_idx = self._current_index
+
+                    # 4. Atualiza índice e limpa caches para forçar recálculo
+                    self._current_index = closest_idx
+                    self.current_global_path = []
+                    self.local_path_cache = []
+                    self.global_recalc_counter = 0
+                    self.stuck_counter = 0
+                    self.last_known_pos = None
+
+                    if old_idx != closest_idx:
+                        print(f"[Cavebot] 🎯 Reposicionado: WP #{old_idx} → #{closest_idx} (Pos: {px},{py},{pz} | Dist: {closest_dist:.1f} SQM)")
+                    else:
+                        print(f"[Cavebot] ✓ Mantendo WP #{closest_idx} (Pos: {px},{py},{pz} | Dist: {closest_dist:.1f} SQM)")
+
+                except Exception as e:
+                    print(f"[Cavebot] ⚠️ Erro ao sincronizar estado: {e}")
+
         print("[Cavebot] Iniciado.")
 
     def stop(self):
@@ -366,8 +413,9 @@ class Cavebot:
             self.current_state = self.STATE_RECALCULATING
             self.state_message = "🔄 Recalculando rota global..."
             print(f"[Nav] 🌍 Calculando Rota Global... Motivo: {reason}")
-            # Ao recalcular global, limpamos o cache local
-            self.local_path_cache = []
+            # Ao recalcular global, limpamos o cache local (só se estiver usando cache)
+            if not REALTIME_PATHING_ENABLED:
+                self.local_path_cache = []
 
             # ===== NOVO: Usar fallback inteligente =====
             path = self.global_map.get_path_with_fallback(
@@ -421,132 +469,182 @@ class Cavebot:
                 self.current_global_path = []
         
         # ============================================================
-        # 3. LÓGICA DE CACHE LOCAL (Prioridade Máxima)
+        # 3. LÓGICA DE PATHING (CACHE vs REAL-TIME)
         # ============================================================
-        
-        if self.local_path_cache:
-            if self.local_path_index < len(self.local_path_cache):
-                dx, dy = self.local_path_cache[self.local_path_index]
-                
-                # [CRÍTICO] Checagem de Segurança em Tempo Real
-                # O cache diz para ir, mas verificamos AGORA se o tile continua livre.
-                # Isso previne bater em Magic Walls ou Players que apareceram depois do cálculo.
-                props = self.analyzer.get_tile_properties(dx, dy)
-                
-                if props['walkable']:
-                    # Caminho livre! Executa passo fluido.
-                    # Set walking state
-                    with self._waypoints_lock:
-                        wp_num = self._current_index + 1
-                    self.current_state = self.STATE_WALKING
-                    self.state_message = f"🚶 Andando até WP #{wp_num}"
+        # REALTIME_PATHING_ENABLED:
+        #   True  = calcula próximo passo em tempo real (mais preciso)
+        #   False = usa cache de caminho completo (mais fluido)
 
-                    self._execute_smooth_step(dx, dy)
-                    self.local_path_index += 1
-                    return
-                else:
-                    # Obstáculo dinâmico detectado!
-                    # OBSTACLE CLEARING: Tenta mover mesa/cadeira antes de invalidar cache
-                    if OBSTACLE_CLEARING_ENABLED:
-                        cleared = self._attempt_clear_obstacle(dx, dy)
-                        if cleared:
-                            # Re-verifica se ficou walkable após mover o item
-                            props = self.analyzer.get_tile_properties(dx, dy)
-                            if props['walkable']:
-                                # Sucesso! Executa o passo
-                                with self._waypoints_lock:
-                                    wp_num = self._current_index + 1
-                                self.current_state = self.STATE_WALKING
-                                self.state_message = f"🚶 Andando até WP #{wp_num}"
-                                self._execute_smooth_step(dx, dy)
-                                self.local_path_index += 1
-                                return
-
-                    # Não conseguiu limpar ou toggle OFF - invalida cache
-                    self.local_path_cache = []
-            else:
-                # Cache esgotado
-                self.local_path_cache = []
-
-
-        # ============================================================
-        # 4. CÁLCULO DE NOVA ROTA LOCAL (Se não houver cache)
-        # ============================================================
-        # C. Execução Local (A* Walker)
         # Calcula coordenadas relativas para o Walker
         rel_x = target_local_x - my_x
         rel_y = target_local_y - my_y
 
-        # ===== NOVO: LIMITAR DISTÂNCIA DO A* =====
-        # Se destino está muito longe e não temos rota global,
-        # usa navegação por aproximação com sub-destinos incrementais
+        # Limita distância do A* para sub-destinos incrementais
         MAX_LOCAL_ASTAR_DIST = 7
         dist_to_target = math.sqrt(rel_x**2 + rel_y**2)
 
         if dist_to_target > MAX_LOCAL_ASTAR_DIST and not self.current_global_path:
-            # Normaliza direção
             norm_x = rel_x / dist_to_target
             norm_y = rel_y / dist_to_target
-
-            # Sub-destino a 7 SQM na direção correta
             rel_x = int(norm_x * MAX_LOCAL_ASTAR_DIST)
             rel_y = int(norm_y * MAX_LOCAL_ASTAR_DIST)
-
             if DEBUG_PATHFINDING:
-                print(f"[Nav] 📍 Destino longe ({dist_to_target:.1f} sqm), usando sub-destino ({rel_x}, {rel_y})")
-        
-        full_path = self.walker.get_full_path(rel_x, rel_y)
+                print(f"[Nav] 📍 Destino longe ({dist_to_target:.1f} sqm), sub-destino ({rel_x}, {rel_y})")
 
-        if full_path:
-            # Enche o cache!
-            self.local_path_cache = full_path
-            self.local_path_index = 0
+        if REALTIME_PATHING_ENABLED:
+            # ========== MODO REAL-TIME ==========
+            # Calcula o próximo passo baseado no estado ATUAL do mapa
+            # Mais preciso, evita obstáculos fantasmas e diagonais erráticas
 
-            # Executa o primeiro passo imediatamente
-            dx, dy = self.local_path_cache[0]
+            step = self.walker.get_next_step(rel_x, rel_y)
 
-            # Set walking state
-            with self._waypoints_lock:
-                wp_num = self._current_index + 1
-            self.current_state = self.STATE_WALKING
-            self.state_message = f"🚶 Andando até WP #{wp_num}"
+            if step:
+                dx, dy = step
 
-            self._execute_smooth_step(dx, dy)
-            self.local_path_index += 1
+                # OBSTACLE CLEARING: Tenta mover mesa/cadeira se estiver no caminho
+                if OBSTACLE_CLEARING_ENABLED:
+                    props = self.analyzer.get_tile_properties(dx, dy)
+                    if DEBUG_OBSTACLE_CLEARING:
+                        print(f"[ObstacleClear] REALTIME: Próximo passo ({dx},{dy}) - walkable={props['walkable']}, type={props.get('type')}")
 
-            if self.global_recalc_counter > 0:
-                print(f"[Nav] ✓ Movimento local com sucesso. Resetando stuck.")
-                self.global_recalc_counter = 0
+                    # Verificar se tem MOVE item mesmo que "walkable" (bug fix)
+                    obstacle_info = self.analyzer.get_obstacle_type(dx, dy)
+                    if DEBUG_OBSTACLE_CLEARING:
+                        print(f"[ObstacleClear] REALTIME: obstacle_info={obstacle_info}")
+
+                    # Se tem obstáculo MOVE, tenta limpar mesmo que tile seja "walkable"
+                    if obstacle_info['type'] == 'MOVE' and obstacle_info['clearable']:
+                        if DEBUG_OBSTACLE_CLEARING:
+                            print(f"[ObstacleClear] REALTIME: Detectou MOVE item, tentando limpar...")
+                        cleared = self._attempt_clear_obstacle(dx, dy)
+                        if cleared:
+                            props = self.analyzer.get_tile_properties(dx, dy)
+                            if DEBUG_OBSTACLE_CLEARING:
+                                print(f"[ObstacleClear] REALTIME: Após limpeza, walkable={props['walkable']}")
+                    elif not props['walkable']:
+                        if DEBUG_OBSTACLE_CLEARING:
+                            print(f"[ObstacleClear] REALTIME: Tile não walkable, tentando limpar...")
+                        cleared = self._attempt_clear_obstacle(dx, dy)
+                        if cleared:
+                            props = self.analyzer.get_tile_properties(dx, dy)
+                        if not props['walkable']:
+                            # Obstáculo não removível, recalcula no próximo ciclo
+                            if DEBUG_OBSTACLE_CLEARING:
+                                print(f"[ObstacleClear] REALTIME: Não conseguiu limpar, recalculando...")
+                            self.global_recalc_counter += 1
+                            return
+
+                with self._waypoints_lock:
+                    wp_num = self._current_index + 1
+                self.current_state = self.STATE_WALKING
+                self.state_message = f"🚶 Andando até WP #{wp_num}"
+
+                self._execute_smooth_step(dx, dy)
+
+                if self.global_recalc_counter > 0:
+                    print(f"[Nav] ✓ Movimento com sucesso. Resetando stuck.")
+                    self.global_recalc_counter = 0
+            else:
+                self.global_recalc_counter += 1
+                self.current_state = self.STATE_STUCK
+                self.state_message = f"⚠️ Bloqueio local ({self.global_recalc_counter}/{GLOBAL_RECALC_LIMIT})"
+                print(f"[Nav] ⚠️ Bloqueio Local! ({self.global_recalc_counter}/{GLOBAL_RECALC_LIMIT})")
+
+                if self.global_recalc_counter >= GLOBAL_RECALC_LIMIT:
+                    self._handle_hard_stuck(dest_x, dest_y, dest_z, my_x, my_y)
+
         else:
-            # Falha Local
-            self.global_recalc_counter += 1
-            self.current_state = self.STATE_STUCK
-            self.state_message = f"⚠️ Bloqueio local, tentando global... ({self.global_recalc_counter}/{GLOBAL_RECALC_LIMIT})"
-            print(f"[Nav] ⚠️ Bloqueio Local! ({self.global_recalc_counter}/{GLOBAL_RECALC_LIMIT})")
+            # ========== MODO CACHE (CÓDIGO ORIGINAL) ==========
+            # Usa full_path com cache para fluidez máxima
+            # Pode dessincronizar em ambientes muito dinâmicos
 
-            if self.global_recalc_counter >= GLOBAL_RECALC_LIMIT:
-                self._handle_hard_stuck(dest_x, dest_y, dest_z, my_x, my_y)
+            if self.local_path_cache:
+                if self.local_path_index < len(self.local_path_cache):
+                    dx, dy = self.local_path_cache[self.local_path_index]
 
-        # # Pede o próximo passo
-        # step = self.walker.get_next_step(rel_x, rel_y)
-            
-        # if step:
-        #     # Caminho Livre!
-        #     dx, dy = step
-        #     self._move_step(dx, dy)
-        #     # Sucesso no movimento local reduz a frustração global
-        #     if self.global_recalc_counter > 0:
-        #         print(f"[Nav] ✓ Movimento local com sucesso. Resetando stuck.")
-        #         self.global_recalc_counter -= 1
-        # else:
-        #     # D. Tratamento de Bloqueio (Local Falhou)
-        #     print(f"[Nav] Caminho Local Bloqueado.")
-        #     self.global_recalc_counter += 1
-        #     print(f"[Nav] ⚠️ Bloqueio Local! ({self.global_recalc_counter}/{GLOBAL_RECALC_LIMIT})")
+                    # [CRÍTICO] Checagem de Segurança em Tempo Real
+                    props = self.analyzer.get_tile_properties(dx, dy)
+                    if DEBUG_OBSTACLE_CLEARING:
+                        print(f"[ObstacleClear] CACHE: Próximo passo ({dx},{dy}) - walkable={props['walkable']}, type={props.get('type')}")
 
-        #     # Se falhar muitas vezes localmente, assume "Hard Stuck" (ex: player trapando)
-        #     if self.global_recalc_counter >= GLOBAL_RECALC_LIMIT:
-        #         self._handle_hard_stuck(dest_x, dest_y, dest_z, my_x, my_y)
+                    # Verificar se tem MOVE item mesmo que "walkable" (bug fix)
+                    if OBSTACLE_CLEARING_ENABLED:
+                        obstacle_info = self.analyzer.get_obstacle_type(dx, dy)
+                        if DEBUG_OBSTACLE_CLEARING:
+                            print(f"[ObstacleClear] CACHE: obstacle_info={obstacle_info}")
+
+                        # Se tem obstáculo MOVE, tenta limpar mesmo que tile seja "walkable"
+                        if obstacle_info['type'] == 'MOVE' and obstacle_info['clearable']:
+                            if DEBUG_OBSTACLE_CLEARING:
+                                print(f"[ObstacleClear] CACHE: Detectou MOVE item, tentando limpar...")
+                            cleared = self._attempt_clear_obstacle(dx, dy)
+                            if cleared:
+                                props = self.analyzer.get_tile_properties(dx, dy)
+                                if DEBUG_OBSTACLE_CLEARING:
+                                    print(f"[ObstacleClear] CACHE: Após limpeza, walkable={props['walkable']}")
+
+                    if props['walkable']:
+                        with self._waypoints_lock:
+                            wp_num = self._current_index + 1
+                        self.current_state = self.STATE_WALKING
+                        self.state_message = f"🚶 Andando até WP #{wp_num}"
+
+                        self._execute_smooth_step(dx, dy)
+                        self.local_path_index += 1
+                        return
+                    else:
+                        # Obstáculo dinâmico detectado!
+                        if DEBUG_OBSTACLE_CLEARING:
+                            print(f"[ObstacleClear] CACHE: Tile não walkable, tentando limpar...")
+                        if OBSTACLE_CLEARING_ENABLED:
+                            cleared = self._attempt_clear_obstacle(dx, dy)
+                            if cleared:
+                                props = self.analyzer.get_tile_properties(dx, dy)
+                                if props['walkable']:
+                                    with self._waypoints_lock:
+                                        wp_num = self._current_index + 1
+                                    self.current_state = self.STATE_WALKING
+                                    self.state_message = f"🚶 Andando até WP #{wp_num}"
+                                    self._execute_smooth_step(dx, dy)
+                                    self.local_path_index += 1
+                                    return
+
+                        # Invalida cache
+                        if DEBUG_OBSTACLE_CLEARING:
+                            print(f"[ObstacleClear] CACHE: Não conseguiu limpar, invalidando cache")
+                        self.local_path_cache = []
+                else:
+                    # Cache esgotado
+                    self.local_path_cache = []
+
+            # Calcula nova rota completa
+            full_path = self.walker.get_full_path(rel_x, rel_y)
+
+            if full_path:
+                self.local_path_cache = full_path
+                self.local_path_index = 0
+
+                dx, dy = self.local_path_cache[0]
+
+                with self._waypoints_lock:
+                    wp_num = self._current_index + 1
+                self.current_state = self.STATE_WALKING
+                self.state_message = f"🚶 Andando até WP #{wp_num}"
+
+                self._execute_smooth_step(dx, dy)
+                self.local_path_index += 1
+
+                if self.global_recalc_counter > 0:
+                    print(f"[Nav] ✓ Movimento local com sucesso. Resetando stuck.")
+                    self.global_recalc_counter = 0
+            else:
+                self.global_recalc_counter += 1
+                self.current_state = self.STATE_STUCK
+                self.state_message = f"⚠️ Bloqueio local ({self.global_recalc_counter}/{GLOBAL_RECALC_LIMIT})"
+                print(f"[Nav] ⚠️ Bloqueio Local! ({self.global_recalc_counter}/{GLOBAL_RECALC_LIMIT})")
+
+                if self.global_recalc_counter >= GLOBAL_RECALC_LIMIT:
+                    self._handle_hard_stuck(dest_x, dest_y, dest_z, my_x, my_y)
 
     def _execute_smooth_step(self, dx, dy):
         """
@@ -707,10 +805,38 @@ class Cavebot:
             return
 
         if ftype == 'ROPE':
-            # Rope precisa de adjacência cardeal, tile livre e corda no inventário.
-            if not self._ensure_cardinal_adjacent(rel_x, rel_y):
-                return
-            
+            # Rope EXIGE adjacência - o personagem NÃO pode estar em cima do rope spot
+            chebyshev = max(abs(rel_x), abs(rel_y))
+
+            if chebyshev == 0:
+                # Estamos EM CIMA do rope spot - precisamos sair para uma posição adjacente
+                print("[Cavebot] ⚠️ Em cima do rope spot! Movendo para posição adjacente...")
+
+                # Procura um tile adjacente walkable para se mover
+                adjacent_options = [
+                    (0, -1), (0, 1), (-1, 0), (1, 0),  # Cardinais primeiro
+                    (-1, -1), (1, -1), (-1, 1), (1, 1)  # Diagonais depois
+                ]
+
+                moved = False
+                for adj_dx, adj_dy in adjacent_options:
+                    props = self.analyzer.get_tile_properties(adj_dx, adj_dy)
+                    if props['walkable']:
+                        self._move_step(adj_dx, adj_dy)
+                        print(f"[Cavebot] Movendo para ({adj_dx}, {adj_dy}) para usar rope.")
+                        moved = True
+                        break
+
+                if not moved:
+                    print("[Cavebot] ⚠️ Nenhum tile adjacente livre para sair do rope spot!")
+                return  # Volta no próximo ciclo para tentar usar a rope
+
+            if chebyshev > 1:
+                # Está longe - precisa se aproximar
+                if not self._ensure_cardinal_adjacent(rel_x, rel_y):
+                    return
+
+            # chebyshev == 1: Está adjacente, pode usar a rope
             rope_source = self._get_rope_source_position()
             if not rope_source:
                 print("[Cavebot] Corda (3003) não encontrada em containers ou mãos.")
@@ -718,7 +844,7 @@ class Cavebot:
 
             if not self._clear_rope_spot(rel_x, rel_y, px, py, pz, special_id or 386):
                 return
-            
+
             with PacketMutex("cavebot"):
                 use_with(self.pm, rope_source, ROPE_ITEM_ID, 0, target_pos, special_id or 386, 0)
                 print("[Cavebot] Ação: USAR CORDA para subir de andar.")
@@ -934,8 +1060,8 @@ class Cavebot:
 
     def _attempt_clear_obstacle(self, rel_x, rel_y):
         """
-        Tenta remover um obstáculo MOVE (mesa, cadeira) do caminho.
-        Protegido pelo toggle OBSTACLE_CLEARING_ENABLED.
+        Tenta remover um obstáculo MOVE (mesa, cadeira) ou STACK (parcel) do caminho.
+        Protegido pelos toggles OBSTACLE_CLEARING_ENABLED e STACK_CLEARING_ENABLED.
 
         Args:
             rel_x, rel_y: Posição relativa ao player
@@ -943,79 +1069,234 @@ class Cavebot:
         Returns:
             bool: True se conseguiu limpar, False caso contrário
         """
-        if not OBSTACLE_CLEARING_ENABLED:
-            return False
+        if DEBUG_OBSTACLE_CLEARING or DEBUG_STACK_CLEARING:
+            print(f"[ObstacleClear] _attempt_clear_obstacle chamado para rel({rel_x},{rel_y})")
 
         obstacle = self.analyzer.get_obstacle_type(rel_x, rel_y)
+        if DEBUG_OBSTACLE_CLEARING or DEBUG_STACK_CLEARING:
+            print(f"[ObstacleClear] get_obstacle_type retornou: {obstacle}")
 
         if not obstacle['clearable']:
+            if DEBUG_OBSTACLE_CLEARING or DEBUG_STACK_CLEARING:
+                print(f"[ObstacleClear] Obstáculo não é clearable, abortando")
             return False
 
         px, py, pz = get_player_pos(self.pm, self.base_addr)
         target_x, target_y = px + rel_x, py + rel_y
 
         if obstacle['type'] == 'MOVE':
+            if not OBSTACLE_CLEARING_ENABLED:
+                if DEBUG_OBSTACLE_CLEARING:
+                    print(f"[ObstacleClear] OBSTACLE_CLEARING_ENABLED=False, abortando")
+                return False
+            if DEBUG_OBSTACLE_CLEARING:
+                print(f"[ObstacleClear] Tipo MOVE detectado, chamando _push_move_item")
             return self._push_move_item(target_x, target_y, pz, rel_x, rel_y, obstacle)
 
+        if obstacle['type'] == 'STACK':
+            if not STACK_CLEARING_ENABLED:
+                if DEBUG_STACK_CLEARING:
+                    print(f"[StackClear] STACK_CLEARING_ENABLED=False, abortando")
+                return False
+            if DEBUG_STACK_CLEARING:
+                print(f"[StackClear] Tipo STACK detectado, chamando _push_stack_item")
+            return self._push_stack_item(target_x, target_y, pz, rel_x, rel_y, obstacle)
+
+        if DEBUG_OBSTACLE_CLEARING or DEBUG_STACK_CLEARING:
+            print(f"[ObstacleClear] Tipo {obstacle['type']} não suportado")
         return False
 
     def _push_move_item(self, target_x, target_y, pz, rel_x, rel_y, obstacle):
         """
-        Empurra um item MOVE para um tile adjacente livre.
-        Estratégia: Tentar empurrar perpendicular ao caminho ou para trás.
+        Move um item MOVE (mesa/cadeira) para liberar o caminho.
+
+        Ordem de prioridade:
+        1. Arrastar para tile adjacente ao PLAYER (cardinais)
+        2. Arrastar para tile adjacente ao PLAYER (diagonais)
+        3. Empurrar para tile adjacente à MESA (fallback)
         """
         px, py, _ = get_player_pos(self.pm, self.base_addr)
 
-        # Calcular direção do player para o obstáculo
-        dx = rel_x  # Direção do movimento
-        dy = rel_y
+        if DEBUG_OBSTACLE_CLEARING:
+            print(f"[ObstacleClear] Mesa em rel({rel_x},{rel_y}) abs({target_x},{target_y})")
+            print(f"[ObstacleClear] Player em ({px},{py},{pz})")
+            print(f"[ObstacleClear] Item ID={obstacle['item_id']}, stack_pos={obstacle['stack_pos']}")
 
-        # Prioridade de empurrar:
-        # 1. Perpendicular (para os lados)
-        # 2. Na direção oposta (para trás do obstáculo)
-        # 3. Na mesma direção (se o player puder passar depois)
-        push_directions = []
+        # ============================================================
+        # PRIORIDADE 1: Tiles adjacentes ao PLAYER (cardinais)
+        # ============================================================
+        player_cardinals = [(-1, 0), (1, 0), (0, -1), (0, 1)]
 
-        # Perpendiculares primeiro (menos chance de atrapalhar caminho)
-        if dx != 0:
-            push_directions.extend([(0, 1), (0, -1)])  # Empurra para cima/baixo
-        if dy != 0:
-            push_directions.extend([(1, 0), (-1, 0)])  # Empurra para esquerda/direita
+        result = self._try_move_to_tiles(
+            player_cardinals, rel_x, rel_y,
+            target_x, target_y, pz, px, py, obstacle,
+            ref_type="player"
+        )
+        if result:
+            return True
 
-        # Depois a direção oposta (empurrar para trás)
-        if dx != 0 or dy != 0:
-            push_directions.append((-dx, -dy))
+        # ============================================================
+        # PRIORIDADE 2: Tiles adjacentes ao PLAYER (diagonais)
+        # ============================================================
+        player_diagonals = [(-1, -1), (-1, 1), (1, -1), (1, 1)]
 
-        # Por último, mesma direção
-        if dx != 0 or dy != 0:
-            push_directions.append((dx, dy))
+        result = self._try_move_to_tiles(
+            player_diagonals, rel_x, rel_y,
+            target_x, target_y, pz, px, py, obstacle,
+            ref_type="player"
+        )
+        if result:
+            return True
 
-        for push_dx, push_dy in push_directions:
-            dest_x = target_x + push_dx
-            dest_y = target_y + push_dy
+        # ============================================================
+        # PRIORIDADE 3 (FALLBACK): Tiles adjacentes à MESA
+        # ============================================================
+        if DEBUG_OBSTACLE_CLEARING:
+            print(f"[ObstacleClear] Fallback: tentando empurrar para tiles adjacentes à mesa")
 
-            # Verificar se destino é walkable
-            dest_rel_x = dest_x - px
-            dest_rel_y = dest_y - py
-            dest_props = self.analyzer.get_tile_properties(dest_rel_x, dest_rel_y)
+        # Todas as 8 direções relativas à mesa
+        mesa_adjacent = [
+            (-1, 0), (1, 0), (0, -1), (0, 1),      # cardinais
+            (-1, -1), (-1, 1), (1, -1), (1, 1)     # diagonais
+        ]
 
-            if dest_props['walkable']:
-                from_pos = get_ground_pos(target_x, target_y, pz)
-                to_pos = get_ground_pos(dest_x, dest_y, pz)
+        result = self._try_move_to_tiles(
+            mesa_adjacent, rel_x, rel_y,
+            target_x, target_y, pz, px, py, obstacle,
+            ref_type="mesa"
+        )
+        if result:
+            return True
 
-                with PacketMutex("cavebot"):
-                    move_item(
-                        self.pm, from_pos, to_pos,
-                        obstacle['item_id'], 1,
-                        stack_pos=obstacle['stack_pos']
-                    )
-
-                print(f"[Cavebot] 📦 Moveu obstáculo {obstacle['item_id']} de ({target_x},{target_y}) para ({dest_x},{dest_y})")
-                time.sleep(0.3)  # Delay para animação do item
-                return True
-
-        print(f"[Cavebot] ⚠️ Não encontrou tile livre para empurrar obstáculo {obstacle['item_id']}")
+        if DEBUG_OBSTACLE_CLEARING:
+            print(f"[ObstacleClear] Nenhum tile livre encontrado em nenhuma prioridade!")
         return False
+
+    def _try_move_to_tiles(self, directions, rel_x, rel_y, target_x, target_y, pz, px, py, obstacle, ref_type="player"):
+        """
+        Tenta mover a mesa para um dos tiles nas direções especificadas.
+
+        Args:
+            directions: Lista de (dx, dy) para tentar
+            ref_type: "player" = direções relativas ao player
+                      "mesa" = direções relativas à mesa
+        """
+        from database.tiles_config import MOVE_IDS, BLOCKING_IDS
+
+        for dx, dy in directions:
+            # Calcular posição do tile destino
+            if ref_type == "player":
+                # Direção relativa ao player
+                check_rel_x, check_rel_y = dx, dy
+                dest_x = px + dx
+                dest_y = py + dy
+            else:
+                # Direção relativa à mesa
+                check_rel_x = rel_x + dx
+                check_rel_y = rel_y + dy
+                dest_x = target_x + dx
+                dest_y = target_y + dy
+
+            # Pular o tile onde a mesa está
+            if check_rel_x == rel_x and check_rel_y == rel_y:
+                continue
+
+            # Pular o tile onde o player está
+            if check_rel_x == 0 and check_rel_y == 0:
+                continue
+
+            # Verificar se tile está livre
+            tile = self.memory_map.get_tile_visible(check_rel_x, check_rel_y)
+
+            if not tile or not tile.items:
+                if DEBUG_OBSTACLE_CLEARING:
+                    print(f"[ObstacleClear] ({check_rel_x},{check_rel_y}) - tile vazio/inexistente")
+                continue
+
+            # Verificar se tem item bloqueador
+            has_blocking = False
+            for item_id in tile.items:
+                if item_id in MOVE_IDS or item_id in BLOCKING_IDS:
+                    if DEBUG_OBSTACLE_CLEARING:
+                        print(f"[ObstacleClear] ({check_rel_x},{check_rel_y}) - bloqueador {item_id}")
+                    has_blocking = True
+                    break
+
+            if has_blocking:
+                continue
+
+            # Verificar walkability
+            dest_props = self.analyzer.get_tile_properties(check_rel_x, check_rel_y)
+            if not dest_props['walkable']:
+                if DEBUG_OBSTACLE_CLEARING:
+                    print(f"[ObstacleClear] ({check_rel_x},{check_rel_y}) - não walkable")
+                continue
+
+            # Tile válido! Executar movimento
+            if DEBUG_OBSTACLE_CLEARING:
+                print(f"[ObstacleClear] Movendo para ({check_rel_x},{check_rel_y}) abs({dest_x},{dest_y})")
+
+            from_pos = get_ground_pos(target_x, target_y, pz)
+            to_pos = get_ground_pos(dest_x, dest_y, pz)
+
+            with PacketMutex("cavebot"):
+                move_item(
+                    self.pm, from_pos, to_pos,
+                    obstacle['item_id'], 1,
+                    stack_pos=obstacle['stack_pos']
+                )
+
+            print(f"[Cavebot] 📦 Moveu mesa {obstacle['item_id']} para ({dest_x},{dest_y})")
+            time.sleep(0.3)
+            return True
+
+        return False
+
+    def _push_stack_item(self, target_x, target_y, pz, rel_x, rel_y, obstacle):
+        """
+        Move um item STACK (parcel/box) para liberar o caminho.
+
+        Diferença do MOVE: STACK items podem ser movidos para o pé do player (0,0)
+
+        Ordem de prioridade:
+        1. Mover para o pé do player (0, 0) - PRIORITÁRIO
+        2. Arrastar para tile adjacente ao PLAYER (cardinais)
+        3. Arrastar para tile adjacente ao PLAYER (diagonais)
+        4. Empurrar para tile adjacente ao ITEM (fallback)
+        """
+        px, py, _ = get_player_pos(self.pm, self.base_addr)
+
+        if DEBUG_STACK_CLEARING:
+            print(f"[StackClear] Parcel em rel({rel_x},{rel_y}) abs({target_x},{target_y})")
+            print(f"[StackClear] Player em ({px},{py},{pz})")
+            print(f"[StackClear] Item ID={obstacle['item_id']}, stack_pos={obstacle['stack_pos']}")
+
+        # ============================================================
+        # PRIORIDADE 0: Mover para o pé do player (0, 0)
+        # STACK items PODEM ser movidos para o tile do player!
+        # ============================================================
+        dest_x, dest_y = px, py
+
+        if DEBUG_STACK_CLEARING:
+            print(f"[StackClear] Tentando mover para pé do player ({dest_x},{dest_y})")
+
+        from_pos = get_ground_pos(target_x, target_y, pz)
+        to_pos = get_ground_pos(dest_x, dest_y, pz)
+
+        with PacketMutex("cavebot"):
+            move_item(
+                self.pm, from_pos, to_pos,
+                obstacle['item_id'], 1,
+                stack_pos=obstacle['stack_pos']
+            )
+
+        print(f"[Cavebot] 📦 Moveu parcel {obstacle['item_id']} para pé do player ({dest_x},{dest_y})")
+        time.sleep(0.3)
+        return True
+
+        # NOTA: Se no futuro a prioridade 0 falhar (ex: height excessivo no tile do player),
+        # podemos adicionar fallback usando _try_move_to_tiles() com as prioridades 1-4.
+        # Por agora, mover para (0,0) é sempre válido para parcels.
 
     def _check_stuck(self, px, py, pz, current_index):
         """

@@ -394,12 +394,26 @@ WALKABLE_COLORS = [24, 129, 121, 210] # Grama, Chão Padrão cinza, Chão de Dir
 MAPS_DIRECTORY = r"c:\Users\vitor\Downloads\amera-client-latest"
 
 # ==============================================================================
+# PATHFINDING CONFIG
+# ==============================================================================
+# True = calcula próximo passo em tempo real (mais preciso, evita obstáculos fantasmas)
+# False = usa cache de caminho completo (mais fluido, pode dessincronizar)
+REALTIME_PATHING_ENABLED = True
+
+# ==============================================================================
 # OBSTACLE CLEARING CONFIG
 # ==============================================================================
 OBSTACLE_CLEARING_ENABLED = True  # Master toggle - mover mesas/cadeiras do caminho
+DEBUG_OBSTACLE_CLEARING = False   # Ativa logs detalhados do obstacle clearing
 
 # Máximo de tentativas de limpar o mesmo tile antes de desistir
 MAX_CLEAR_ATTEMPTS_PER_TILE = 3
 
 # Cooldown entre tentativas de limpeza (segundos)
 CLEAR_ATTEMPT_COOLDOWN = 2.0
+
+# ==============================================================================
+# STACK CLEARING CONFIG (Parcels, Boxes, Furniture Packages)
+# ==============================================================================
+STACK_CLEARING_ENABLED = True     # Master toggle - mover parcels/boxes do caminho
+DEBUG_STACK_CLEARING = False      # Ativa logs detalhados do stack clearing
