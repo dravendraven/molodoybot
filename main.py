@@ -2705,8 +2705,9 @@ def create_minimap_panel():
     # Initialize visualizer
     from utils.realtime_minimap import RealtimeMinimapVisualizer
     from utils.color_palette import COLOR_PALETTE
+    maps_dir = BOT_SETTINGS.get('client_path') or MAPS_DIRECTORY
     minimap_visualizer = RealtimeMinimapVisualizer(
-        MAPS_DIRECTORY,
+        maps_dir,
         WALKABLE_COLORS,
         COLOR_PALETTE
     )
