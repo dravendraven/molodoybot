@@ -647,10 +647,13 @@ def open_waypoint_editor_window():
             except:
                 current_pos = None
 
+        # Usa client_path configurado na GUI, ou fallback para MAPS_DIRECTORY
+        maps_dir = BOT_SETTINGS.get('client_path') or MAPS_DIRECTORY
+
         # Abre a janela do editor (armazena globalmente para manter viva)
         _waypoint_editor_window = WaypointEditorWindow(
             parent_window=app,
-            maps_directory=MAPS_DIRECTORY,
+            maps_directory=maps_dir,
             current_waypoints=current_waypoints_ui.copy() if current_waypoints_ui else [],
             on_save_callback=on_editor_save,
             current_pos=current_pos
