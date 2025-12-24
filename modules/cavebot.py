@@ -4,10 +4,15 @@ import time
 import math
 import threading
 
-
+from utils.timing import gauss_wait
 from config import *
-from core.packet import *
-from core.packet_mutex import PacketMutex
+from core.packet import (
+    PacketManager, get_ground_pos, get_container_pos, get_inventory_pos,
+    OP_WALK_NORTH, OP_WALK_EAST, OP_WALK_SOUTH, OP_WALK_WEST,
+    OP_WALK_NORTH_EAST, OP_WALK_SOUTH_EAST, OP_WALK_SOUTH_WEST, OP_WALK_NORTH_WEST,
+    OP_STOP
+)
+# PacketMutex removido - locks globais em PacketManager cuidam da sincronização
 from core.map_core import get_player_pos
 from core.map_analyzer import MapAnalyzer
 from core.astar_walker import AStarWalker
@@ -49,6 +54,9 @@ class Cavebot:
     def __init__(self, pm, base_addr):
         self.pm = pm
         self.base_addr = base_addr
+
+        # Inicializa o PacketManager
+        self.packet = PacketManager(pm, base_addr)
 
         # Inicializa o MemoryMap e o Analisador
         self.memory_map = MemoryMap(pm, base_addr)
@@ -512,10 +520,10 @@ class Cavebot:
                     if DEBUG_OBSTACLE_CLEARING:
                         print(f"[ObstacleClear] REALTIME: obstacle_info={obstacle_info}")
 
-                    # Se tem obstáculo MOVE, tenta limpar mesmo que tile seja "walkable"
-                    if obstacle_info['type'] == 'MOVE' and obstacle_info['clearable']:
-                        if DEBUG_OBSTACLE_CLEARING:
-                            print(f"[ObstacleClear] REALTIME: Detectou MOVE item, tentando limpar...")
+                    # Se tem obstáculo MOVE ou STACK, tenta limpar mesmo que tile seja "walkable"
+                    if obstacle_info['type'] in ('MOVE', 'STACK') and obstacle_info['clearable']:
+                        if DEBUG_OBSTACLE_CLEARING or DEBUG_STACK_CLEARING:
+                            print(f"[ObstacleClear] REALTIME: Detectou {obstacle_info['type']} item, tentando limpar...")
                         cleared = self._attempt_clear_obstacle(dx, dy)
                         if cleared:
                             props = self.analyzer.get_tile_properties(dx, dy)
@@ -545,6 +553,47 @@ class Cavebot:
                     print(f"[Nav] ✓ Movimento com sucesso. Resetando stuck.")
                     self.global_recalc_counter = 0
             else:
+                # ===== NOVO: Tentar limpar obstáculo quando A* não encontra caminho =====
+                # Quando A* não encontra step, pode ser que um MOVE/STACK bloqueie a única rota
+                obstacle_cleared = False
+
+                if OBSTACLE_CLEARING_ENABLED or STACK_CLEARING_ENABLED:
+                    # Calcular direção geral ao destino
+                    dir_x = 1 if rel_x > 0 else (-1 if rel_x < 0 else 0)
+                    dir_y = 1 if rel_y > 0 else (-1 if rel_y < 0 else 0)
+
+                    # Tiles adjacentes a verificar (prioriza direção do destino)
+                    tiles_to_check = []
+                    if dir_x != 0 or dir_y != 0:
+                        tiles_to_check.append((dir_x, dir_y))  # Direção principal
+                    if dir_x != 0:
+                        tiles_to_check.append((dir_x, 0))  # Horizontal
+                    if dir_y != 0:
+                        tiles_to_check.append((0, dir_y))  # Vertical
+
+                    for check_x, check_y in tiles_to_check:
+                        if check_x == 0 and check_y == 0:
+                            continue
+
+                        obstacle_info = self.analyzer.get_obstacle_type(check_x, check_y)
+                        if DEBUG_OBSTACLE_CLEARING or DEBUG_STACK_CLEARING:
+                            print(f"[ObstacleClear] NO_STEP: Verificando ({check_x},{check_y}) = {obstacle_info}")
+
+                        if obstacle_info['clearable'] and obstacle_info['type'] in ('MOVE', 'STACK'):
+                            if DEBUG_OBSTACLE_CLEARING or DEBUG_STACK_CLEARING:
+                                print(f"[ObstacleClear] NO_STEP: Encontrou {obstacle_info['type']} em ({check_x},{check_y}), tentando limpar...")
+
+                            if self._attempt_clear_obstacle(check_x, check_y):
+                                obstacle_cleared = True
+                                if DEBUG_OBSTACLE_CLEARING or DEBUG_STACK_CLEARING:
+                                    print(f"[ObstacleClear] NO_STEP: Limpeza bem sucedida!")
+                                break
+
+                if obstacle_cleared:
+                    # Obstáculo removido, próximo ciclo deve encontrar caminho
+                    return
+
+                # Código original de stuck (mantido)
                 self.global_recalc_counter += 1
                 self.current_state = self.STATE_STUCK
                 self.state_message = f"⚠️ Bloqueio local ({self.global_recalc_counter}/{GLOBAL_RECALC_LIMIT})"
@@ -746,8 +795,7 @@ class Cavebot:
         """Envia o pacote de andar."""
         opcode = MOVE_OPCODES.get((dx, dy))
         if opcode:
-            with PacketMutex("cavebot"):
-                walk(self.pm, opcode)
+            self.packet.walk(opcode)
         else:
             print(f"[Cavebot] Direção inválida: {dx}, {dy}")
 
@@ -845,9 +893,9 @@ class Cavebot:
             if not self._clear_rope_spot(rel_x, rel_y, px, py, pz, special_id or 386):
                 return
 
-            with PacketMutex("cavebot"):
-                use_with(self.pm, rope_source, ROPE_ITEM_ID, 0, target_pos, special_id or 386, 0)
-                print("[Cavebot] Ação: USAR CORDA para subir de andar.")
+            self.packet.use_with(rope_source, ROPE_ITEM_ID, 0, target_pos, special_id or 386, 0,
+                                 rel_x=rel_x, rel_y=rel_y)
+            print("[Cavebot] Ação: USAR CORDA para subir de andar.")
             # CRÍTICO: Aguarda o servidor processar a mudança de andar
             # Rope teletransporta o jogador para o andar de cima
             time.sleep(1)
@@ -880,9 +928,9 @@ class Cavebot:
                 return
 
             # Usa a pá no stone pile para criar o buraco (593 → 594)
-            with PacketMutex("cavebot"):
-                use_with(self.pm, shovel_source, SHOVEL_ITEM_ID, 0, target_pos, top_id, 0)
-                print(f"[Cavebot] Ação: USAR PÁ para abrir buraco. (Stone pile ID: {top_id})")
+            self.packet.use_with(shovel_source, SHOVEL_ITEM_ID, 0, target_pos, top_id, 0,
+                                 rel_x=rel_x, rel_y=rel_y)
+            print(f"[Cavebot] Ação: USAR PÁ para abrir buraco. (Stone pile ID: {top_id})")
 
             # Aguarda o servidor processar (stone pile se torna hole)
             time.sleep(1)
@@ -903,7 +951,7 @@ class Cavebot:
         else:
             print("[Cavebot] Tile da ladder não encontrado na memória, usando stack_pos=0.")
 
-        use_item(self.pm, target_pos, ladder_id, stack_pos=stack_pos)
+        self.packet.use_item(target_pos, ladder_id, stack_pos=stack_pos)
         print(f"[Cavebot] Ação: USAR LADDER (ID: {ladder_id}, target_pos: {target_pos}, rel_x {rel_x}, rel_y {rel_y}, stack_pos: {stack_pos})")
         # CRÍTICO: Aguarda o servidor processar a mudança de andar
         # Ladders teletransportam o jogador assim que o servidor processa
@@ -926,7 +974,7 @@ class Cavebot:
         else:
             print("[Cavebot] Tile do sewer grate não encontrado na memória, usando stack_pos=0.")
 
-        use_item(self.pm, target_pos, tile_id, stack_pos=stack_pos)
+        self.packet.use_item(target_pos, tile_id, stack_pos=stack_pos)
         print(f"[Cavebot] Ação: USAR SEWER GRATE (ID: {tile_id}, target_pos: {target_pos}, rel_x {rel_x}, rel_y {rel_y}, stack_pos: {stack_pos})")
 
         # CRÍTICO: Aguarda o servidor processar a mudança de andar
@@ -1050,7 +1098,7 @@ class Cavebot:
 
         from_pos = get_ground_pos(px + rel_x, py + rel_y, pz)
         drop_pos = get_ground_pos(px, py, pz)
-        move_item(self.pm, from_pos, drop_pos, top_id, 1, stack_pos=stack_pos)
+        self.packet.move_item(from_pos, drop_pos, top_id, 1, stack_pos=stack_pos)
         print(f"[Cavebot] Movendo item {top_id} (stack_pos={stack_pos}) para liberar rope spot.")
         return False
 
@@ -1239,15 +1287,14 @@ class Cavebot:
             from_pos = get_ground_pos(target_x, target_y, pz)
             to_pos = get_ground_pos(dest_x, dest_y, pz)
 
-            with PacketMutex("cavebot"):
-                move_item(
-                    self.pm, from_pos, to_pos,
-                    obstacle['item_id'], 1,
-                    stack_pos=obstacle['stack_pos']
-                )
+            self.packet.move_item(
+                from_pos, to_pos,
+                obstacle['item_id'], 1,
+                stack_pos=obstacle['stack_pos']
+            )
 
             print(f"[Cavebot] 📦 Moveu mesa {obstacle['item_id']} para ({dest_x},{dest_y})")
-            time.sleep(0.3)
+            gauss_wait(0.3, 20)
             return True
 
         return False
@@ -1283,15 +1330,14 @@ class Cavebot:
         from_pos = get_ground_pos(target_x, target_y, pz)
         to_pos = get_ground_pos(dest_x, dest_y, pz)
 
-        with PacketMutex("cavebot"):
-            move_item(
-                self.pm, from_pos, to_pos,
-                obstacle['item_id'], 1,
-                stack_pos=obstacle['stack_pos']
-            )
+        self.packet.move_item(
+            from_pos, to_pos,
+            obstacle['item_id'], 1,
+            stack_pos=obstacle['stack_pos']
+        )
 
         print(f"[Cavebot] 📦 Moveu parcel {obstacle['item_id']} para pé do player ({dest_x},{dest_y})")
-        time.sleep(0.3)
+        gauss_wait(0.3, 20)
         return True
 
         # NOTA: Se no futuro a prioridade 0 falhar (ex: height excessivo no tile do player),

@@ -2,9 +2,10 @@ import time
 import pymem
 import random
 from config import *
+from utils.timing import gauss_wait
 from core.mouse_lock import is_mouse_busy
-from core import packet
-from core.packet_mutex import PacketMutex
+from core.packet import PacketManager, get_container_pos, get_ground_pos
+# PacketMutex removido - locks globais em PacketManager cuidam da sincronização
 from database import foods_db
 from core.map_core import get_player_pos
 from core.bot_state import state
@@ -110,7 +111,10 @@ def get_best_loot_destination(containers, my_containers_max_count, start_index=0
 # EXECUÇÃO DO AUTO LOOT
 # ==============================================================================
 def run_auto_loot(pm, base_addr, hwnd, config=None):
-    
+    # Protege ciclo de runemaking - não processa loot durante runemaking
+    if state.is_runemaking:
+        return None
+
     # --- HELPER DE CONFIGURAÇÃO ---
     def get_cfg(key, default):
         if callable(config):
@@ -133,6 +137,9 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
     # NOVO: Marca que há loot sendo processado
     state.set_loot_state(True)
 
+    # PacketManager para envio de pacotes
+    packet = PacketManager(pm, base_addr)
+
     dest_idx, dest_slot = get_best_loot_destination(containers, limit_containers, dest_container_index)
     is_backpack_full = (dest_idx is None)
 
@@ -152,11 +159,10 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
 
         if has_bag_to_open and bag_item_ref:
             print(f"🎒 Abrindo Bag no corpo...")
-            bag_pos = packet.get_container_pos(cont.index, bag_item_ref.slot_index)
+            bag_pos = get_container_pos(cont.index, bag_item_ref.slot_index)
 
-            with PacketMutex("auto_loot"):
-                packet.use_item(pm, bag_pos, bag_item_ref.id, index=cont.index)
-            time.sleep(0.6)
+            packet.use_item(bag_pos, bag_item_ref.id, index=cont.index)
+            gauss_wait(0.6, 15)
             state.set_loot_state(False)
             return "BAG"
 
@@ -168,14 +174,13 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
                 if is_player_full(pm, base_addr) and not drop_food_if_full:
                     # Se não for dropar, apenas ignora e continua o loop para o próximo item
                     continue
-                
-                food_pos = packet.get_container_pos(cont.index, item.slot_index)
+
+                food_pos = get_container_pos(cont.index, item.slot_index)
 
                 # Tenta comer
-                with PacketMutex("auto_loot"):
-                    packet.use_item(pm, food_pos, item.id)
-                time.sleep(0.25)
-                
+                packet.use_item(food_pos, item.id)
+                gauss_wait(0.25, 20)
+
                 # Verifica se está full e a config de drop
                 if is_player_full(pm, base_addr):
                     if drop_food_if_full:
@@ -183,10 +188,9 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
                         print(f"🤢 Barriga cheia! Descartando {food_name}...")
 
                         px, py, pz = get_player_pos(pm, base_addr)
-                        pos_ground = {'x': px, 'y': py, 'z': pz}
+                        pos_ground = get_ground_pos(px, py, pz)
 
-                        with PacketMutex("auto_loot"):
-                            packet.move_item(pm, food_pos, pos_ground, item.id, item.count)
+                        packet.move_item(food_pos, pos_ground, item.id, item.count)
                         state.set_loot_state(False)
                         return ("DROP_FOOD", item.id, item.count)
                     else:
@@ -205,19 +209,17 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
 
                 print(f"💰 Loot: ID {item.id} -> BP {dest_idx} Slot {dest_slot}")
 
-                pos_from = packet.get_container_pos(cont.index, item.slot_index)
-                pos_to = packet.get_container_pos(dest_idx, dest_slot)
+                pos_from = get_container_pos(cont.index, item.slot_index)
+                pos_to = get_container_pos(dest_idx, dest_slot)
 
-                with PacketMutex("auto_loot") as loot_ctx:
-                    packet.move_item(pm, pos_from, pos_to, item.id, item.count)
-                time.sleep(random.uniform(0.4, 0.8))
+                packet.move_item(pos_from, pos_to, item.id, item.count)
+                gauss_wait(0.6, 30)
 
-                # NOVO: Stack imediatamente após lotar (reutiliza contexto, sem delay)
+                # Stack imediatamente após lotar
                 # Import lazy para evitar circular import
                 from modules.stacker import auto_stack_items
                 auto_stack_items(pm, base_addr, hwnd,
-                                 my_containers_count=limit_containers,
-                                 mutex_context=loot_ctx)
+                                 my_containers_count=limit_containers)
 
                 dest_slot += 1
                 state.set_loot_state(False)
@@ -226,20 +228,19 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
             # --- AUTO DROP ---
             if item.id in DROP_IDS:
                 print(f"🗑️ Drop: ID {item.id}")
-                pos_from = packet.get_container_pos(cont.index, item.slot_index)
+                pos_from = get_container_pos(cont.index, item.slot_index)
                 px, py, pz = get_player_pos(pm, base_addr)
-                pos_ground = {'x': px, 'y': py, 'z': pz}
+                pos_ground = get_ground_pos(px, py, pz)
 
-                with PacketMutex("auto_loot"):
-                    packet.move_item(pm, pos_from, pos_ground, item.id, item.count)
-                time.sleep(0.3)
+                packet.move_item(pos_from, pos_ground, item.id, item.count)
+                gauss_wait(0.3, 20)
                 state.set_loot_state(False)
                 return "DROP"
 
     # NOVO: Fecha todos os containers de loot processados
     for cont in containers[limit_containers:]:
-        packet.close_container(pm, cont.index)
-        time.sleep(random.uniform(0.5, 1))
+        packet.close_container(cont.index)
+        gauss_wait(0.75, 30)
 
     state.set_loot_state(False)
     return None

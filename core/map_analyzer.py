@@ -189,13 +189,23 @@ class MapAnalyzer:
 
             # Item stackável (parcel, box, furniture package)
             if item_id in STACK_IDS:
+                # Verificar se height_diff realmente bloqueia (>1)
+                # Se height_diff <= 1, o tile é walkable e não precisa limpar
+                tile_height = self.get_tile_height(rel_x, rel_y)
+                player_height = self.get_tile_height(0, 0)
+                height_diff = tile_height - player_height
+
+                is_blocked = height_diff > 1
+
                 if DEBUG_STACK_CLEARING:
                     print(f"[StackClear] get_obstacle_type: Encontrou STACK item {item_id} stack_pos={stack_pos}")
+                    print(f"[StackClear]   tile_height={tile_height}, player_height={player_height}, height_diff={height_diff}, blocked={is_blocked}")
+
                 return {
                     'type': 'STACK',
                     'item_id': item_id,
                     'stack_pos': stack_pos,
-                    'clearable': True
+                    'clearable': is_blocked  # Só clearable se height_diff > 1
                 }
 
             # Bloqueio fixo (parede, água, etc)

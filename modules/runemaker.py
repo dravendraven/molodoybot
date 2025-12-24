@@ -2,7 +2,11 @@ import time
 import random
 import win32con
 
-from core import packet
+from core.packet import (
+    PacketManager, get_inventory_pos, get_container_pos,
+    OP_WALK_NORTH, OP_WALK_EAST, OP_WALK_SOUTH, OP_WALK_WEST,
+    OP_WALK_NORTH_EAST, OP_WALK_SOUTH_EAST, OP_WALK_SOUTH_WEST, OP_WALK_NORTH_WEST
+)
 from core.packet_mutex import PacketMutex
 from config import *
 from core.inventory_core import find_item_in_containers
@@ -27,36 +31,40 @@ def get_vk_code(key_str):
     }
     return mapping.get(key_str, win32con.VK_F3)
 
-def move_to_coord_hybrid(pm, base_addr, hwnd, target_pos, log_func=print):
+def move_to_coord_hybrid(pm, base_addr, hwnd, target_pos, log_func=print, packet=None):
+    # Cria PacketManager se não foi passado
+    if packet is None:
+        packet = PacketManager(pm, base_addr)
+
     px, py, pz = get_player_pos(pm, base_addr)
     tx, ty, tz = target_pos
-    
+
     # 1. Chegou?
     if px == tx and py == ty: return True
     if pz != tz: return False # Andar errado
 
     dx = tx - px
     dy = ty - py
-    
+
     dist_sqm = max(abs(dx), abs(dy))
 
     # [MELHORIA] Se estiver no SQM adjacente (Distância 1)
     if dist_sqm == 1:
         op_code = None
-        
-        if dy < 0 and dx > 0:   op_code = packet.OP_WALK_NORTH_EAST
-        elif dy > 0 and dx > 0: op_code = packet.OP_WALK_SOUTH_EAST
-        elif dy > 0 and dx < 0: op_code = packet.OP_WALK_SOUTH_WEST
-        elif dy < 0 and dx < 0: op_code = packet.OP_WALK_NORTH_WEST
-        
-        elif dy < 0: op_code = packet.OP_WALK_NORTH
-        elif dy > 0: op_code = packet.OP_WALK_SOUTH
-        elif dx < 0: op_code = packet.OP_WALK_WEST
-        elif dx > 0: op_code = packet.OP_WALK_EAST
-        
+
+        if dy < 0 and dx > 0:   op_code = OP_WALK_NORTH_EAST
+        elif dy > 0 and dx > 0: op_code = OP_WALK_SOUTH_EAST
+        elif dy > 0 and dx < 0: op_code = OP_WALK_SOUTH_WEST
+        elif dy < 0 and dx < 0: op_code = OP_WALK_NORTH_WEST
+
+        elif dy < 0: op_code = OP_WALK_NORTH
+        elif dy > 0: op_code = OP_WALK_SOUTH
+        elif dx < 0: op_code = OP_WALK_WEST
+        elif dx > 0: op_code = OP_WALK_EAST
+
         if op_code:
-            packet.walk(pm, op_code)
-            time.sleep(0.5 + random.uniform(0.05, 0.15)) 
+            packet.walk(op_code)
+            time.sleep(0.5 + random.uniform(0.05, 0.15))
             return False 
 
     # 2. SE ESTIVER LONGE (> 1 SQM) -> USA MOUSE
@@ -103,7 +111,7 @@ def get_free_slot_in_container(pm, base_addr, target_container_idx=0):
     # Container não encontrado (fechado?)
     return None, None
     
-def unequip_hand(pm, base_addr, slot_enum, dest_container_idx=0, dest_slot=None):
+def unequip_hand(pm, base_addr, slot_enum, dest_container_idx=0, dest_slot=None, packet=None):
     """
     Unequip item from hand slot and move to container.
 
@@ -119,11 +127,16 @@ def unequip_hand(pm, base_addr, slot_enum, dest_container_idx=0, dest_slot=None)
     Args:
         dest_slot: If None (default), automatically finds the next free slot.
                    If specified, uses that slot (legacy behavior).
+        packet: PacketManager instance (created if None)
 
     Returns:
         int: Item ID if successfully unequipped (hand empty + item in container)
         None: If unequip failed, slot was empty, or container is full
     """
+    # Cria PacketManager se não foi passado
+    if packet is None:
+        packet = PacketManager(pm, base_addr)
+
     current_id = get_item_id_in_hand(pm, base_addr, slot_enum)
     if current_id <= 0:
         return None
@@ -136,9 +149,9 @@ def unequip_hand(pm, base_addr, slot_enum, dest_container_idx=0, dest_slot=None)
             return None
         dest_slot = found_slot
 
-    pos_from = packet.get_inventory_pos(slot_enum)
-    pos_to = packet.get_container_pos(dest_container_idx, dest_slot)
-    packet.move_item(pm, pos_from, pos_to, current_id, 1)
+    pos_from = get_inventory_pos(slot_enum)
+    pos_to = get_container_pos(dest_container_idx, dest_slot)
+    packet.move_item(pos_from, pos_to, current_id, 1)
 
     # DUAL VALIDATION: Verify both hand is empty AND item in container
     max_attempts = 3
@@ -165,8 +178,12 @@ def unequip_hand(pm, base_addr, slot_enum, dest_container_idx=0, dest_slot=None)
     # All attempts failed - item still in hand or not found in containers
     return None
 
-def reequip_hand(pm, base_addr, item_id, target_slot_enum, container_idx=0, max_retries=3):
+def reequip_hand(pm, base_addr, item_id, target_slot_enum, container_idx=0, max_retries=3, packet=None):
     if not item_id: return False
+
+    # Cria PacketManager se não foi passado
+    if packet is None:
+        packet = PacketManager(pm, base_addr)
 
     # Retry logic: item might not be in containers immediately after move_item
     for attempt in range(max_retries):
@@ -174,9 +191,9 @@ def reequip_hand(pm, base_addr, item_id, target_slot_enum, container_idx=0, max_
         item_data = find_item_in_containers(pm, base_addr, item_id)
 
         if item_data:
-            pos_from = packet.get_container_pos(item_data['container_index'], item_data['slot_index'])
-            pos_to = packet.get_inventory_pos(target_slot_enum)
-            packet.move_item(pm, pos_from, pos_to, item_id, 1)
+            pos_from = get_container_pos(item_data['container_index'], item_data['slot_index'])
+            pos_to = get_inventory_pos(target_slot_enum)
+            packet.move_item(pos_from, pos_to, item_id, 1)
             time.sleep(0.4)
             return True
 
@@ -224,6 +241,9 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
 
     log_msg(f"Iniciado (Modo Segurança Avançada).")
 
+    # PacketManager para envio de pacotes
+    packet = PacketManager(pm, base_addr)
+
     while True:
         if check_running and not check_running(): return
 
@@ -251,7 +271,7 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
             # O estado de movimento também é ignorado.
             if time.time() - last_log_wait > 5:
                 log_msg("👮 GM DETECTADO! Congelando ações...")
-                packet.stop(pm)
+                packet.stop()
                 last_log_wait = time.time()
             time.sleep(1)
             continue 
@@ -409,7 +429,7 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                             for slot_enum in hands_to_use:
                                 if is_safe_callback and not is_safe_callback(): break
 
-                                unequipped_item_id = unequip_hand(pm, base_addr, slot_enum, dest_container_idx=0)
+                                unequipped_item_id = unequip_hand(pm, base_addr, slot_enum, dest_container_idx=0, packet=packet)
                                 unequipped_items[slot_enum] = (unequipped_item_id, 0)
 
                                 log_msg(f"🔓 Desarmou {slot_enum}: Item {unequipped_item_id}")
@@ -423,9 +443,9 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                                 if is_safe_callback and not is_safe_callback(): break
 
                                 # Move Blank -> Mão
-                                pos_from = packet.get_container_pos(blank_data['container_index'], blank_data['slot_index'])
-                                pos_to = packet.get_inventory_pos(slot_enum)
-                                packet.move_item(pm, pos_from, pos_to, blank_id, 1)
+                                pos_from = get_container_pos(blank_data['container_index'], blank_data['slot_index'])
+                                pos_to = get_inventory_pos(slot_enum)
+                                packet.move_item(pos_from, pos_to, blank_id, 1)
 
                                 # Adiciona à lista de runes ativas
                                 restorable_item, orig_dest_slot = unequipped_items[slot_enum]
@@ -453,8 +473,8 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                                     rune_id_to_move = detected_id if detected_id > 0 else blank_id
 
                                     # 2. Devolve Runa para Backpack
-                                    pos_dest = packet.get_container_pos(info['origin_idx'], 0)
-                                    packet.move_item(pm, info['hand_pos'], pos_dest, rune_id_to_move, 1)
+                                    pos_dest = get_container_pos(info['origin_idx'], 0)
+                                    packet.move_item(info['hand_pos'], pos_dest, rune_id_to_move, 1)
                                     log_msg(f"📦 Devolvido: Runa {rune_id_to_move} → Container {info['origin_idx']}")
                                     time.sleep(1.5)  # Aguarda servidor processar movimento
 
@@ -465,7 +485,7 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                                 for info in active_runes:
                                     if info['restorable_item']:
                                         log_msg(f"🔄 Tentando re-equipar {info['restorable_item']} na mão {info['slot_enum']}...")
-                                        success = reequip_hand(pm, base_addr, info['restorable_item'], info['slot_enum'])
+                                        success = reequip_hand(pm, base_addr, info['restorable_item'], info['slot_enum'], packet=packet)
                                         if success:
                                             log_msg(f"✅ Item {info['restorable_item']} re-equipado com sucesso!")
                                         else:

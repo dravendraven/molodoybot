@@ -3,7 +3,8 @@ import random
 import struct
 import win32gui
 
-from core import packet
+from utils.timing import gauss_wait
+from core.packet import PacketManager, get_container_pos, get_ground_pos
 from core.packet_mutex import PacketMutex
 from config import *
 from core.map_core import get_player_pos
@@ -24,11 +25,21 @@ SCAN_DELAY_TARGETS = 0.2     # Tem alvos disponíveis: scan médio
 SCAN_DELAY_IDLE = 0.4        # Sem alvos: scan lento
 
 # Retargeting Configuration
-RETARGET_DELAY = 1.5  # Segundos para aguardar antes de retargetar alvo inacessível
+RETARGET_DELAY = 1.0  # Segundos para aguardar antes de retargetar alvo inacessível
 REACHABILITY_CHECK_INTERVAL = 1.0  # Frequência de verificação de acessibilidade
 
 # Scan Adaptativo (Early-Exit)
 INVALID_SLOT_THRESHOLD = 15  # Slots inválidos consecutivos para parar scan
+
+# Cálculo de Distância
+# True = usa A* (considera obstáculos, mais preciso, mais CPU)
+# False = usa Manhattan simples (ignora obstáculos, mais rápido)
+USE_PATHFINDING_DISTANCE = True
+
+# Range de Combate (distância para deferir dano)
+# 1 = melee (armas corpo-a-corpo)
+# Diferente de 'range' da config que é a distância para ACIONAR o ataque
+MELEE_RANGE = 1
 
 def parse_creature_from_bytes(raw_bytes):
     """
@@ -96,6 +107,89 @@ def is_valid_creature_slot(creature):
 
     return True
 
+def steps_to_adjacent(dx, dy, attack_range=1):
+    """
+    Calcula passos Manhattan até o tile adjacente mais próximo.
+
+    No Tibia, movimento diagonal custa 3x mais tempo que cardinal.
+    Por isso, sempre preferimos caminhar em passos cardinais.
+
+    Args:
+        dx, dy: Distância relativa ao alvo (pode ser negativo)
+        attack_range: Alcance de ataque (default 1 = melee)
+
+    Returns:
+        Número de passos cardinais até posição de ataque
+    """
+    steps_x = max(0, abs(dx) - attack_range)
+    steps_y = max(0, abs(dy) - attack_range)
+    return steps_x + steps_y
+
+def get_adjacent_target(rel_x, rel_y, attack_range=1):
+    """
+    Calcula o tile adjacente mais próximo ao alvo.
+
+    O A* vai ATÉ o destino, não para no adjacente.
+    Por isso precisamos calcular o tile adjacente primeiro.
+
+    Args:
+        rel_x, rel_y: Posição relativa do ALVO
+        attack_range: Alcance de ataque
+
+    Returns:
+        (target_x, target_y): Tile adjacente mais próximo para onde devemos ir
+    """
+    # Se já está adjacente (Chebyshev <= attack_range)
+    if abs(rel_x) <= attack_range and abs(rel_y) <= attack_range:
+        return (0, 0)
+
+    # Calcula tile adjacente na direção do alvo
+    if abs(rel_x) > attack_range:
+        target_x = rel_x - attack_range if rel_x > 0 else rel_x + attack_range
+    else:
+        target_x = 0  # Já está dentro do range nesse eixo
+
+    if abs(rel_y) > attack_range:
+        target_y = rel_y - attack_range if rel_y > 0 else rel_y + attack_range
+    else:
+        target_y = 0
+
+    return (target_x, target_y)
+
+def get_bot_path_cost(walker, rel_x, rel_y, attack_range=1):
+    """
+    Calcula custo real de movimento do bot via A* até tile adjacente.
+    Considera obstáculos e penalidade de diagonal (30 vs 10).
+
+    Returns:
+        Custo em unidades, ou float('inf') se sem caminho
+    """
+    # Calcula tile adjacente (onde precisamos chegar para atacar)
+    target_x, target_y = get_adjacent_target(rel_x, rel_y, attack_range)
+
+    if target_x == 0 and target_y == 0:
+        return 0  # Já está adjacente
+
+    path = walker.get_full_path(target_x, target_y)
+    if not path:
+        return float('inf')
+    return sum(30 if dx != 0 and dy != 0 else 10 for dx, dy in path)
+
+def get_distance_cost(walker, rel_x, rel_y, attack_range=1):
+    """
+    Calcula custo de movimento até posição de ataque.
+
+    Usa A* ou Manhattan dependendo de USE_PATHFINDING_DISTANCE.
+
+    Returns:
+        Custo em unidades (escala 10 = 1 passo cardinal)
+    """
+    if USE_PATHFINDING_DISTANCE and walker:
+        return get_bot_path_cost(walker, rel_x, rel_y, attack_range)
+    else:
+        # Manhattan simples: passos até adjacente * 10
+        return steps_to_adjacent(rel_x, rel_y, attack_range) * 10
+
 def get_my_char_name(pm, base_addr):
     """
     Retorna o nome do personagem usando BotState.
@@ -108,11 +202,15 @@ def get_my_char_name(pm, base_addr):
             state.char_name = name
     return state.char_name
 
-def open_corpse_via_packet(pm, base_addr, target_data, player_id, log_func=print):
+def open_corpse_via_packet(pm, base_addr, target_data, player_id, log_func=print, packet=None):
     """
     Localiza o corpo via memória e abre no próximo slot de container livre.
     """
     try:
+        # Cria PacketManager se não foi passado
+        if packet is None:
+            packet = PacketManager(pm, base_addr)
+
         # 1. Validação do ID
         monster_name = target_data["name"]
         corpse_id = corpses.get_corpse_id(monster_name)
@@ -169,7 +267,7 @@ def open_corpse_via_packet(pm, base_addr, target_data, player_id, log_func=print
             
             # Envia packet usando o índice calculado
             with PacketMutex("trainer"):
-                packet.use_item(pm, pos_dict, corpse_id, found_stack_pos, index=target_index)
+                packet.use_item(pos_dict, corpse_id, found_stack_pos, index=target_index)
             return True
             
         else:
@@ -180,13 +278,15 @@ def open_corpse_via_packet(pm, base_addr, target_data, player_id, log_func=print
         log_func(f"🔥 Erro OpenCorpse: {e}")
         return False
 
-def find_nearest_reachable_target(candidates, my_x, my_y, current_id=0):
+def find_nearest_reachable_target(candidates, my_x, my_y, walker, attack_range=1, current_id=0):
     """
     Encontra o alvo acessível mais próximo da lista de candidatos.
 
     Args:
         candidates: Lista de dicts de candidatos válidos
         my_x, my_y: Posição absoluta do player
+        walker: AStarWalker para calcular custo real
+        attack_range: Alcance de ataque
         current_id: ID do alvo atual para excluir
 
     Returns:
@@ -199,8 +299,8 @@ def find_nearest_reachable_target(candidates, my_x, my_y, current_id=0):
     if not valid:
         return None
 
-    # Ordena por distância Chebyshev (distância SQM no Tibia: max de dx, dy)
-    valid.sort(key=lambda c: max(abs(c["abs_x"] - my_x), abs(c["abs_y"] - my_y)))
+    # Ordena por custo de caminho (A* ou Manhattan dependendo de USE_PATHFINDING_DISTANCE)
+    valid.sort(key=lambda c: get_distance_cost(walker, c["abs_x"] - my_x, c["abs_y"] - my_y, attack_range))
 
     return valid[0]
 
@@ -224,12 +324,12 @@ class EngagementDetector:
         ]
         self.hp_history[creature_id].append((now, hp))
 
-    def is_engaged_with_other(self, creature, my_name, my_pos, all_entities, my_target_id, targets_list, debug=False, log_func=print):
+    def is_engaged_with_other(self, creature, my_name, my_pos, all_entities, my_target_id, targets_list, walker=None, attack_range=1, debug=False, log_func=print):
         """
         Detecta se criatura está engajada com outro player.
 
-        MÉTODO PRINCIPAL: Comparação de distância relativa
-        Se criatura está mais próxima de outro player do que de mim, assume-se engagement.
+        MÉTODO PRINCIPAL: Comparação de custo de movimento
+        Bot usa A* (custo real), players usam Manhattan (aproximação).
 
         Returns:
             tuple: (is_engaged: bool, reason: str or None)
@@ -238,16 +338,18 @@ class EngagementDetector:
         creature_id = creature['id']
         my_x, my_y = my_pos
 
-        # Distância da criatura até mim (Chebyshev distance - SQM)
-        creature_dist_to_bot = max(abs(creature_x - my_x), abs(creature_y - my_y))
+        # Custo do bot até criatura (A* ou Manhattan dependendo de USE_PATHFINDING_DISTANCE)
+        rel_x = creature_x - my_x
+        rel_y = creature_y - my_y
+        creature_dist_to_bot = get_distance_cost(walker, rel_x, rel_y, attack_range)
 
         if debug:
-            log_func(f"  [DETECT] Iniciando comparação de distâncias")
+            log_func(f"  [DETECT] Iniciando comparação de custos")
             log_func(f"  [DETECT]   Criatura: ({creature_x}, {creature_y})")
             log_func(f"  [DETECT]   Bot: ({my_x}, {my_y})")
-            log_func(f"  [DETECT]   Distância criatura→bot: {creature_dist_to_bot} SQM")
+            log_func(f"  [DETECT]   Custo criatura→bot: {creature_dist_to_bot}")
 
-        # Método 1: Comparação de distância relativa (PRINCIPAL)
+        # Método 1: Comparação de custo de movimento (PRINCIPAL)
         for entity in all_entities:
             # Skip self (pela criatura)
             if entity['id'] == creature_id:
@@ -269,23 +371,24 @@ class EngagementDetector:
             if debug:
                 log_func(f"  [DETECT] Comparando com: '{entity['name']}' (ID:{entity['id']})")
 
-            # Calcula distância da criatura até este potencial player
+            # Calcula custo do player até criatura (Manhattan aproximado)
             player_x, player_y = entity['abs_x'], entity['abs_y']
-            creature_dist_to_player = max(abs(creature_x - player_x), abs(creature_y - player_y))
+            creature_dist_to_player = steps_to_adjacent(creature_x - player_x, creature_y - player_y, attack_range) * 10
 
             if debug:
                 log_func(f"  [DETECT]   Posição: ({player_x}, {player_y})")
-                log_func(f"  [DETECT]   Distância criatura→entidade: {creature_dist_to_player} SQM")
+                log_func(f"  [DETECT]   Custo criatura→entidade: {creature_dist_to_player}")
 
-            # REGRA SIMPLES: Se criatura está mais perto do player que de mim
-            if creature_dist_to_player < creature_dist_to_bot:
-                reason = f"Mais próxima de '{entity['name']}' ({creature_dist_to_player} SQM) que do bot ({creature_dist_to_bot} SQM)"
+            # REGRA: Se player está mais perto (ou igual custo) que o bot
+            # Igual = player provavelmente chegou primeiro
+            if creature_dist_to_player <= creature_dist_to_bot:
+                reason = f"Mais próxima de '{entity['name']}' (custo {creature_dist_to_player}) vs bot (custo {creature_dist_to_bot})"
                 if debug:
                     log_func(f"  [DETECT]   ⚠️ ENGAGED! {reason}")
                 return (True, reason)
             else:
                 if debug:
-                    log_func(f"  [DETECT]   ✓ Não mais próxima desta entidade")
+                    log_func(f"  [DETECT]   ✓ Bot mais próximo desta entidade")
 
         # Método 2: HP decrescente sem ser meu alvo (COMPLEMENTAR)
         if creature['id'] != my_target_id:
@@ -326,6 +429,9 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
     analyzer = None
     walker = None
 
+    # PacketManager para envio de pacotes
+    packet = PacketManager(pm, base_addr)
+
     # Anti Kill-Steal Detection
     engagement_detector = EngagementDetector()
 
@@ -344,13 +450,18 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
         if hwnd == 0: 
             hwnd = win32gui.FindWindow("TibiaClient", None) or win32gui.FindWindow(None, "Tibia")
             
-        if not get_cfg('is_safe', True): 
+        if not get_cfg('is_safe', True):
             time.sleep(0.5)
-            continue 
+            continue
+
+        # Protege ciclo de runemaking - não atacar durante runemaking
+        if state.is_runemaking:
+            time.sleep(0.5)
+            continue
         
         min_delay = get_cfg('min_delay', 1.0)
         max_delay = get_cfg('max_delay', 2.0)
-        attack_range = get_cfg('range', 1)
+        trigger_range = get_cfg('range', 1)  # Range para ACIONAR ataque (não confundir com MELEE_RANGE)
         log = get_cfg('log_callback', print)
         debug_mode = get_cfg('debug_mode', False)
         loot_enabled = get_cfg('loot_enabled', False)
@@ -441,7 +552,7 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
 
                         dist_x = abs(my_x - cx)
                         dist_y = abs(my_y - cy)
-                        is_in_range = (dist_x <= attack_range and dist_y <= attack_range)
+                        is_in_range = (dist_x <= trigger_range and dist_y <= trigger_range)
 
                         if debug_mode: print(f"Slot {i}: {name} (Vis:{vis} Z:{z} HP:{hp} Dist:({dist_x},{dist_y}))")
 
@@ -527,6 +638,8 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
                                                 all_visible_entities,
                                                 current_target_id,
                                                 targets_list,
+                                                walker=walker,
+                                                attack_range=MELEE_RANGE,
                                                 debug=debug_mode,
                                                 log_func=print
                                             )
@@ -561,13 +674,15 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
                 print(f"--- FIM DO SCAN ---")
 
             # PRIORIZAÇÃO POR DISTÂNCIA: Ordena candidatos pelo mais próximo primeiro
+            # Usa A* ou Manhattan dependendo de USE_PATHFINDING_DISTANCE
             if valid_candidates:
-                valid_candidates.sort(key=lambda c: max(c["dist_x"], c["dist_y"]))
+                valid_candidates.sort(key=lambda c: get_distance_cost(walker, c["abs_x"] - my_x, c["abs_y"] - my_y, MELEE_RANGE))
                 if debug_mode:
-                    print(f"[SORT] Candidatos ordenados por distância:")
+                    mode = "A*" if USE_PATHFINDING_DISTANCE else "Manhattan"
+                    print(f"[SORT] Candidatos ordenados por custo ({mode}):")
                     for idx, c in enumerate(valid_candidates):
-                        dist = max(c["dist_x"], c["dist_y"])
-                        print(f"  [{idx}] {c['name']} - {dist} sqm")
+                        cost = get_distance_cost(walker, c["abs_x"] - my_x, c["abs_y"] - my_y, MELEE_RANGE)
+                        print(f"  [{idx}] {c['name']} - custo {cost}")
 
             should_attack_new = False
 
@@ -625,15 +740,15 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
 
                                 # Encontra alvo acessível mais próximo
                                 nearest = find_nearest_reachable_target(
-                                    valid_candidates, my_x, my_y, current_target_id
+                                    valid_candidates, my_x, my_y, walker, MELEE_RANGE, current_target_id
                                 )
 
                                 if nearest:
-                                    nearest_dist = max(abs(nearest['abs_x'] - my_x), abs(nearest['abs_y'] - my_y))
-                                    log(f"⚔️ RETARGET: {nearest['name']} (dist: {nearest_dist} sqm)")
+                                    cost = get_distance_cost(walker, nearest['abs_x'] - my_x, nearest['abs_y'] - my_y, MELEE_RANGE)
+                                    log(f"⚔️ RETARGET: {nearest['name']} (custo: {cost})")
 
                                     # Ataca novo alvo
-                                    packet.attack(pm, base_addr, nearest["id"])
+                                    packet.attack(nearest["id"])
 
                                     # Atualiza variáveis de estado
                                     current_target_id = nearest["id"]
@@ -758,13 +873,13 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
 
                                         # Encontra alvo mais próximo
                                         nearest = find_nearest_reachable_target(
-                                            valid_candidates, my_x, my_y, current_target_id
+                                            valid_candidates, my_x, my_y, walker, MELEE_RANGE, current_target_id
                                         )
 
                                         if nearest:
-                                            nearest_dist = max(abs(nearest['abs_x'] - my_x), abs(nearest['abs_y'] - my_y))
-                                            log(f"⚔️ RETARGET: {nearest['name']} (dist: {nearest_dist} sqm)")
-                                            packet.attack(pm, base_addr, nearest["id"])
+                                            cost = get_distance_cost(walker, nearest['abs_x'] - my_x, nearest['abs_y'] - my_y, MELEE_RANGE)
+                                            log(f"⚔️ RETARGET: {nearest['name']} (custo: {cost})")
+                                            packet.attack(nearest["id"])
                                             current_target_id = nearest["id"]
                                             current_monitored_id = nearest["id"]
                                             last_target_data = nearest.copy()
@@ -809,15 +924,15 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
                     log("💀 Alvo eliminado.")
                     
                     if last_target_data and loot_enabled:
-                        time.sleep(random.uniform(0.8, 1.0))
-                        
+                        gauss_wait(0.9, 15)
+
                         # CHAMA FUNÇÃO COM LÓGICA DE INDEX DINÂMICO
                         success = open_corpse_via_packet(pm, base_addr, last_target_data, player_id, log_func=log)
                         
                         if success:
                             log(f"📂 Corpo aberto (Packet).")
-                            time.sleep(0.5) 
-                    
+                            gauss_wait(0.5, 20)
+
                     elif last_target_data and not loot_enabled:
                         if debug_mode: log("ℹ️ Auto Loot desligado.")
 
@@ -869,6 +984,8 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
                                     all_visible_entities,
                                     current_target_id,
                                     targets_list,
+                                    walker=walker,
+                                    attack_range=MELEE_RANGE,
                                     debug=debug_mode,
                                     log_func=print
                                 )
@@ -881,7 +998,7 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
 
                         if best and best["id"] != current_target_id:
                             log(f"⚔️ ATACANDO: {best['name']}")
-                            packet.attack(pm, base_addr, best["id"])
+                            packet.attack(best["id"])
 
                             current_target_id = best["id"]
                             current_monitored_id = best["id"]
@@ -889,7 +1006,7 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
                             monitor.start(best["id"], best["name"], best["hp"])
 
                             next_attack_time = 0
-                            time.sleep(0.5)
+                            gauss_wait(0.5, 20)
                         elif not best and len(final_candidates) > 0:
                             # Todos engajados - reseta para tentar novamente
                             next_attack_time = 0

@@ -2,7 +2,8 @@ import time
 import random
 import traceback
 import math
-from core import packet
+from utils.timing import gauss_wait
+from core.packet import PacketManager, get_inventory_pos, get_container_pos, get_ground_pos
 from config import *
 from core.inventory_core import find_item_in_containers, find_item_in_equipment
 from core.map_core import get_player_pos
@@ -45,23 +46,23 @@ def format_cooldown(seconds_left):
 
 def get_rod_packet_position(pm, base_addr):
     try:
-        if pm.read_int(base_addr + OFFSET_SLOT_AMMO) == ROD_ID: 
-            return packet.get_inventory_pos(10)
-        if pm.read_int(base_addr + OFFSET_SLOT_LEFT) == ROD_ID: 
-            return packet.get_inventory_pos(6)
-        if pm.read_int(base_addr + OFFSET_SLOT_RIGHT) == ROD_ID: 
-            return packet.get_inventory_pos(5)
+        if pm.read_int(base_addr + OFFSET_SLOT_AMMO) == ROD_ID:
+            return get_inventory_pos(10)
+        if pm.read_int(base_addr + OFFSET_SLOT_LEFT) == ROD_ID:
+            return get_inventory_pos(6)
+        if pm.read_int(base_addr + OFFSET_SLOT_RIGHT) == ROD_ID:
+            return get_inventory_pos(5)
     except: pass
 
-    equip = find_item_in_equipment(pm, base_addr, ROD_ID) 
+    equip = find_item_in_equipment(pm, base_addr, ROD_ID)
     if equip:
-        if equip['slot'] == 'right': return packet.get_inventory_pos(5) 
-        elif equip['slot'] == 'left': return packet.get_inventory_pos(6) 
-        elif equip['slot'] == 'ammo': return packet.get_inventory_pos(10)
-    
+        if equip['slot'] == 'right': return get_inventory_pos(5)
+        elif equip['slot'] == 'left': return get_inventory_pos(6)
+        elif equip['slot'] == 'ammo': return get_inventory_pos(10)
+
     cont_data = find_item_in_containers(pm, base_addr, ROD_ID)
     if cont_data:
-        return packet.get_container_pos(cont_data['container_index'], cont_data['slot_index'])
+        return get_container_pos(cont_data['container_index'], cont_data['slot_index'])
     return None
 
 # ==============================================================================
@@ -91,8 +92,11 @@ def fishing_loop(pm, base_addr, hwnd, check_running=None, log_callback=None,
 
     mapper = MemoryMap(pm, base_addr)
     player_id = 0
-    cap_paused = False 
-    
+    cap_paused = False
+
+    # PacketManager para envio de pacotes
+    packet = PacketManager(pm, base_addr)
+
     current_target_coords = None
 
     # try:
@@ -189,7 +193,7 @@ def fishing_loop(pm, base_addr, hwnd, check_running=None, log_callback=None,
             # - Loot: Evita conflito com auto-loot
             # - Runemaking: Evita conflito com ciclo de fabricação de runas
             if state.is_in_combat or state.has_open_loot or state.is_runemaking:
-                time.sleep(0.5)
+                gauss_wait(0.5, 20)
                 continue
 
             if player_id == 0:
@@ -309,24 +313,25 @@ def fishing_loop(pm, base_addr, hwnd, check_running=None, log_callback=None,
             # -------------------------------------------------------------
             # 4. EXECUÇÃO
             # -------------------------------------------------------------
-            water_pos = packet.get_ground_pos(abs_x, abs_y, pz)
-            
+            water_pos = get_ground_pos(abs_x, abs_y, pz)
+
             # CALCULA DELAY (COM FADIGA)
             human_wait = calculate_human_delay(dx, dy, fatigue_count, fatigue_limit)
             time.sleep(human_wait)
-            
+
             cap_before = get_player_cap(pm, base_addr)
 
             # --- PACKET MUTEX: Evita conflito com outros módulos (Runemaker, etc) ---
             with PacketMutex("fisher") as fisher_ctx:
-                packet.use_with(pm, rod_pos, ROD_ID, 0, water_pos, water_id, 0)
+                packet.use_with(rod_pos, ROD_ID, 0, water_pos, water_id, 0,
+                                rel_x=dx, rel_y=dy)
 
             # Atualiza Contadores (fora do mutex - não é ação de packet)
             session_total_casts += 1
             if is_fatigue_enabled:
                 fatigue_count += 1
 
-            time.sleep(random.uniform(0.6, 0.8))
+            gauss_wait(0.7, 15)
             
             # --- CHECAGEM DE DESCANSO (FADIGA) ---
             if is_fatigue_enabled and fatigue_count >= fatigue_limit:

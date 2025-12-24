@@ -1,9 +1,9 @@
-import customtkinter as ctk 
+import customtkinter as ctk
 import threading
 import pymem
 import pymem.process
 import time
-import win32gui 
+import win32gui
 import win32con
 import win32api
 import requests
@@ -11,6 +11,7 @@ import winsound
 import os
 import json
 import random # Para o delay humano
+from utils.timing import gauss_wait
 from datetime import datetime
 from PIL import Image # Import necessário para imagens
 import matplotlib.pyplot as plt
@@ -1066,7 +1067,7 @@ def regen_monitor_loop():
             if curr_mem_id != 0:
                 if curr_mem_id != last_mem_id:
                     if curr_mem_id in FOOD_IDS:
-                        time.sleep(0.4) 
+                        gauss_wait(0.4, 20)
                         if is_player_full(pm, base_addr):
                             print(f"[REGEN] Clique ignorado (FULL).")
                         else:
@@ -1215,8 +1216,8 @@ def auto_loot_thread():
                 
                 # elif did_loot == "BAG":
                 #     log("🎒 Bag extra aberta.")
-                
-                time.sleep(0.5)
+
+                gauss_wait(0.5, 20)
                 continue
 
             # 2. REMOVIDO: Stacker agora é chamado DENTRO do AutoLoot (após cada item coletado)
@@ -1253,7 +1254,7 @@ def combat_loot_monitor_thread():
             # Silencioso para não poluir logs
             pass
 
-        time.sleep(0.3)  # ~3 verificações por segundo
+        gauss_wait(0.3, 20)  # ~3 verificações por segundo
 
 def auto_fisher_thread():
     hwnd = 0

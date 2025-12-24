@@ -1,11 +1,12 @@
-import time
 from config import *
-from core import packet
-from core.packet_mutex import PacketMutex
+from core.packet import PacketManager, get_container_pos
+from utils.timing import gauss_wait
+from core.bot_state import state
+# PacketMutex removido - locks globais em PacketManager cuidam da sincronização
 # NOTA: scan_containers é importado LAZY dentro da função auto_stack_items()
 # para evitar circular import com auto_loot.py
 
-def auto_stack_items(pm, base_addr, hwnd, my_containers_count=MY_CONTAINERS_COUNT, mutex_context=None):
+def auto_stack_items(pm, base_addr, hwnd, my_containers_count=MY_CONTAINERS_COUNT):
     """
     Agrupa itens empilháveis via Pacotes.
 
@@ -14,14 +15,19 @@ def auto_stack_items(pm, base_addr, hwnd, my_containers_count=MY_CONTAINERS_COUN
         base_addr: Base address of player in memory
         hwnd: Window handle
         my_containers_count: Número de containers próprios
-        mutex_context: Se fornecido, reutiliza mutex do módulo caller (Fisher/AutoLoot).
-                      Se None, adquire próprio mutex (standalone mode).
     """
+    # Protege ciclo de runemaking - não stacka durante runemaking
+    if state.is_runemaking:
+        return False
+
     # Import lazy para evitar circular import
     from modules.auto_loot import scan_containers
     containers = scan_containers(pm, base_addr)
     limit = int(my_containers_count)
     my_containers = containers[:limit]
+
+    # PacketManager para envio de pacotes
+    packet = PacketManager(pm, base_addr)
 
     for cont in my_containers:
         for i, item_dst in enumerate(cont.items):
@@ -40,21 +46,14 @@ def auto_stack_items(pm, base_addr, hwnd, my_containers_count=MY_CONTAINERS_COUN
                         print(f"🔄 STACKER: Juntando {item_src.id}")
 
                         # Origem: Slot Doador
-                        pos_from = packet.get_container_pos(cont.index, item_src.slot_index)
+                        pos_from = get_container_pos(cont.index, item_src.slot_index)
 
                         # Destino: Slot Receptor
-                        pos_to = packet.get_container_pos(cont.index, item_dst.slot_index)
+                        pos_to = get_container_pos(cont.index, item_dst.slot_index)
 
                         # Executa Movimento
-                        if mutex_context:
-                            # Reutiliza contexto do caller (Fisher/AutoLoot)
-                            packet.move_item(pm, pos_from, pos_to, item_src.id, item_src.count)
-                        else:
-                            # Adquire próprio mutex (standalone mode)
-                            with PacketMutex("stacker"):
-                                packet.move_item(pm, pos_from, pos_to, item_src.id, item_src.count)
-
-                        time.sleep(0.3)
+                        packet.move_item(pos_from, pos_to, item_src.id, item_src.count)
+                        gauss_wait(0.3, 20)
                         return True
 
     return False
