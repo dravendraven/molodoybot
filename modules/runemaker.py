@@ -422,6 +422,10 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
 
                         # PACKET MUTEX: Wrap entire runemaking cycle (unequip -> blank -> cast -> return -> reequip)
                         with PacketMutex("runemaker"):
+                            # STOP: Garante que o personagem pare antes de mover itens
+                            packet.stop()
+                            time.sleep(0.3)
+
                             # PHASE 1: Unequip all hands and store their items
                             # (This fixes the bug where unequipped_item_id gets overwritten with "BOTH" hands)
                             # Agora usa slot livre automaticamente via get_free_slot_in_container

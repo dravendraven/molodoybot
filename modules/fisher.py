@@ -331,7 +331,7 @@ def fishing_loop(pm, base_addr, hwnd, check_running=None, log_callback=None,
             if is_fatigue_enabled:
                 fatigue_count += 1
 
-            gauss_wait(0.7, 15)
+            gauss_wait(0.5, 15)
             
             # --- CHECAGEM DE DESCANSO (FADIGA) ---
             if is_fatigue_enabled and fatigue_count >= fatigue_limit:
@@ -381,8 +381,7 @@ def fishing_loop(pm, base_addr, hwnd, check_running=None, log_callback=None,
                 log_msg(f"✅ PEIXE! [{session_fish_caught}/{session_total_casts}]")
 
                 fishing_db.mark_fish_caught(abs_x, abs_y, pz)
-                # NOVO: Passa contexto do Fisher para Stacker (reutiliza mutex, sem delay)
-                auto_stack_items(pm, base_addr, hwnd, mutex_context=fisher_ctx)
+                auto_stack_items(pm, base_addr, hwnd)
                 if (abs_x, abs_y) in fishing_sessions: del fishing_sessions[(abs_x, abs_y)]
                 current_target_coords = None 
                 

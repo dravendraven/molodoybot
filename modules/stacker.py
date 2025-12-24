@@ -1,12 +1,12 @@
 from config import *
 from core.packet import PacketManager, get_container_pos
+from core.packet_mutex import PacketMutex
 from utils.timing import gauss_wait
 from core.bot_state import state
-# PacketMutex removido - locks globais em PacketManager cuidam da sincronização
 # NOTA: scan_containers é importado LAZY dentro da função auto_stack_items()
 # para evitar circular import com auto_loot.py
 
-def auto_stack_items(pm, base_addr, hwnd, my_containers_count=MY_CONTAINERS_COUNT):
+def auto_stack_items(pm, base_addr, hwnd, my_containers_count=MY_CONTAINERS_COUNT, mutex_context=None):
     """
     Agrupa itens empilháveis via Pacotes.
 
@@ -15,6 +15,7 @@ def auto_stack_items(pm, base_addr, hwnd, my_containers_count=MY_CONTAINERS_COUN
         base_addr: Base address of player in memory
         hwnd: Window handle
         my_containers_count: Número de containers próprios
+        mutex_context: Contexto de mutex externo (ex: fisher_ctx) para reutilizar lock
     """
     # Protege ciclo de runemaking - não stacka durante runemaking
     if state.is_runemaking:
@@ -51,8 +52,13 @@ def auto_stack_items(pm, base_addr, hwnd, my_containers_count=MY_CONTAINERS_COUN
                         # Destino: Slot Receptor
                         pos_to = get_container_pos(cont.index, item_dst.slot_index)
 
-                        # Executa Movimento
-                        packet.move_item(pos_from, pos_to, item_src.id, item_src.count)
+                        # Executa Movimento (com mutex se contexto fornecido)
+                        if mutex_context:
+                            # Reutiliza mutex do fisher (mesmo grupo FISHER_GROUP)
+                            with PacketMutex("stacker"):
+                                packet.move_item(pos_from, pos_to, item_src.id, item_src.count)
+                        else:
+                            packet.move_item(pos_from, pos_to, item_src.id, item_src.count)
                         gauss_wait(0.3, 20)
                         return True
 
