@@ -14,10 +14,21 @@ import random # Para o delay humano
 from utils.timing import gauss_wait
 from datetime import datetime
 from PIL import Image # Import necessário para imagens
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-import matplotlib
-matplotlib.use("TkAgg") # Define o backend para funcionar com Tkinter
+# matplotlib será carregado sob demanda (lazy loading) para acelerar o startup
+plt = None
+FigureCanvasTkAgg = None
+
+def setup_matplotlib():
+    """Carrega matplotlib apenas quando necessário (lazy loading)"""
+    global plt, FigureCanvasTkAgg
+    if plt is None:
+        import matplotlib
+        matplotlib.use("TkAgg")
+        import matplotlib.pyplot as plt_module
+        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg as Canvas
+        plt = plt_module
+        FigureCanvasTkAgg = Canvas
+    return plt, FigureCanvasTkAgg
 import sys
 import traceback
 import ctypes
@@ -3003,6 +3014,8 @@ btn_graph.pack(side="top", fill="x", padx=1, pady=0)
 
 frame_graph = ctk.CTkFrame(frame_graphs_container, fg_color="transparent", corner_radius=6)
 
+# Lazy load matplotlib apenas aqui quando realmente necessário
+plt, FigureCanvasTkAgg = setup_matplotlib()
 plt.style.use('dark_background')
 fig, ax = plt.subplots(figsize=(4, 1.6), dpi=100, facecolor='#2B2B2B')
 fig.patch.set_facecolor('#202020') 
