@@ -51,7 +51,7 @@ class Cavebot:
     STATE_PAUSED = "paused"
     STATE_WAYPOINT_REACHED = "waypoint_reached"
 
-    def __init__(self, pm, base_addr):
+    def __init__(self, pm, base_addr, maps_directory=None):
         self.pm = pm
         self.base_addr = base_addr
 
@@ -62,9 +62,11 @@ class Cavebot:
         self.memory_map = MemoryMap(pm, base_addr)
         self.analyzer = MapAnalyzer(self.memory_map)
         self.walker = AStarWalker(self.analyzer, debug=DEBUG_PATHFINDING)
-        
+
         # [NAVEGAÇÃO HIBRIDA] Inicializa o "GPS" (Global)
-        self.global_map = GlobalMap(MAPS_DIRECTORY, WALKABLE_COLORS)
+        # Usa maps_directory passado como parâmetro, ou fallback para config.py
+        effective_maps_dir = maps_directory if maps_directory else MAPS_DIRECTORY
+        self.global_map = GlobalMap(effective_maps_dir, WALKABLE_COLORS)
         self.current_global_path = [] # Lista de nós [(x,y,z), ...] da rota atual
 
         # Thread-safe waypoints

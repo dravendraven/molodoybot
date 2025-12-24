@@ -76,6 +76,7 @@ BOT_SETTINGS = {
     "vocation": "Knight",
     "debug_mode": False,
     "hit_log_enabled": HIT_LOG_ENABLED,
+    "client_path": "",  # Caminho da pasta do cliente (para GlobalMap)
 
     #trainer
     "ignore_first": False,
@@ -879,7 +880,9 @@ def start_cavebot_thread():
         if pm is not None and cavebot_instance is None and state.is_connected:
             try:
                 print("Inicializando instância do Cavebot...")
-                cavebot_instance = Cavebot(pm, base_addr)
+                # Usa client_path configurado na GUI, ou fallback para MAPS_DIRECTORY do config.py
+                maps_dir = BOT_SETTINGS.get('client_path') or None
+                cavebot_instance = Cavebot(pm, base_addr, maps_directory=maps_dir)
                 # Se já tiver waypoints na UI, carrega eles
                 if current_waypoints_ui:
                     cavebot_instance.load_waypoints(current_waypoints_ui)
@@ -1764,6 +1767,34 @@ def open_settings():
     
     ctk.CTkLabel(frame_geral, text="↳ Recebe alertas de PK e Pausa no celular.", **UI['HINT']).grid(row=2, column=0, columnspan=2, sticky="e", padx=60, pady=(0, 5))
 
+    # Pasta do Cliente (GlobalMap)
+    ctk.CTkLabel(frame_geral, text="Pasta do Cliente:", **UI['BODY']).grid(row=3, column=0, sticky="e", padx=10, pady=UI['PAD_ITEM'])
+
+    frame_client_path = ctk.CTkFrame(frame_geral, fg_color="transparent")
+    frame_client_path.grid(row=3, column=1, sticky="w")
+
+    entry_client_path = ctk.CTkEntry(frame_client_path, width=180, height=24, font=UI['BODY']['font'], state="disabled")
+    entry_client_path.pack(side="left")
+
+    def select_client_folder():
+        folder = filedialog.askdirectory(title="Selecione a pasta do cliente Tibia")
+        if folder:
+            entry_client_path.configure(state="normal")
+            entry_client_path.delete(0, "end")
+            entry_client_path.insert(0, folder)
+            entry_client_path.configure(state="disabled")
+
+    btn_browse = ctk.CTkButton(frame_client_path, text="...", width=30, height=24, command=select_client_folder)
+    btn_browse.pack(side="left", padx=5)
+
+    # Preenche com valor salvo
+    if BOT_SETTINGS.get('client_path'):
+        entry_client_path.configure(state="normal")
+        entry_client_path.insert(0, BOT_SETTINGS['client_path'])
+        entry_client_path.configure(state="disabled")
+
+    ctk.CTkLabel(frame_geral, text="↳ Necessário para o Cavebot (GlobalMap)", **UI['HINT']).grid(row=4, column=0, columnspan=2, sticky="e", padx=60, pady=(0, 5))
+
     # Switches
     frame_switches = ctk.CTkFrame(tab_geral, fg_color="transparent")
     frame_switches.pack(pady=10)
@@ -1797,6 +1828,10 @@ def open_settings():
     def save_geral():
         BOT_SETTINGS['vocation'] = combo_voc.get()
         BOT_SETTINGS['telegram_chat_id'] = entry_telegram.get()
+        # Salvar caminho do cliente (precisa habilitar temporariamente para ler)
+        entry_client_path.configure(state="normal")
+        BOT_SETTINGS['client_path'] = entry_client_path.get()
+        entry_client_path.configure(state="disabled")
         update_stats_visibility()
         save_config_file()
         log(f"⚙️ Geral salvo.")
