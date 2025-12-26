@@ -52,6 +52,8 @@ def auto_stack_items(pm, base_addr, hwnd, my_containers_count=MY_CONTAINERS_COUN
                         # Destino: Slot Receptor
                         pos_to = get_container_pos(cont.index, item_dst.slot_index)
 
+                        gauss_wait(0.2, 20)
+
                         # Executa Movimento (com mutex se contexto fornecido)
                         if mutex_context:
                             # Reutiliza mutex do fisher (mesmo grupo FISHER_GROUP)

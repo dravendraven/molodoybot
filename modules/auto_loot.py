@@ -13,6 +13,18 @@ from core.bot_state import state
 # para evitar circular import com stacker.py
 
 # ==============================================================================
+# CONFIGURAÇÃO: SISTEMA DE DETECÇÃO DE CONTAINERS
+# ==============================================================================
+# True  = Usa detecção automática (hasparent + tracking temporal)
+# False = Usa sistema antigo (config 'loot_containers' define quantidade)
+USE_AUTO_CONTAINER_DETECTION = True  # Desabilitado por padrão - testar antes
+
+# ==============================================================================
+# TRACKING DE CONTAINERS DE LOOT (Estado Global)
+# ==============================================================================
+_loot_indices = set()  # Índices marcados como loot em tempo real
+
+# ==============================================================================
 # CLASSES DE DADOS
 # ==============================================================================
 class Item:
@@ -25,16 +37,18 @@ class Item:
         return f"[Slot {self.slot_index}] ID: {self.id} | Qt: {self.count}"
 
 class Container:
-    def __init__(self, index, address, name, amount, volume, items):
+    def __init__(self, index, address, name, amount, volume, hasparent, items):
         self.index = index
         self.address = address
         self.name = name
         self.amount = amount
-        self.volume = volume # <--- NOVO: Capacidade Total (ex: 20 para BP)
+        self.volume = volume
+        self.hasparent = hasparent  # 0 = raiz, 1 = filho de outro container
         self.items = items
 
     def __repr__(self):
-        return f"Container {self.index}: '{self.name}' ({self.amount}/{self.volume})"
+        parent_str = "filho" if self.hasparent else "raiz"
+        return f"Container {self.index}: '{self.name}' ({self.amount}/{self.volume}) [{parent_str}]"
 
 # ==============================================================================
 # LEITURA DE MEMÓRIA
@@ -45,10 +59,10 @@ def read_container_name(pm, address):
 
 def scan_containers(pm, base_addr):
     open_containers = []
-    
+
     # Previne erro se MAX_CONTAINERS for lido errado
     max_cnt = MAX_CONTAINERS if isinstance(MAX_CONTAINERS, int) else 16
-    
+
     for i in range(max_cnt):
         cnt_addr = base_addr + OFFSET_CONTAINER_START + (i * STEP_CONTAINER)
         try:
@@ -56,8 +70,9 @@ def scan_containers(pm, base_addr):
             if is_open == 1:
                 name = read_container_name(pm, cnt_addr)
                 amount = pm.read_int(cnt_addr + OFFSET_CNT_AMOUNT)
-                volume = pm.read_int(cnt_addr + OFFSET_CNT_VOLUME) # <--- Lendo Capacidade
-                
+                volume = pm.read_int(cnt_addr + OFFSET_CNT_VOLUME)
+                hasparent = pm.read_int(cnt_addr + OFFSET_CNT_HAS_PARENT)  # 0=raiz, 1=filho
+
                 items = []
                 for slot in range(amount):
                     item_id_addr = cnt_addr + OFFSET_CNT_ITEM_ID + (slot * STEP_SLOT)
@@ -68,8 +83,8 @@ def scan_containers(pm, base_addr):
                         final_count = max(1, raw_count)
                         if raw_id > 0: items.append(Item(raw_id, final_count, slot))
                     except: pass
-                
-                open_containers.append(Container(i, cnt_addr, name, amount, volume, items))
+
+                open_containers.append(Container(i, cnt_addr, name, amount, volume, hasparent, items))
         except: continue
     return open_containers
 
@@ -81,6 +96,42 @@ def is_player_full(pm, base_addr):
             if "full" in msg.lower() or "capacity" in msg.lower(): return True
         return False
     except: return False
+
+# ==============================================================================
+# CLASSIFICAÇÃO AUTOMÁTICA DE CONTAINERS (Tracking Temporal)
+# ==============================================================================
+def track_loot_containers(containers):
+    """
+    Atualiza tracking de quais índices são loot.
+    Usa nome "Dead " + hasparent para classificar.
+    """
+    global _loot_indices
+
+    current_open = {c.index for c in containers}
+
+    # Limpa índices de containers que fecharam
+    _loot_indices = _loot_indices & current_open
+
+    for c in containers:
+        if c.name.startswith("Dead "):
+            # Corpo de criatura = sempre loot
+            _loot_indices.add(c.index)
+        elif c.hasparent == 1 and c.index in _loot_indices:
+            # Bag que substituiu corpo = mantém como loot
+            pass
+        elif c.hasparent == 0 and not c.name.startswith("Dead "):
+            # Container raiz do player = remove do tracking
+            _loot_indices.discard(c.index)
+
+def get_loot_containers(containers):
+    """Retorna apenas containers classificados como loot."""
+    track_loot_containers(containers)
+    return [c for c in containers if c.index in _loot_indices or c.name.startswith("Dead ")]
+
+def get_player_containers(containers):
+    """Retorna apenas containers do player."""
+    loot_set = {c.index for c in get_loot_containers(containers)}
+    return [c for c in containers if c.index not in loot_set]
 
 # ==============================================================================
 # LÓGICA INTELIGENTE DE DESTINO
@@ -122,15 +173,30 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
         return default
 
     # Lê as configs atuais
-    my_containers_count = get_cfg('loot_containers', 2)
     dest_container_index = get_cfg('loot_dest', 0)
     drop_food_if_full = get_cfg('loot_drop_food', False)
 
     containers = scan_containers(pm, base_addr)
-    limit_containers = int(my_containers_count)
+
+    # ==========================================================================
+    # SELEÇÃO DO SISTEMA DE DETECÇÃO DE CONTAINERS
+    # ==========================================================================
+    if USE_AUTO_CONTAINER_DETECTION:
+        # NOVO SISTEMA: Detecção automática via hasparent + tracking temporal
+        loot_containers = get_loot_containers(containers)
+        player_containers = get_player_containers(containers)
+        my_containers_count = len(player_containers)
+    else:
+        # SISTEMA ANTIGO: Usa config 'loot_containers' para definir quantidade
+        my_containers_count = get_cfg('loot_containers', 2)
+        limit_containers = int(my_containers_count)
+
+        # Sistema antigo: containers[0:limit] = player, containers[limit:] = loot
+        player_containers = [c for c in containers if c.index < limit_containers]
+        loot_containers = [c for c in containers if c.index >= limit_containers]
 
     # Se não há loot para coletar, marca state como sem loot
-    if len(containers) <= limit_containers:
+    if not loot_containers:
         state.set_loot_state(False)
         return None
 
@@ -140,10 +206,11 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
     # PacketManager para envio de pacotes
     packet = PacketManager(pm, base_addr)
 
-    dest_idx, dest_slot = get_best_loot_destination(containers, limit_containers, dest_container_index)
+    # Encontra destino nos containers do player
+    dest_idx, dest_slot = get_best_loot_destination(player_containers, len(player_containers), dest_container_index)
     is_backpack_full = (dest_idx is None)
 
-    for cont in containers[limit_containers:]:
+    for cont in loot_containers:
         
         # --- LÓGICA DE BAG ---
         has_bag_to_open = False
@@ -219,7 +286,7 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
                 # Import lazy para evitar circular import
                 from modules.stacker import auto_stack_items
                 auto_stack_items(pm, base_addr, hwnd,
-                                 my_containers_count=limit_containers)
+                                 my_containers_count=my_containers_count)
 
                 dest_slot += 1
                 state.set_loot_state(False)
@@ -237,8 +304,8 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
                 state.set_loot_state(False)
                 return "DROP"
 
-    # NOVO: Fecha todos os containers de loot processados
-    for cont in containers[limit_containers:]:
+    # Fecha todos os containers de loot processados
+    for cont in loot_containers:
         packet.close_container(cont.index)
         gauss_wait(0.75, 30)
 

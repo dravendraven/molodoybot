@@ -88,6 +88,7 @@ BOT_SETTINGS = {
     "debug_mode": False,
     "hit_log_enabled": HIT_LOG_ENABLED,
     "client_path": "",  # Caminho da pasta do cliente (para GlobalMap)
+    "lookid_enabled": False,  # Exibir ID dos items ao dar look
 
     #trainer
     "ignore_first": False,
@@ -166,10 +167,6 @@ label_cavebot_status = None  # Label para mostrar posição atual e waypoint
 txt_waypoints_settings = None
 entry_waypoint_name = None
 combo_cavebot_scripts = None
-
-# NOVAS VARIÁVEIS PARA O RECORDER
-is_recording_waypoints = False
-last_recorded_pos = (0, 0, 0)
 
 # Waypoint Editor
 _waypoint_editor_window = None
@@ -678,50 +675,6 @@ def open_waypoint_editor_window():
         log(f"❌ Erro ao abrir editor: {e}")
         import traceback
         traceback.print_exc()
-
-def auto_recorder_loop():
-    """Thread que monitora movimento e grava waypoints."""
-    global last_recorded_pos, is_recording_waypoints, pm, base_addr
-    
-    print("Gravador Automático Iniciado.")
-
-    while state.is_running:
-        # Verifica condições: Gravação Ligada + Conectado + PM válido
-        if is_recording_waypoints and state.is_connected and pm:
-            try:
-                px, py, pz = get_player_pos(pm, base_addr)
-                
-                # Se a leitura falhar (ex: retornou 0,0,0), ignora
-                if px == 0 and py == 0:
-                    time.sleep(0.1)
-                    continue
-
-                curr_pos = (px, py, pz)
-                
-                # Se mudou de posição
-                if curr_pos != last_recorded_pos:
-                    # Se for o primeiro registro (reset), apenas atualiza last_pos
-                    if last_recorded_pos == (0, 0, 0):
-                        last_recorded_pos = curr_pos
-                    else:
-                        # Adiciona o WP
-                        add_waypoint_entry("walk", px, py, pz)
-                        last_recorded_pos = curr_pos
-                        
-            except Exception as e:
-                print(f"Erro Recorder: {e}")
-                
-        time.sleep(0.2) # Verifica 5x por segundo
-
-def toggle_recording_func(switch_val):
-    global is_recording_waypoints, last_recorded_pos
-    is_recording_waypoints = bool(switch_val)
-    if is_recording_waypoints:
-        # Reseta a última posição para forçar gravação do primeiro passo
-        last_recorded_pos = (0, 0, 0)
-        log("⏺️ Gravação Automática INICIADA.")
-    else:
-        log("⏹️ Gravação Automática PARADA.")
 
 def record_current_pos():
     """Pega a posição atual do char e adiciona na lista."""
@@ -1387,6 +1340,35 @@ def runemaker_thread():
             print(f"Erro Runemaker: {e}")
             time.sleep(5)
 
+def lookid_monitor_loop():
+    """
+    Thread que monitora o ID do item/creature ao dar Look e exibe na status bar.
+    """
+    last_id = 0
+    while state.is_running:
+        if not BOT_SETTINGS.get('lookid_enabled', False) or pm is None:
+            time.sleep(0.5)
+            continue
+
+        try:
+            current_id = pm.read_int(base_addr + OFFSET_LOOK_ID)
+
+            if current_id != last_id and current_id > 0:
+                # Limpa a mensagem anterior
+                empty_buffer = b'\x00' * 100
+                pm.write_bytes(base_addr + OFFSET_STATUS_TEXT, empty_buffer, len(empty_buffer))
+
+                # Escreve o novo ID
+                text_to_show = f"ID: {current_id}"
+                pm.write_string(base_addr + OFFSET_STATUS_TEXT, text_to_show)
+                pm.write_int(base_addr + OFFSET_STATUS_TIMER, 50)
+
+                last_id = current_id
+        except:
+            pass
+
+        time.sleep(0.1)
+
 def skill_monitor_loop():
     """
     Thread RÁPIDA: Apenas lê memória e atualiza a lógica matemática.
@@ -1812,24 +1794,29 @@ def open_settings():
     # Switches
     frame_switches = ctk.CTkFrame(tab_geral, fg_color="transparent")
     frame_switches.pack(pady=10)
-    
-    def on_debug_toggle():
-        BOT_SETTINGS['debug_mode'] = bool(switch_debug.get())
-        log(f"🔧 Debug: {BOT_SETTINGS['debug_mode']}")
-    
-    switch_debug = ctk.CTkSwitch(frame_switches, text="Debug Console", command=on_debug_toggle, progress_color="#FFA500", **UI['BODY'])
-    switch_debug.pack(anchor="w", pady=UI['PAD_ITEM'])
-    if BOT_SETTINGS['debug_mode']: switch_debug.select()
-    
+
+    ctk.CTkLabel(frame_switches, text="Hack", **UI['H1']).pack(anchor="w", pady=(0, 2))
+
     def on_light_toggle():
         global full_light_enabled
         full_light_enabled = bool(switch_light.get())
         apply_full_light(full_light_enabled)
         log(f"💡 Full Light: {full_light_enabled}")
 
-    switch_light = ctk.CTkSwitch(frame_switches, text="Full Light (Hack)", command=on_light_toggle, progress_color="#FFA500", **UI['BODY'])
+    switch_light = ctk.CTkSwitch(frame_switches, text="Full Light", command=on_light_toggle, progress_color="#FFA500", **UI['BODY'])
     switch_light.pack(anchor="w", pady=UI['PAD_ITEM'])
     if full_light_enabled: switch_light.select()
+
+    ctk.CTkLabel(frame_switches, text="Opções", **UI['H1']).pack(anchor="w", pady=(10, 2))
+
+    def on_lookid_toggle():
+        BOT_SETTINGS['lookid_enabled'] = bool(switch_lookid.get())
+        status = "ativado" if BOT_SETTINGS['lookid_enabled'] else "desativado"
+        log(f"🔍 Look ID: {status}")
+
+    switch_lookid = ctk.CTkSwitch(frame_switches, text="Exibir ID ao dar Look", command=on_lookid_toggle, progress_color="#3B8ED0", **UI['BODY'])
+    switch_lookid.pack(anchor="w", pady=UI['PAD_ITEM'])
+    if BOT_SETTINGS.get('lookid_enabled', False): switch_lookid.select()
 
     def on_log_toggle():
         global log_visible
@@ -1838,6 +1825,14 @@ def open_settings():
     switch_log = ctk.CTkSwitch(frame_switches, text="Console Log", command=on_log_toggle, progress_color="#00FF00", **UI['BODY'])
     switch_log.pack(anchor="w", pady=UI['PAD_ITEM'])
     if BOT_SETTINGS.get('console_log_visible', True): switch_log.select()
+
+    def on_debug_toggle():
+        BOT_SETTINGS['debug_mode'] = bool(switch_debug.get())
+        log(f"🔧 Debug: {BOT_SETTINGS['debug_mode']}")
+
+    switch_debug = ctk.CTkSwitch(frame_switches, text="Debug Console", command=on_debug_toggle, progress_color="#FFA500", **UI['BODY'])
+    switch_debug.pack(anchor="w", pady=UI['PAD_ITEM'])
+    if BOT_SETTINGS['debug_mode']: switch_debug.select()
 
     def save_geral():
         BOT_SETTINGS['vocation'] = combo_voc.get()
@@ -1873,7 +1868,9 @@ def open_settings():
     entry_tr_max = ctk.CTkEntry(f_dely, **UI['INPUT'])
     entry_tr_max.pack(side="left", padx=5)
     entry_tr_max.insert(0, str(BOT_SETTINGS.get('trainer_max_delay', 2.0)))
-    
+
+    ctk.CTkLabel(frame_tr, text="↳ Tempo de reação para começar a atacar", **UI['HINT']).pack(anchor="w", padx=20)
+
     # Range
     ctk.CTkLabel(frame_tr, text="Distância (SQM):", **UI['H1']).pack(anchor="w", padx=10, pady=(15,0))
     
@@ -1884,7 +1881,7 @@ def open_settings():
     entry_tr_range.pack(side="left")
     entry_tr_range.insert(0, str(BOT_SETTINGS.get('trainer_range', 1)))
     
-    ctk.CTkLabel(f_rng, text="(1 = Melee / 3+ = Distance)", **UI['HINT']).pack(side="left", padx=10)
+    ctk.CTkLabel(f_rng, text="(Distancia mínima para começar a atacar alvos)", **UI['HINT']).pack(side="left", padx=10)
 
     # Lógica de Alvo
     ctk.CTkLabel(frame_tr, text="Lógica de Alvo:", **UI['H1']).pack(anchor="w", padx=10, pady=(15,0))
@@ -2056,16 +2053,22 @@ def open_settings():
     # 5. ABA LOOT
     # ==========================================================================
     ctk.CTkLabel(tab_loot, text="Configuração de BPs:", **UI['H1']).pack(pady=(10,5))
-    
-    ctk.CTkLabel(tab_loot, text="Minhas BPs (Não lootear):", **UI['BODY']).pack()
-    entry_cont_count = ctk.CTkEntry(tab_loot, **UI['INPUT'])
-    entry_cont_count.pack(pady=2)
-    entry_cont_count.insert(0, str(BOT_SETTINGS['loot_containers'])) 
-    
-    ctk.CTkLabel(tab_loot, text="Índice Destino (0=Primeira):", **UI['BODY']).pack(pady=(10,0))
+
+    # Campo "Minhas BPs" - só aparece se detecção automática estiver DESABILITADA
+    if not USE_AUTO_CONTAINER_DETECTION:
+        ctk.CTkLabel(tab_loot, text="Minhas BPs (Não lootear):", **UI['BODY']).pack()
+        entry_cont_count = ctk.CTkEntry(tab_loot, **UI['INPUT'])
+        entry_cont_count.pack(pady=2)
+        entry_cont_count.insert(0, str(BOT_SETTINGS['loot_containers']))
+    else:
+        entry_cont_count = None  # Placeholder para evitar erro no save_loot
+        ctk.CTkLabel(tab_loot, text="Detecção automática de containers ativada", **UI['HINT']).pack(pady=5)
+
+    ctk.CTkLabel(tab_loot, text="Índice Destino:", **UI['BODY']).pack(pady=(10,0))
     entry_dest_idx = ctk.CTkEntry(tab_loot, **UI['INPUT'])
     entry_dest_idx.pack(pady=2)
-    entry_dest_idx.insert(0, str(BOT_SETTINGS['loot_dest'])) 
+    entry_dest_idx.insert(0, str(BOT_SETTINGS['loot_dest']))
+    ctk.CTkLabel(tab_loot, text="Para qual BP irá o loot (0=primeira, 1=segunda, etc)", **UI['HINT']).pack() 
 
     # Options
     frame_loot_opts = ctk.CTkFrame(tab_loot, fg_color="transparent")
@@ -2079,7 +2082,8 @@ def open_settings():
 
     def save_loot():
         try:
-            BOT_SETTINGS['loot_containers'] = int(entry_cont_count.get())
+            if entry_cont_count is not None:
+                BOT_SETTINGS['loot_containers'] = int(entry_cont_count.get())
             BOT_SETTINGS['loot_dest'] = int(entry_dest_idx.get())
             BOT_SETTINGS['loot_drop_food'] = bool(switch_drop_food.get())
             save_config_file()
@@ -2315,20 +2319,7 @@ def open_settings():
 
     ctk.CTkFrame(frame_cb_left, height=1, fg_color="#555").pack(fill="x", pady=5)
 
-    # 1. Gravação Automática
-    ctk.CTkLabel(frame_cb_left, text="Gravação Automática", **UI['H1']).pack(anchor="w", pady=(0,2))
-    
-    switch_rec_var = ctk.IntVar(value=1 if is_recording_waypoints else 0)
-    def on_rec_toggle(): toggle_recording_func(switch_rec_var.get())
-    
-    btn_rec_toggle = ctk.CTkSwitch(frame_cb_left, text="Gravar Waypoints", 
-                                  command=on_rec_toggle, variable=switch_rec_var,
-                                  progress_color="#FF5555", **UI['BODY'])
-    btn_rec_toggle.pack(anchor="w", pady=4)
-    
-    ctk.CTkFrame(frame_cb_left, height=2, fg_color="#444").pack(fill="x", pady=10)
-
-    # 2. Adição Manual - SIMPLIFICADO
+    # Adição Manual - SIMPLIFICADO
     ctk.CTkLabel(frame_cb_left, text="Adição Manual", **UI['H1']).pack(anchor="w", pady=(0,2))
 
     ctk.CTkLabel(frame_cb_left, text="Clique no botão ou insira coordenadas:",
@@ -3061,7 +3052,7 @@ threading.Thread(target=auto_fisher_thread, daemon=True).start()
 threading.Thread(target=runemaker_thread, daemon=True).start()
 threading.Thread(target=connection_watchdog, daemon=True).start()
 threading.Thread(target=start_cavebot_thread, daemon=True).start()
-threading.Thread(target=auto_recorder_loop, daemon=True).start()
+threading.Thread(target=lookid_monitor_loop, daemon=True).start()
 
 update_stats_visibility()
 

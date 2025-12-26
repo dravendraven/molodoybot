@@ -331,7 +331,7 @@ def fishing_loop(pm, base_addr, hwnd, check_running=None, log_callback=None,
             if is_fatigue_enabled:
                 fatigue_count += 1
 
-            gauss_wait(0.5, 15)
+            gauss_wait(0.3, 75)
             
             # --- CHECAGEM DE DESCANSO (FADIGA) ---
             if is_fatigue_enabled and fatigue_count >= fatigue_limit:

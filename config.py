@@ -91,8 +91,11 @@ OFFSET_CNT_VOLUME  = 48
 OFFSET_CNT_AMOUNT  = 56     
 
 # Offsets dos ITENS dentro do Container
-OFFSET_CNT_ITEM_ID    = 60  
-OFFSET_CNT_ITEM_COUNT = 64  
+OFFSET_CNT_ITEM_ID    = 60
+OFFSET_CNT_ITEM_COUNT = 64
+
+# Offset para detectar se container é filho de outro
+OFFSET_CNT_HAS_PARENT = 52    # 0 = raiz, 1 = filho de outro container  
 
 # Distância entre itens (Slot)
 STEP_SLOT = 12
@@ -194,6 +197,7 @@ OFFSET_VIEW_H = 0x20
 # ==============================================================================
 OFFSET_STATUS_TEXT  = 0x31DBE0 # String: "You are full.", "You look at...", etc.
 OFFSET_STATUS_TIMER = 0x31DBDC # Int: Tempo restante da mensagem na tela
+OFFSET_LOOK_ID      = 0x31C63C # Int: ID do item/creature ao dar "Look"
 
 # ==============================================================================
 # Pesca
@@ -242,16 +246,16 @@ CHECK_MIN_CAP = True      # Se True, o bot para de pescar se a cap estiver baixa
 MIN_CAP_VALUE = 6.0       # Valor mínimo de cap (oz) para permitir a pesca
 
 # Define quantos arremessos o bot aguenta antes de precisar descansar
-FATIGUE_ACTIONS_RANGE = (10, 30)  
+FATIGUE_ACTIONS_RANGE = (8, 22)  
 # Define quanto tempo (segundos) ele descansa quando atinge o limite
 FATIGUE_REST_RANGE = (10, 50)     
 # Porcentagem extra de delay motor quando estiver cansado (Ex: 0.3 = 30% mais lento)
 FATIGUE_MOTOR_PENALTY = 0.4
 
-BASE_REACTION_MIN = 0.8
-BASE_REACTION_MAX = 1.2
+BASE_REACTION_MIN = 0.5
+BASE_REACTION_MAX = 0.9
 TRAVEL_SPEED_MIN = 0.02
-TRAVEL_SPEED_MAX = 0.08
+TRAVEL_SPEED_MAX = 0.09
 
 # ==============================================================================
 # X-RAY
