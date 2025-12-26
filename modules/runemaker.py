@@ -336,13 +336,15 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
         # ======================================================================
         
         # 1. Proteção de Combate (integrada com bot_state)
-        # Usa flags globais de combate/loot para coordenação entre módulos
-        if state.is_in_combat or state.has_open_loot:
+        # Só pausa para combate/loot se cavebot estiver ativo
+        # Permite runemaking durante treino (trainer-only mode)
+        if state.cavebot_active and (state.is_in_combat or state.has_open_loot):
             time.sleep(0.5); continue
 
         # Cooldown mais inteligente: aguarda 7s após combate terminar
         # Permite que auto-loot (3-5s) termine completamente
-        if time.time() - state.last_combat_time < COMBAT_COOLDOWN:
+        # Só aplica cooldown se cavebot estiver ativo
+        if state.cavebot_active and (time.time() - state.last_combat_time < COMBAT_COOLDOWN):
             time.sleep(0.5); continue
 
         # 2. Auto Eat

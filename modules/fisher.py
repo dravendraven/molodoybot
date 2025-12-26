@@ -189,10 +189,10 @@ def fishing_loop(pm, base_addr, hwnd, check_running=None, log_callback=None,
                         cap_paused = False
 
             # Pausa durante atividades de alta prioridade
-            # - Combate: Permite defesa do personagem
-            # - Loot: Evita conflito com auto-loot
-            # - Runemaking: Evita conflito com ciclo de fabricação de runas
-            if state.is_in_combat or state.has_open_loot or state.is_runemaking:
+            # - Runemaking: SEMPRE pausa (prioridade máxima)
+            # - Combate/Loot: Só pausa se cavebot estiver ativo
+            #   (permite pesca durante treino em trainer-only mode)
+            if state.is_runemaking or (state.cavebot_active and (state.is_in_combat or state.has_open_loot)):
                 gauss_wait(0.5, 20)
                 continue
 

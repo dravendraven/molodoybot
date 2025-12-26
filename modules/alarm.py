@@ -106,14 +106,17 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks):
                 try:
                     curr_hp = pm.read_int(base_addr + OFFSET_PLAYER_HP)
                     max_hp = pm.read_int(base_addr + OFFSET_PLAYER_HP_MAX)
-                    
+
                     if max_hp > 0 and curr_hp > 0:
                         pct = (curr_hp / max_hp) * 100
                         if pct < hp_threshold:
-                            # Limita o alerta a cada 2 segundos
+                            # Marca como não-seguro (outros módulos vão reagir)
+                            set_safe_state(False)
+
+                            # Limita o alerta sonoro a cada 2 segundos
                             if (time.time() - last_hp_alert) > 2.0:
                                 log_msg(f"🩸 ALARME DE VIDA: {pct:.1f}% (Abaixo de {hp_threshold}%)")
-                                winsound.Beep(2500, 200) 
+                                winsound.Beep(2500, 200)
                                 winsound.Beep(2500, 200)
                                 last_hp_alert = time.time()
                 except: pass
