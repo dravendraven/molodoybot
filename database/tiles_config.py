@@ -239,6 +239,8 @@ FLOOR_CHANGE = {
     
     # --- DESCER ---
     'DOWN': {
+        412,  # escada(trapdoor)
+        437, # escada
         385, # buraco
         604, # buraco descer
         469, # rampa montanha

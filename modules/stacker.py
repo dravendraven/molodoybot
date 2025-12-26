@@ -3,10 +3,10 @@ from core.packet import PacketManager, get_container_pos
 from core.packet_mutex import PacketMutex
 from utils.timing import gauss_wait
 from core.bot_state import state
-# NOTA: scan_containers é importado LAZY dentro da função auto_stack_items()
+# NOTA: imports de auto_loot são LAZY dentro da função auto_stack_items()
 # para evitar circular import com auto_loot.py
 
-def auto_stack_items(pm, base_addr, hwnd, my_containers_count=MY_CONTAINERS_COUNT, mutex_context=None):
+def auto_stack_items(pm, base_addr, hwnd, my_containers_count=None, mutex_context=None):
     """
     Agrupa itens empilháveis via Pacotes.
 
@@ -14,7 +14,7 @@ def auto_stack_items(pm, base_addr, hwnd, my_containers_count=MY_CONTAINERS_COUN
         pm: Memory reader instance
         base_addr: Base address of player in memory
         hwnd: Window handle
-        my_containers_count: Número de containers próprios
+        my_containers_count: Número de containers próprios (None = detecção automática)
         mutex_context: Contexto de mutex externo (ex: fisher_ctx) para reutilizar lock
     """
     # Protege ciclo de runemaking - não stacka durante runemaking
@@ -22,10 +22,20 @@ def auto_stack_items(pm, base_addr, hwnd, my_containers_count=MY_CONTAINERS_COUN
         return False
 
     # Import lazy para evitar circular import
-    from modules.auto_loot import scan_containers
+    from modules.auto_loot import scan_containers, get_player_containers, USE_AUTO_CONTAINER_DETECTION
     containers = scan_containers(pm, base_addr)
-    limit = int(my_containers_count)
-    my_containers = containers[:limit]
+
+    # Determina containers do player
+    if my_containers_count is not None:
+        # Parâmetro explícito: usa sistema antigo (compatibilidade)
+        limit = int(my_containers_count)
+        my_containers = [c for c in containers if c.index < limit]
+    elif USE_AUTO_CONTAINER_DETECTION:
+        # Detecção automática via hasparent + tracking temporal
+        my_containers = get_player_containers(containers)
+    else:
+        # Fallback: config padrão
+        my_containers = [c for c in containers if c.index < MY_CONTAINERS_COUNT]
 
     # PacketManager para envio de pacotes
     packet = PacketManager(pm, base_addr)
