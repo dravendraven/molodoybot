@@ -140,7 +140,7 @@ BOT_SETTINGS = {
     "ks_prevention_enabled": True,
 
     # Console Log
-    "console_log_visible": True
+    "console_log_visible": False  # Default: Status Panel visível, Console Log escondido
 }
 
 _cached_player_name = ""
@@ -233,6 +233,27 @@ minimap_image_ref = None
 
 # Log visibility toggle (inicializado após load_config)
 log_visible = True  # Será atualizado por BOT_SETTINGS['console_log_visible']
+
+# ==============================================================================
+# STATUS PANEL - Status em tempo real por módulo
+# ==============================================================================
+MODULE_STATUS = {
+    'trainer': "",      # Atualizado por trainer_loop via callback
+    'runemaker': "",    # Atualizado por runemaker_loop via callback
+    'fisher': "",       # Atualizado por fishing_loop via callback
+    'cavebot': "",      # Lido de cavebot_instance.state_message
+}
+
+MODULE_ICONS = {
+    'trainer': "🎯",
+    'runemaker': "🔮",
+    'fisher': "🎣",
+    'cavebot': "🤖",
+}
+
+# Widgets do Status Panel (inicializados na criação da GUI)
+frame_status_panel = None
+status_labels = {}
 
 # ==============================================================================
 # 4. FUNÇÕES UTILITÁRIAS E HELPERS
@@ -929,9 +950,14 @@ def start_trainer_thread():
             hwnd = win32gui.FindWindow("TibiaClient", None) or win32gui.FindWindow(None, "Tibia")
 
         try:
+            # Callback para atualizar status do trainer
+            def update_trainer_status(status):
+                MODULE_STATUS['trainer'] = status
+
             # Chama a função principal do módulo novo
-            trainer_loop(pm, base_addr, hwnd, monitor, check_running, config_provider)
-            
+            trainer_loop(pm, base_addr, hwnd, monitor, check_running, config_provider,
+                        status_callback=update_trainer_status)
+
             # Se a função retornar (ex: desconectou), espera um pouco antes de tentar de novo
             time.sleep(1)
             
@@ -1256,12 +1282,17 @@ def auto_fisher_thread():
             hwnd = win32gui.FindWindow("TibiaClient", None) or win32gui.FindWindow(None, "Tibia")
 
         try:
+            # Callback para atualizar status do fisher
+            def update_fisher_status(status):
+                MODULE_STATUS['fisher'] = status
+
             # Chamamos o loop passando o provider em vez dos valores fixos
-            fishing_loop(pm, base_addr, hwnd, 
-                         check_running=should_fish, 
+            fishing_loop(pm, base_addr, hwnd,
+                         check_running=should_fish,
                          log_callback=log,
                          debug_hud_callback=update_fisher_hud,
-                         config=config_provider) # <--- AQUI
+                         config=config_provider,
+                         status_callback=update_fisher_status)
             
             time.sleep(1)
             
@@ -1326,15 +1357,20 @@ def runemaker_thread():
         if pm is None: time.sleep(1); continue
         if hwnd == 0: hwnd = win32gui.FindWindow("TibiaClient", None) or win32gui.FindWindow(None, "Tibia")
 
-        try:           
-            runemaker_loop(pm, base_addr, hwnd, 
-                           check_running=should_run, 
-                           config=config_provider, # <--- MUDANÇA AQUI
+        try:
+            # Callback para atualizar status do runemaker
+            def update_runemaker_status(status):
+                MODULE_STATUS['runemaker'] = status
+
+            runemaker_loop(pm, base_addr, hwnd,
+                           check_running=should_run,
+                           config=config_provider,
                            is_safe_callback=check_safety,
                            is_gm_callback=check_gm,
                            log_callback=log,
-                           eat_callback=on_eat_callback)
-            
+                           eat_callback=on_eat_callback,
+                           status_callback=update_runemaker_status)
+
             time.sleep(1)
         except Exception as e:
             print(f"Erro Runemaker: {e}")
@@ -1569,6 +1605,13 @@ def gui_updater_loop():
             except Exception as e:
                 print(f"Erro Plot: {e}")
 
+        # --- ATUALIZAÇÃO DO STATUS PANEL (se compact UI ativo) ---
+        try:
+            if 'update_status_panel' in dir() or 'update_status_panel' in globals():
+                update_status_panel()
+        except Exception as e:
+            pass  # Status panel ainda não criado
+
         for _ in range(5):
             if not state.is_running: break
             time.sleep(1)
@@ -1581,7 +1624,7 @@ def update_stats_visibility():
     """
     voc = BOT_SETTINGS['vocation']
     is_mage = any(x in voc for x in ["Elder", "Master", "Druid", "Sorcerer", "Mage", "None"])
-    
+
     # Precisamos da variável global para saber se o gráfico estava aberto
     global is_graph_visible
 
@@ -1591,11 +1634,11 @@ def update_stats_visibility():
         frame_sw_det.grid_remove()
         box_shield.grid_remove()
         frame_sh_det.grid_remove()
-        
+
         # 2. Se o gráfico estiver aberto, fecha ele primeiro para resetar o tamanho da janela
         if is_graph_visible:
-            toggle_graph() 
-        
+            toggle_graph()
+
         # 3. Esconde o Container do Botão de Gráfico (Remove da tela)
         frame_graphs_container.pack_forget()
 
@@ -1607,10 +1650,8 @@ def update_stats_visibility():
         frame_sh_det.grid(row=5, column=1, padx=10, sticky="e")
 
         # 2. Mostra o Container do Gráfico novamente
-        # Usamos 'after=frame_stats' para garantir que ele volte para o lugar certo (abaixo dos stats)
-        # Se ele já estiver visível, o pack apenas atualiza, sem duplicar
         frame_graphs_container.pack(padx=10, pady=(5, 0), fill="x", after=frame_stats)
-    
+
     auto_resize_window()
 
 def auto_resize_window():
@@ -1618,29 +1659,96 @@ def auto_resize_window():
     Calcula o tamanho necessário para o conteúdo e ajusta a janela.
     Mantém a largura fixa em 320.
     """
-    # 1. Força a interface a processar as mudanças pendentes (esconder/mostrar widgets)
-    app.update_idletasks()
-    
-    # 2. Pega a altura requisitada pelo Frame Principal
-    # Adicionamos um pequeno buffer (+10 ou +20) para a borda da janela não colar no log
-    needed_height = main_frame.winfo_reqheight() + 10
-    
-    # 3. Aplica a nova geometria
-    app.geometry(f"320x{needed_height}")
+    def do_resize():
+        # Força a interface a processar as mudanças pendentes
+        app.update_idletasks()
+        # Pega a altura requisitada pelo Frame Principal
+        h = main_frame.winfo_reqheight() + 12
+        app.geometry(f"320x{h}")
+
+    # Agendar resize para o próximo ciclo do event loop
+    # Isso garante que todos os widgets foram renderizados
+    app.after(10, do_resize)
 
 def toggle_log_visibility():
-    """Toggle log console visibility."""
-    global log_visible, txt_log
+    """
+    Toggle entre Console Log e Status Panel.
+    - Console Log ON: Mostra log tradicional, esconde status panel
+    - Console Log OFF: Mostra status panel, esconde log
+    """
+    global log_visible, txt_log, frame_status_panel
 
     log_visible = not log_visible
     BOT_SETTINGS['console_log_visible'] = log_visible
 
     if log_visible:
+        # Console Log ativo - esconder status panel
+        if frame_status_panel:
+            frame_status_panel.pack_forget()
         txt_log.pack(side="bottom", fill="x", padx=5, pady=5, expand=True)
-        log("📝 Log console mostrado")
+        log("📝 Console Log ativado")
     else:
+        # Status Panel ativo - esconder console log
         txt_log.pack_forget()
-        # Mensagem será logada quando a visibilidade for ativada novamente
+        if frame_status_panel:
+            frame_status_panel.pack(side="bottom", fill="x", padx=8, pady=3)
+            update_status_panel()
+
+    auto_resize_window()
+
+def update_status_panel():
+    """
+    Atualiza os labels do Status Panel baseado nos módulos ativos.
+    Chamada periodicamente pelo gui_updater_loop.
+    """
+    global frame_status_panel, status_labels, cavebot_instance
+
+    # Se console log está ativo ou status panel não existe, não atualiza
+    if log_visible or not frame_status_panel:
+        return
+
+    # Atualizar status do cavebot da instância
+    if cavebot_instance and hasattr(cavebot_instance, 'state_message'):
+        MODULE_STATUS['cavebot'] = cavebot_instance.state_message or ""
+
+    # Verificar quais módulos estão ativos
+    active_modules = []
+    try:
+        if switch_trainer.get():
+            active_modules.append('trainer')
+        if switch_runemaker.get():
+            active_modules.append('runemaker')
+        if switch_fisher.get():
+            active_modules.append('fisher')
+        if switch_cavebot_var.get():
+            active_modules.append('cavebot')
+    except:
+        pass  # Widgets ainda não criados
+
+    # Esconder todos os labels primeiro
+    for module, label in status_labels.items():
+        label.pack_forget()
+
+    # Mostrar apenas os ativos com status
+    shown = False
+    for module in active_modules:
+        status = MODULE_STATUS.get(module, "")
+        if status:
+            icon = MODULE_ICONS.get(module, "•")
+            # Truncar status se muito longo
+            if len(status) > 45:
+                status = status[:42] + "..."
+            status_labels[module].configure(text=f"{icon} {module.capitalize()}: {status}")
+            status_labels[module].pack(fill="x", padx=8, pady=1, anchor="w")
+            shown = True
+
+    # Se nenhum módulo ativo ou sem status, mostrar mensagem padrão
+    if not shown:
+        if active_modules:
+            status_labels['trainer'].configure(text="⏳ Aguardando atividade...")
+        else:
+            status_labels['trainer'].configure(text="💤 Nenhum módulo ativo")
+        status_labels['trainer'].pack(fill="x", padx=8, pady=2, anchor="w")
 
 def open_settings():
     global toplevel_settings, lbl_status, txt_waypoints_settings, entry_waypoint_name, combo_cavebot_scripts, current_waypoints_filename, label_cavebot_status
@@ -2857,16 +2965,21 @@ except:
 main_frame = ctk.CTkFrame(app, fg_color="transparent")
 main_frame.pack(fill="both", expand=True)
 
+# ==============================================================================
+# GUI CONDICIONAL: COMPACT vs ORIGINAL
+# ==============================================================================
 # HEADER
 frame_header = ctk.CTkFrame(main_frame, fg_color="transparent")
 frame_header.pack(pady=(10, 5), fill="x", padx=10)
 
-btn_xray = ctk.CTkButton(frame_header, text="Raio-X", command=toggle_xray, width=25, height=25, fg_color="#303030", font=("Verdana", 10))
+btn_xray = ctk.CTkButton(frame_header, text="Raio-X", command=toggle_xray,
+                         width=25, height=25, fg_color="#303030", font=("Verdana", 10))
 btn_xray.pack(side="right", padx=5)
 
-# Botão de Reload (visível apenas se RELOAD_BUTTON = True em config.py)
 if config.RELOAD_BUTTON:
-    btn_reload = ctk.CTkButton(frame_header, text="🔄", command=on_reload, width=35, height=25, fg_color="#303030", hover_color="#505050", font=("Verdana", 10))
+    btn_reload = ctk.CTkButton(frame_header, text="🔄", command=on_reload,
+                               width=35, height=25, fg_color="#303030", hover_color="#505050",
+                               font=("Verdana", 10))
     btn_reload.pack(side="right", padx=5)
 
 btn_settings = ctk.CTkButton(frame_header, text="⚙️ Config.", command=open_settings,
@@ -2874,38 +2987,40 @@ btn_settings = ctk.CTkButton(frame_header, text="⚙️ Config.", command=open_s
                              font=("Verdana", 11, "bold"))
 btn_settings.pack(side="left")
 
-lbl_connection = ctk.CTkLabel(frame_header, text="🔌 Procurando...", 
+lbl_connection = ctk.CTkLabel(frame_header, text="🔌 Procurando...",
                               font=("Verdana", 11, "bold"), text_color="#FFA500")
 lbl_connection.pack(side="right", padx=5)
 
 # CONTROLES (TOGGLE)
-frame_controls = ctk.CTkFrame(main_frame, fg_color="#303030")
+frame_controls = ctk.CTkFrame(main_frame, fg_color="#303030", corner_radius=6)
 frame_controls.pack(padx=10, pady=5, fill="x")
-
 frame_controls.grid_columnconfigure(0, weight=1)
 frame_controls.grid_columnconfigure(1, weight=1)
 
-switch_trainer = ctk.CTkSwitch(frame_controls, text="Trainer", progress_color="#00C000", font=("Verdana", 11))
+switch_trainer = ctk.CTkSwitch(frame_controls, text="Trainer",
+                               progress_color="#00C000", font=("Verdana", 11))
 switch_trainer.grid(row=0, column=0, sticky="w", padx=(20, 0), pady=5)
 
-switch_loot = ctk.CTkSwitch(frame_controls, text="Auto Loot", progress_color="#00C000", font=("Verdana", 11))
+switch_loot = ctk.CTkSwitch(frame_controls, text="Auto Loot",
+                            progress_color="#00C000", font=("Verdana", 11))
 switch_loot.grid(row=1, column=0, sticky="w", padx=(20, 0), pady=5)
 
-switch_alarm = ctk.CTkSwitch(frame_controls, text="Alarm", progress_color="#00C000", font=("Verdana", 11))
+switch_alarm = ctk.CTkSwitch(frame_controls, text="Alarm",
+                             progress_color="#00C000", font=("Verdana", 11))
 switch_alarm.grid(row=0, column=1, sticky="w", padx=(10, 0), pady=5)
 
-switch_fisher = ctk.CTkSwitch(frame_controls, text="Auto Fisher", command=on_fisher_toggle, progress_color="#00C000", font=("Verdana", 11))
+switch_fisher = ctk.CTkSwitch(frame_controls, text="Auto Fisher", command=on_fisher_toggle,
+                              progress_color="#00C000", font=("Verdana", 11))
 switch_fisher.grid(row=1, column=1, sticky="w", padx=(10, 0), pady=5)
 
-switch_runemaker = ctk.CTkSwitch(frame_controls, text="Runemaker", progress_color="#A54EF9", font=("Verdana", 11))
+switch_runemaker = ctk.CTkSwitch(frame_controls, text="Runemaker",
+                                 progress_color="#A54EF9", font=("Verdana", 11))
 switch_runemaker.grid(row=2, column=0, sticky="w", padx=(20, 0), pady=5)
 
 switch_cavebot_var = ctk.IntVar(value=0)
-switch_cavebot = ctk.CTkSwitch(frame_controls, text="Cavebot", 
-                              variable=switch_cavebot_var, 
-                              command=toggle_cavebot_func,
-                              progress_color="#2CC985", 
-                              font=("Verdana", 11))
+switch_cavebot = ctk.CTkSwitch(frame_controls, text="Cavebot",
+                               variable=switch_cavebot_var, command=toggle_cavebot_func,
+                               progress_color="#2CC985", font=("Verdana", 11))
 switch_cavebot.grid(row=2, column=1, sticky="w", padx=(10, 0), pady=5)
 
 
@@ -2933,16 +3048,11 @@ lbl_regen = ctk.CTkLabel(frame_stats, text="🍖 --:--", font=("Verdana", 10, "b
 lbl_regen.grid(row=2, column=0, padx=10, pady=2, sticky="w")
 
 # LINHA 3: RECURSOS (Gold + Regen Stock)
-# Usamos um frame container para organizar Esquerda vs Direita
 frame_resources = ctk.CTkFrame(frame_stats, fg_color="transparent")
 frame_resources.grid(row=3, column=0, columnspan=2, sticky="ew", padx=10, pady=2)
 
-# Coluna Esquerda: Regen Stock
 lbl_regen_stock = ctk.CTkLabel(frame_resources, text="🍖 --", font=("Verdana", 10))
 lbl_regen_stock.pack(side="left", padx=(0, 10))
-
-# Coluna Direita: Gold (Usamos um sub-frame ou pack side right para alinhar no fim)
-# Para garantir que fique na direita, podemos usar pack(side="right") nos elementos de gold
 
 lbl_gold_rate = ctk.CTkLabel(frame_resources, text="0 gp/h", font=("Verdana", 10), text_color="gray")
 lbl_gold_rate.pack(side="right")
@@ -2955,7 +3065,7 @@ box_sword = ctk.CTkFrame(frame_stats, fg_color="transparent")
 box_sword.grid(row=4, column=0, padx=10, sticky="w")
 ctk.CTkLabel(box_sword, text="Sword:", font=("Verdana", 11)).pack(side="left")
 lbl_sword_val = ctk.CTkLabel(box_sword, text="--", font=("Verdana", 11, "bold"), text_color="#4EA5F9")
-lbl_sword_val.pack(side="left", padx=(5, 0)) 
+lbl_sword_val.pack(side="left", padx=(5, 0))
 
 frame_sw_det = ctk.CTkFrame(frame_stats, fg_color="transparent")
 frame_sw_det.grid(row=4, column=1, padx=10, sticky="e")
@@ -2982,7 +3092,7 @@ lbl_shield_time.pack(side="left")
 box_magic = ctk.CTkFrame(frame_stats, fg_color="transparent")
 box_magic.grid(row=6, column=0, padx=10, sticky="w")
 ctk.CTkLabel(box_magic, text="ML:", font=("Verdana", 11)).pack(side="left")
-lbl_magic_val = ctk.CTkLabel(box_magic, text="--", font=("Verdana", 11, "bold"), text_color="#A54EF9") 
+lbl_magic_val = ctk.CTkLabel(box_magic, text="--", font=("Verdana", 11, "bold"), text_color="#A54EF9")
 lbl_magic_val.pack(side="left", padx=(5, 0))
 
 frame_ml_det = ctk.CTkFrame(frame_stats, fg_color="transparent")
@@ -2993,14 +3103,14 @@ lbl_magic_time = ctk.CTkLabel(frame_ml_det, text="ETA: --", font=("Verdana", 10)
 lbl_magic_time.pack(side="left")
 
 # GRAPH
-frame_graphs_container = ctk.CTkFrame(main_frame, fg_color="transparent", 
-                                      border_width=0, border_color="#303030", 
+frame_graphs_container = ctk.CTkFrame(main_frame, fg_color="transparent",
+                                      border_width=0, border_color="#303030",
                                       corner_radius=0)
 frame_graphs_container.pack(padx=10, pady=(5, 0), fill="x")
-
-btn_graph = ctk.CTkButton(frame_graphs_container, text="Mostrar Gráfico 📈", command=toggle_graph, 
-                          fg_color="#202020", hover_color="#303030", 
+btn_graph = ctk.CTkButton(frame_graphs_container, text="Mostrar Gráfico 📈", command=toggle_graph,
+                          fg_color="#202020", hover_color="#303030",
                           height=25, corner_radius=6, border_width=0)
+
 btn_graph.pack(side="top", fill="x", padx=1, pady=0)
 
 frame_graph = ctk.CTkFrame(frame_graphs_container, fg_color="transparent", corner_radius=6)
@@ -3009,10 +3119,10 @@ frame_graph = ctk.CTkFrame(frame_graphs_container, fg_color="transparent", corne
 plt, FigureCanvasTkAgg = setup_matplotlib()
 plt.style.use('dark_background')
 fig, ax = plt.subplots(figsize=(4, 1.6), dpi=100, facecolor='#2B2B2B')
-fig.patch.set_facecolor('#202020') 
+fig.patch.set_facecolor('#202020')
 ax.set_facecolor('#202020')
 ax.tick_params(axis='x', colors='gray', labelsize=6, pad=2)
-ax.tick_params(axis='y', colors='gray', labelsize=6, pad=2)    
+ax.tick_params(axis='y', colors='gray', labelsize=6, pad=2)
 ax.spines['top'].set_visible(False)
 ax.spines['right'].set_visible(False)
 ax.spines['bottom'].set_color('#404040')
@@ -3026,12 +3136,35 @@ widget.pack(fill="both", expand=True, padx=1, pady=2)
 # MINIMAP PANEL
 create_minimap_panel()
 
-# LOG
-# Sincroniza log_visible com BOT_SETTINGS
-log_visible = BOT_SETTINGS.get('console_log_visible', True)
-txt_log = ctk.CTkTextbox(main_frame, height=120, font=("Consolas", 11), fg_color="#151515", text_color="#00FF00", border_width=1)
+# ==============================================================================
+# STATUS PANEL - Mostra status em tempo real por módulo ativo
+# ==============================================================================
+frame_status_panel = ctk.CTkFrame(main_frame, fg_color="#1a1a1a",
+                                   border_color="#303030", border_width=1,
+                                   corner_radius=6)
+# Criar labels para cada módulo
+for module in ['trainer', 'runemaker', 'fisher', 'cavebot']:
+    status_labels[module] = ctk.CTkLabel(
+        frame_status_panel,
+        text="",
+        font=("Consolas", 10),
+        text_color="#AAAAAA",
+        anchor="w"
+    )
+    # NÃO pack() - visibilidade controlada por update_status_panel()
+
+# LOG / STATUS PANEL
+# Sincroniza log_visible com BOT_SETTINGS (False = mostra Status Panel, True = mostra Log)
+log_visible = BOT_SETTINGS.get('console_log_visible', False)
+
+txt_log = ctk.CTkTextbox(main_frame, height=120, font=("Consolas", 11),
+                         fg_color="#151515", text_color="#00FF00", border_width=1)
+
 if log_visible:
     txt_log.pack(side="bottom", fill="x", padx=5, pady=5, expand=True)
+else:
+    # Mostrar Status Panel por padrão
+    frame_status_panel.pack(side="bottom", fill="x", padx=8, pady=3)
 
 # ==============================================================================
 # 8. EXECUÇÃO PRINCIPAL
@@ -3058,6 +3191,12 @@ update_stats_visibility()
 
 # Iniciar loop de atualização do minimap
 app.after(1000, update_minimap_loop)
+
+# Forçar resize inicial para eliminar espaço vazio
+app.update_idletasks()
+h = main_frame.winfo_reqheight() + 12
+app.geometry(f"320x{h}")
+update_status_panel()
 
 log("🚀 Iniciado.")
 app.mainloop()

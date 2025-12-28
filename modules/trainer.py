@@ -411,7 +411,18 @@ class EngagementDetector:
 
         return (False, None)
 
-def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
+def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_callback=None):
+    """
+    Loop principal do trainer.
+    status_callback: função opcional para reportar status ao Status Panel (ex: "atacando Troll")
+    """
+    def set_status(msg):
+        """Helper para atualizar status do módulo."""
+        if status_callback:
+            try:
+                status_callback(msg)
+            except:
+                pass
 
     get_cfg = make_config_getter(config)
 
@@ -965,6 +976,9 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
                         delay = random.uniform(min_delay, max_delay)
                         next_attack_time = time.time() + delay
                         log(f"⏳ Aguardando {delay:.2f}s para atacar...")
+                        # Status: aguardando delay
+                        target_name = final_candidates[0]['name'] if final_candidates else "alvo"
+                        set_status(f"delay {delay:.1f}s → {target_name}")
 
                     if time.time() >= next_attack_time:
                         # RE-VALIDAÇÃO KS: Verifica engagement no momento do ataque
@@ -998,6 +1012,7 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
 
                         if best and best["id"] != current_target_id:
                             log(f"⚔️ ATACANDO: {best['name']}")
+                            set_status(f"atacando {best['name']}")
                             packet.attack(best["id"])
 
                             current_target_id = best["id"]
@@ -1014,12 +1029,15 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config):
             # Throttle dinâmico baseado no estado
             if current_target_id != 0:
                 # EM COMBATE: scan máximo para reagir rápido a mudanças
+                if last_target_data:
+                    set_status(f"em combate: {last_target_data.get('name', '?')} ({last_target_data.get('hp', 0)}%)")
                 time.sleep(SCAN_DELAY_COMBAT)
             elif len(valid_candidates) > 0:
                 # TEM ALVOS: scan médio (vai atacar em breve após delay humanizado)
                 time.sleep(SCAN_DELAY_TARGETS)
             else:
                 # SEM ALVOS: scan lento (só monitorando battle list)
+                set_status("procurando alvos...")
                 time.sleep(SCAN_DELAY_IDLE)
 
         except Exception as e:

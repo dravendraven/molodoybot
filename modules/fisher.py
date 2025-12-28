@@ -70,9 +70,20 @@ def get_rod_packet_position(pm, base_addr):
 # ==============================================================================
 
 def fishing_loop(pm, base_addr, hwnd, check_running=None, log_callback=None,
-                 debug_hud_callback=None, config=None):
-
+                 debug_hud_callback=None, config=None, status_callback=None):
+    """
+    Loop principal do fisher.
+    status_callback: função opcional para reportar status ao Status Panel
+    """
     get_cfg = make_config_getter(config)
+
+    def set_status(msg):
+        """Helper para atualizar status do módulo."""
+        if status_callback:
+            try:
+                status_callback(msg)
+            except:
+                pass
 
     def log_msg(text):
         timestamp = time.strftime("%H:%M:%S")
@@ -181,6 +192,7 @@ def fishing_loop(pm, base_addr, hwnd, check_running=None, log_callback=None,
                         log_msg(f"⛔ Cap baixa ({cap_now:.1f} oz). Pausando...")
                         cap_paused = True
                         if debug_hud_callback: debug_hud_callback([])
+                    set_status(f"aguardando cap ({cap_now:.0f}/{current_min_cap:.0f} oz)")
                     time.sleep(2)
                     continue
                 else:
@@ -321,6 +333,9 @@ def fishing_loop(pm, base_addr, hwnd, check_running=None, log_callback=None,
 
             cap_before = get_player_cap(pm, base_addr)
 
+            # Status: pescando
+            set_status(f"pescando... ({session_fish_caught}/{session_total_casts})")
+
             # --- PACKET MUTEX: Evita conflito com outros módulos (Runemaker, etc) ---
             with PacketMutex("fisher") as fisher_ctx:
                 packet.use_with(rod_pos, ROD_ID, 0, water_pos, water_id, 0,
@@ -379,6 +394,7 @@ def fishing_loop(pm, base_addr, hwnd, check_running=None, log_callback=None,
 
                 # LOG GLOBAL ATUALIZADO
                 log_msg(f"✅ PEIXE! [{session_fish_caught}/{session_total_casts}]")
+                set_status(f"peixe! ({session_fish_caught}/{session_total_casts})")
 
                 fishing_db.mark_fish_caught(abs_x, abs_y, pz)
                 auto_stack_items(pm, base_addr, hwnd)

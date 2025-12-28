@@ -209,9 +209,20 @@ def get_target_id(pm, base_addr):
     except:
         return 0
     
-def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe_callback=None, is_gm_callback=None, log_callback=None, eat_callback=None):
-
+def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe_callback=None, is_gm_callback=None, log_callback=None, eat_callback=None, status_callback=None):
+    """
+    Loop principal do runemaker.
+    status_callback: função opcional para reportar status ao Status Panel
+    """
     get_cfg = make_config_getter(config)
+
+    def set_status(msg):
+        """Helper para atualizar status do módulo."""
+        if status_callback:
+            try:
+                status_callback(msg)
+            except:
+                pass
 
     def log_msg(text):
         timestamp = time.strftime("%H:%M:%S")
@@ -269,6 +280,7 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
         if is_gm:
             # Se for GM, paramos TUDO. Não movemos.
             # O estado de movimento também é ignorado.
+            set_status("⚠️ GM detectado - pausado")
             if time.time() - last_log_wait > 5:
                 log_msg("👮 GM DETECTADO! Congelando ações...")
                 packet.stop()
@@ -285,11 +297,13 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                 if flee_delay > 0:
                     wait = random.uniform(flee_delay, flee_delay * 1.2)
                     log_msg(f"🚨 PERIGO! Reagindo em {wait:.1f}s...")
+                    set_status(f"reagindo em {wait:.1f}s...")
                     time.sleep(wait)
-                
+
                 log_msg("🏃 Fugindo para Safe Spot...")
                 current_state = STATE_FLEEING
-            
+
+            set_status("fugindo para safe spot...")
             # Movimento para Safe
             move_to_coord_hybrid(pm, base_addr, hwnd, safe_pos, log_func=None)
             time.sleep(0.5)
@@ -305,11 +319,14 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
 
         if current_state == STATE_RETURNING:
             if time.time() < return_timer_start:
+                remaining = int(return_timer_start - time.time())
+                set_status(f"retornando em {remaining}s...")
                 time.sleep(1)
                 continue
             else:
                 if enable_move:
                     log_msg("🚶 Voltando para o Work Spot...")
+                    set_status("voltando ao work spot...")
                     arrived = move_to_coord_hybrid(pm, base_addr, hwnd, work_pos, log_func=None)
                     if arrived:
                         current_state = STATE_WORKING
@@ -394,7 +411,7 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
         # 4. Fabricação de Runas
         try:
             curr_mana = pm.read_int(base_addr + OFFSET_PLAYER_MANA)
-            
+
             if curr_mana >= mana_req:
                 if next_cast_time == 0:
                     h_min = get_cfg('human_min', 2)
@@ -405,6 +422,7 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
 
                 if time.time() >= next_cast_time:
                     log_msg(f"⚡ Mana ok ({curr_mana}). Fabricando...")
+                    set_status("fabricando runa...")
                     state.set_runemaking(True)
 
                     try:
@@ -502,7 +520,14 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                                 next_cast_time = 0
                     finally:
                         state.set_runemaking(False)
+                else:
+                    # Countdown em tempo real enquanto aguarda delay
+                    remaining = int(next_cast_time - time.time())
+                    if remaining > 0:
+                        set_status(f"mana cheia, cast em {remaining}s")
             else:
+                # Aguardando mana
+                set_status(f"aguardando mana ({curr_mana}/{mana_req})")
                 next_cast_time = 0
 
         except Exception as e:
