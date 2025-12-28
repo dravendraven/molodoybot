@@ -60,6 +60,7 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks):
     set_gm_state = callbacks.get('set_gm', lambda x: None)
     send_telegram = callbacks.get('telegram', lambda x: None)
     log_msg = callbacks.get('log', print)
+    logout_callback = callbacks.get('logout', lambda: None)
 
     last_telegram_time = 0
     last_hp_alert = 0 
@@ -95,6 +96,7 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks):
         chat_enabled = get_cfg('chat_enabled', False)
         chat_gm_enabled = get_cfg('chat_gm', True)
         debug_mode = get_cfg('debug_mode', False)
+        logout_enabled = get_cfg('logout_enabled', False)
 
         try:
             current_name = get_my_name(pm, base_addr)
@@ -220,8 +222,13 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks):
             
             if final_danger:
                 set_safe_state(False)
-                if final_is_gm: set_gm_state(True)
-                
+                if final_is_gm:
+                    set_gm_state(True)
+                else:
+                    # Alarme não-GM: executa logout imediato se habilitado
+                    if logout_enabled:
+                        logout_callback()
+
                 # Se detectou visualmente (chat já logou o dele)
                 if visual_danger:
                     log_msg(f"⚠️ PERIGO: {visual_danger_name}!")

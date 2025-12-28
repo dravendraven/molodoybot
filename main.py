@@ -108,7 +108,8 @@ BOT_SETTINGS = {
     "alarm_visual_enabled": True,   # <--- NOVO
     "alarm_chat_enabled": True,    # <--- NOVO
     "alarm_chat_gm": True,          # <--- NOVO
-    
+    "alarm_logout_enabled": False,  # Deslogar em caso de alarme (exceto GM)
+
     # Loot
     "loot_containers": 2,
     "loot_dest": 0,
@@ -996,7 +997,7 @@ def start_alarm_thread():
             if not state.is_gm_detected:  # Só dispara se não foi GM (evita sobrescrever)
                 state.trigger_alarm(is_gm=False, reason="DANGER")
         
-    def set_gm(val): 
+    def set_gm(val):
         """
         Callback chamado pelo alarm.py quando GM é detectado/liberado.
         """
@@ -1004,12 +1005,23 @@ def start_alarm_thread():
             # Dispara alarme marcando como GM
             state.trigger_alarm(is_gm=True, reason="GM")
         # Se val=False, o set_safe(True) já vai limpar via clear_alarm
-    
+
+    def do_logout():
+        """Callback para executar logout via packet."""
+        if pm is not None:
+            try:
+                pkt = packet.PacketManager(pm, base_addr)
+                pkt.quit_game()
+                log("🚪 LOGOUT: Alarme acionado - deslogando...")
+            except Exception as e:
+                print(f"Erro logout: {e}")
+
     callbacks = {
         'set_safe': set_safe,
         'set_gm': set_gm,
         'telegram': send_telegram,
-        'log': log
+        'log': log,
+        'logout': do_logout
     }
 
     # Config Provider
@@ -1023,7 +1035,8 @@ def start_alarm_thread():
         'visual_enabled': BOT_SETTINGS['alarm_visual_enabled'],
         'chat_enabled': BOT_SETTINGS['alarm_chat_enabled'],
         'chat_gm': BOT_SETTINGS['alarm_chat_gm'],
-        'debug_mode': BOT_SETTINGS['debug_mode']
+        'debug_mode': BOT_SETTINGS['debug_mode'],
+        'logout_enabled': BOT_SETTINGS.get('alarm_logout_enabled', False)
     }
 
     check_run = lambda: state.is_running and state.is_connected
@@ -2046,6 +2059,13 @@ def open_settings():
 
     ctk.CTkLabel(tab_alarm, text="↳ Detecta criaturas/players não-seguros na tela.", **UI['HINT']).pack(anchor="w", padx=45)
 
+    # --- LOGOUT ON ALARM ---
+    switch_logout_alarm = ctk.CTkSwitch(tab_alarm, text="Deslogar em caso de alarme", command=lambda: None, progress_color="#FF0000", **UI['BODY'])
+    switch_logout_alarm.pack(anchor="w", padx=UI['PAD_INDENT'], pady=2)
+    if BOT_SETTINGS.get('alarm_logout_enabled', False): switch_logout_alarm.select()
+
+    ctk.CTkLabel(tab_alarm, text="↳ Faz logout se detectar perigo (exceto GM).", **UI['HINT']).pack(anchor="w", padx=45)
+
     # Distância
     ctk.CTkLabel(frame_alarm, text="Distância (SQM):", **UI['BODY']).grid(row=0, column=0, sticky="e", padx=10, pady=UI['PAD_ITEM'])
     dist_vals = ["1 SQM", "3 SQM", "5 SQM", "8 SQM (Padrão)", "Tela Toda"]
@@ -2129,6 +2149,9 @@ def open_settings():
             # Chat
             BOT_SETTINGS['alarm_chat_enabled'] = bool(switch_chat.get())
             BOT_SETTINGS['alarm_chat_gm'] = bool(switch_gm_chat.get())
+
+            # Logout
+            BOT_SETTINGS['alarm_logout_enabled'] = bool(switch_logout_alarm.get())
 
             save_config_file()
             log(f"🔔 Alarme salvo.")

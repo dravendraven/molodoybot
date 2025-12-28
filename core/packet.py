@@ -34,6 +34,7 @@ OP_USE_ON = 0x83
 OP_EQUIP  = 0x77
 OP_LOOK   = 0x8C
 OP_CLOSE_CONTAINER = 0x87
+OP_QUIT_GAME = 0x14
 
 # Opcodes de Movimento (Walk)
 OP_WALK_NORTH = 0x65
@@ -460,3 +461,14 @@ class PacketManager:
         pb.add_call(FUNC_SEND_PACKET, 1)
 
         self.send_packet(pb.get_code(), PacketType.MOUSE)
+
+    def quit_game(self):
+        """
+        Envia pacote QuitGame (0x14) para deslogar do servidor.
+        O pacote é simples: apenas o opcode, sem dados adicionais.
+        """
+        pb = PacketBuilder()
+        pb.add_call(FUNC_CREATE_PACKET, OP_QUIT_GAME)
+        pb.add_call(FUNC_SEND_PACKET, 1)
+
+        self.send_packet(pb.get_code(), PacketType.ANY)
