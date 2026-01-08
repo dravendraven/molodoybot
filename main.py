@@ -1172,6 +1172,13 @@ def regen_monitor_loop():
 def auto_loot_thread():
     """Thread dedicada para verificar, coletar loot e organizar."""
     hwnd = 0
+    last_stack_time = 0       # Controla intervalo do stacker periódico
+    STACK_INTERVAL = 5        # Intervalo em segundos
+
+    # Detecção de movimento por posição
+    last_pos = (0, 0, 0)
+    last_pos_time = 0
+    MOVE_COOLDOWN = 1.5       # Segundos sem mover para considerar "parado" (> loop interval)
 
     config_provider = lambda: {
         'loot_containers': BOT_SETTINGS['loot_containers'],
@@ -1187,6 +1194,16 @@ def auto_loot_thread():
         if hwnd == 0: hwnd = win32gui.FindWindow("TibiaClient", None) or win32gui.FindWindow(None, "Tibia")
         
         try:
+            # Atualiza detecção de movimento
+            current_pos = get_player_pos(pm, base_addr)
+            current_time = time.time()
+
+            if current_pos != last_pos:
+                last_pos = current_pos
+                last_pos_time = current_time
+
+            is_moving = (current_time - last_pos_time) < MOVE_COOLDOWN
+
             # 1. Tenta Lootear
             did_loot = run_auto_loot(pm, base_addr, hwnd, config=config_provider)
             
@@ -1229,8 +1246,25 @@ def auto_loot_thread():
                 gauss_wait(0.5, 20)
                 continue
 
-            # 2. REMOVIDO: Stacker agora é chamado DENTRO do AutoLoot (após cada item coletado)
-            # O loop aguarda 1.0s se nenhum loot foi coletado
+            # 2. Stacker periódico (a cada 5 segundos)
+            # Só roda se NÃO estiver em movimento e sem conflitos
+            can_stack = (
+                current_time - last_stack_time >= STACK_INTERVAL and
+                # not is_moving and               # Não está andando
+                not state.has_open_loot and     # Não está processando loot
+                not state.is_runemaking         # Não está fazendo runa
+            )
+            # Nota: OK stackar em combate (não conflita com ataques)
+
+            if can_stack:
+                from modules.stacker import auto_stack_items
+                did_stack = auto_stack_items(pm, base_addr, hwnd)
+                if did_stack:
+                    # Se stackou algo, tenta novamente para agrupar mais
+                    while auto_stack_items(pm, base_addr, hwnd):
+                        gauss_wait(0.3, 20)
+                last_stack_time = current_time
+
             time.sleep(1.0)
 
         except Exception as e:

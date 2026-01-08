@@ -113,7 +113,7 @@ def track_loot_containers(containers):
     _loot_indices = _loot_indices & current_open
 
     for c in containers:
-        if c.name.startswith("Dead "):
+        if c.name.startswith("Dead ") or c.name.startswith("Slain "):
             # Corpo de criatura = sempre loot
             _loot_indices.add(c.index)
         elif c.hasparent == 1 and c.index in _loot_indices:
