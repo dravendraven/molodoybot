@@ -161,9 +161,29 @@ MY_CONTAINERS_COUNT = 2
 # # 0 = Primeira Backpack aberta
 DEST_CONTAINER_INDEX = 0 
 
-LOOT_IDS = [3031, 3035, 3043, 3578] # Gold, Plat, Crystal, Peixe
-FOOD_IDS = foods_db.get_food_ids()
+# ==============================================================================
+# FEATURE FLAGS
+# ==============================================================================
+# Flag para habilitar sistema de loot configurável
+# Se False, usa LOOT_IDS/DROP_IDS hardcoded (comportamento antigo)
+# Se True, usa sistema configurável via GUI com nomes de items
+USE_CONFIGURABLE_LOOT_SYSTEM = True
+
+# ==============================================================================
+# LOOT CONFIGURATION
+# ==============================================================================
+
+# MODO ANTIGO (quando USE_CONFIGURABLE_LOOT_SYSTEM = False)
+LOOT_IDS = [3031, 3035, 3043, 3578, 3054] # Gold, Plat, Crystal, Peixe, Silver Amuleto
 DROP_IDS = [3286, 3264, 3358, 3354, 3410] # Mace, Sword, Chain Armor, Brass Helmet, Plate Shield
+
+# MODO NOVO (quando USE_CONFIGURABLE_LOOT_SYSTEM = True)
+# Valores padrão para primeira execução
+DEFAULT_LOOT_NAMES = ["gold coins", "platinum coins", "crystal coins", "a fish"]
+DEFAULT_DROP_NAMES = ["a mace", "a sword", "chain armor", "brass helmet", "plate shield"]
+
+# Constantes sempre ativas (independente da flag)
+FOOD_IDS = foods_db.get_food_ids()
 LOOT_CONTAINER_IDS = [2853]
 
 # ==============================================================================
@@ -176,6 +196,9 @@ LOOT_CONTAINER_IDS = [2853]
 ROPE_SPOT_IGNORE_IDS = [
     2886, 2887, 2888, 2889, 2890, 2891, 2895, 2896, 2897, 2898, 2899, 2900
 ]
+
+# Criaturas que não devem ter o loot aberto (não possuem loot)
+NO_LOOT_CREATURES = ["Snake", "Wasp"]
 
 # ==============================================================================
 # GAME VIEW (Cálculo Automático do Mapa)

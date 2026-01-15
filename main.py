@@ -114,7 +114,9 @@ BOT_SETTINGS = {
     "loot_containers": 2,
     "loot_dest": 0,
     "loot_drop_food": False,
-    
+    "loot_names": ["gold coins", "platinum coins", "crystal coins", "a fish"],  # NOVO - Sistema configurável
+    "drop_names": ["a mace", "a sword", "chain armor", "brass helmet"],        # NOVO - Sistema configurável
+
     # Fisher
     "fisher_min": 4,
     "fisher_max": 6,
@@ -203,6 +205,22 @@ if os.path.exists("bot_config.json"):
             if "console_log_visible" not in BOT_SETTINGS:
                 BOT_SETTINGS["console_log_visible"] = True
 
+            # NOVO: Converter nomes → IDs ao carregar (só se flag ativa)
+            if USE_CONFIGURABLE_LOOT_SYSTEM:
+                from database import lootables_db
+
+                if 'loot_names' in BOT_SETTINGS:
+                    loot_ids = []
+                    for name in BOT_SETTINGS['loot_names']:
+                        loot_ids.extend(lootables_db.find_loot_by_name(name))
+                    BOT_SETTINGS['loot_ids'] = list(set(loot_ids))
+
+                if 'drop_names' in BOT_SETTINGS:
+                    drop_ids = []
+                    for name in BOT_SETTINGS['drop_names']:
+                        drop_ids.extend(lootables_db.find_loot_by_name(name))
+                    BOT_SETTINGS['drop_ids'] = list(set(drop_ids))
+
         print("Configurações carregadas.")
     except Exception as e:
         print(f"Erro ao carregar: {e}")
@@ -243,6 +261,7 @@ MODULE_STATUS = {
     'runemaker': "",    # Atualizado por runemaker_loop via callback
     'fisher': "",       # Atualizado por fishing_loop via callback
     'cavebot': "",      # Lido de cavebot_instance.state_message
+    'alarm': "",        # Atualizado por alarm_loop via callback
 }
 
 MODULE_ICONS = {
@@ -250,6 +269,7 @@ MODULE_ICONS = {
     'runemaker': "🔮",
     'fisher': "🎣",
     'cavebot': "🤖",
+    'alarm': "🔔",
 }
 
 # Widgets do Status Panel (inicializados na criação da GUI)
@@ -1016,6 +1036,10 @@ def start_alarm_thread():
             except Exception as e:
                 print(f"Erro logout: {e}")
 
+    def update_alarm_status(status):
+        """Callback para atualizar status do alarme na GUI."""
+        MODULE_STATUS['alarm'] = status
+
     callbacks = {
         'set_safe': set_safe,
         'set_gm': set_gm,
@@ -1046,7 +1070,8 @@ def start_alarm_thread():
         if pm is None: time.sleep(1); continue
 
         try:
-            alarm_loop(pm, base_addr, check_run, alarm_cfg, callbacks)
+            alarm_loop(pm, base_addr, check_run, alarm_cfg, callbacks,
+                      status_callback=update_alarm_status)
         except Exception as e:
             print(f"Alarm Thread Crash: {e}")
             time.sleep(5)
@@ -1180,11 +1205,23 @@ def auto_loot_thread():
     last_pos_time = 0
     MOVE_COOLDOWN = 1.5       # Segundos sem mover para considerar "parado" (> loop interval)
 
-    config_provider = lambda: {
-        'loot_containers': BOT_SETTINGS['loot_containers'],
-        'loot_dest': BOT_SETTINGS['loot_dest'],
-        'loot_drop_food': BOT_SETTINGS.get('loot_drop_food', False)
-    }
+    # Montar config provider com base na flag
+    if USE_CONFIGURABLE_LOOT_SYSTEM:
+        config_provider = lambda: {
+            'loot_containers': BOT_SETTINGS['loot_containers'],
+            'loot_dest': BOT_SETTINGS['loot_dest'],
+            'loot_drop_food': BOT_SETTINGS.get('loot_drop_food', False),
+            'loot_ids': BOT_SETTINGS.get('loot_ids', []),  # NOVO - da GUI
+            'drop_ids': BOT_SETTINGS.get('drop_ids', [])   # NOVO - da GUI
+        }
+    else:
+        # Modo antigo: não precisa passar loot_ids/drop_ids
+        # O auto_loot.py vai usar LOOT_IDS/DROP_IDS do config.py
+        config_provider = lambda: {
+            'loot_containers': BOT_SETTINGS['loot_containers'],
+            'loot_dest': BOT_SETTINGS['loot_dest'],
+            'loot_drop_food': BOT_SETTINGS.get('loot_drop_food', False)
+        }
 
     while state.is_running:
         if not state.is_connected: time.sleep(1); continue
@@ -1659,9 +1696,10 @@ def gui_updater_loop():
         except Exception as e:
             pass  # Status panel ainda não criado
 
-        for _ in range(5):
-            if not state.is_running: break
-            time.sleep(1)
+        # Atualização mais frequente (0.5s) para status em tempo real
+        if not state.is_running:
+            break
+        time.sleep(2)
 
 def update_stats_visibility():
     """
@@ -1769,6 +1807,8 @@ def update_status_panel():
             active_modules.append('fisher')
         if switch_cavebot_var.get():
             active_modules.append('cavebot')
+        if switch_alarm.get():
+            active_modules.append('alarm')
     except:
         pass  # Widgets ainda não criados
 
@@ -1796,6 +1836,9 @@ def update_status_panel():
         else:
             status_labels['trainer'].configure(text="💤 Nenhum módulo ativo")
         status_labels['trainer'].pack(fill="x", padx=8, pady=2, anchor="w")
+
+    # Ajustar altura da janela após mostrar/esconder labels
+    auto_resize_window()
 
 def open_settings():
     global toplevel_settings, lbl_status, txt_waypoints_settings, entry_waypoint_name, combo_cavebot_scripts, current_waypoints_filename, label_cavebot_status
@@ -2217,33 +2260,61 @@ def open_settings():
     # ==========================================================================
     # 5. ABA LOOT
     # ==========================================================================
-    ctk.CTkLabel(tab_loot, text="Configuração de BPs:", **UI['H1']).pack(pady=(10,5))
+    ctk.CTkLabel(tab_loot, text="Configuração de BPs:", **UI['H1']).pack(pady=(5,2))
 
     # Campo "Minhas BPs" - só aparece se detecção automática estiver DESABILITADA
     if not USE_AUTO_CONTAINER_DETECTION:
         ctk.CTkLabel(tab_loot, text="Minhas BPs (Não lootear):", **UI['BODY']).pack()
         entry_cont_count = ctk.CTkEntry(tab_loot, **UI['INPUT'])
-        entry_cont_count.pack(pady=2)
+        entry_cont_count.pack(pady=1)
         entry_cont_count.insert(0, str(BOT_SETTINGS['loot_containers']))
     else:
         entry_cont_count = None  # Placeholder para evitar erro no save_loot
-        ctk.CTkLabel(tab_loot, text="Detecção automática de containers ativada", **UI['HINT']).pack(pady=5)
 
-    ctk.CTkLabel(tab_loot, text="Índice Destino:", **UI['BODY']).pack(pady=(10,0))
-    entry_dest_idx = ctk.CTkEntry(tab_loot, **UI['INPUT'])
-    entry_dest_idx.pack(pady=2)
+    # Frame horizontal para Índice Destino (label + input na mesma linha)
+    frame_dest = ctk.CTkFrame(tab_loot, fg_color="transparent")
+    frame_dest.pack(fill="x", padx=10, pady=(5,2))
+
+    ctk.CTkLabel(frame_dest, text="Índice Destino:", **UI['BODY']).pack(side="left", padx=(0,5))
+    # Cria dict com width customizado para evitar conflito
+    entry_style = {**UI['INPUT'], 'width': 60}
+    entry_dest_idx = ctk.CTkEntry(frame_dest, **entry_style)
+    entry_dest_idx.pack(side="left")
     entry_dest_idx.insert(0, str(BOT_SETTINGS['loot_dest']))
-    ctk.CTkLabel(tab_loot, text="Para qual BP irá o loot (0=primeira, 1=segunda, etc)", **UI['HINT']).pack() 
+    ctk.CTkLabel(frame_dest, text="(0=primeira BP, 1=segunda, etc)", **UI['HINT']).pack(side="left", padx=(5,0))
 
     # Options
     frame_loot_opts = ctk.CTkFrame(tab_loot, fg_color="transparent")
-    frame_loot_opts.pack(fill="x", padx=10, pady=15)
+    frame_loot_opts.pack(fill="x", padx=10, pady=5)
 
     def toggle_drop_food(): pass
-    
+
     switch_drop_food = ctk.CTkSwitch(frame_loot_opts, text="Jogar Food no chão se Full", command=toggle_drop_food, progress_color="#FFA500", **UI['BODY'])
     switch_drop_food.pack(anchor="center")
     if BOT_SETTINGS.get('loot_drop_food', False): switch_drop_food.select()
+
+    # ==== LOOT NAMES CONFIGURATION (NOVO SISTEMA) ====
+    # Só mostrar se USE_CONFIGURABLE_LOOT_SYSTEM = True
+    if USE_CONFIGURABLE_LOOT_SYSTEM:
+        ctk.CTkLabel(tab_loot, text="Items para Lotar:", **UI['H1']).pack(pady=(8,0))
+        ctk.CTkLabel(tab_loot, text="↳ Um item por linha. Ex: 'gold coins', 'plate armor'", **UI['HINT']).pack(pady=(0,2))
+
+        txt_loot_names = ctk.CTkTextbox(tab_loot, height=70, font=("Consolas", 10))
+        txt_loot_names.pack(fill="x", padx=10, pady=2)
+        txt_loot_names.insert("0.0", "\n".join(BOT_SETTINGS.get('loot_names', [])))
+
+        ctk.CTkLabel(tab_loot, text="Items para Dropar:", **UI['H1']).pack(pady=(5,0))
+        ctk.CTkLabel(tab_loot, text="↳ Um item por linha. Ex: 'a mace', 'leather helmet'", **UI['HINT']).pack(pady=(0,2))
+
+        txt_drop_names = ctk.CTkTextbox(tab_loot, height=70, font=("Consolas", 10))
+        txt_drop_names.pack(fill="x", padx=10, pady=2)
+        txt_drop_names.insert("0.0", "\n".join(BOT_SETTINGS.get('drop_names', [])))
+    else:
+        # Mostrar aviso de que está usando modo antigo
+        ctk.CTkLabel(tab_loot, text="⚠️ Sistema de loot configurável DESABILITADO",
+                     text_color="orange", **UI['H1']).pack(pady=(8,2))
+        ctk.CTkLabel(tab_loot, text="↳ Usando LOOT_IDS/DROP_IDS do config.py",
+                     **UI['HINT']).pack(pady=(0,2))
 
     def save_loot():
         try:
@@ -2251,9 +2322,50 @@ def open_settings():
                 BOT_SETTINGS['loot_containers'] = int(entry_cont_count.get())
             BOT_SETTINGS['loot_dest'] = int(entry_dest_idx.get())
             BOT_SETTINGS['loot_drop_food'] = bool(switch_drop_food.get())
+
+            # NOVO: Sistema configurável (só executa se flag ativa)
+            if USE_CONFIGURABLE_LOOT_SYSTEM:
+                # Salvar listas de nomes
+                loot_lines = [line.strip() for line in txt_loot_names.get("0.0", "end").split('\n') if line.strip()]
+                drop_lines = [line.strip() for line in txt_drop_names.get("0.0", "end").split('\n') if line.strip()]
+
+                BOT_SETTINGS['loot_names'] = loot_lines
+                BOT_SETTINGS['drop_names'] = drop_lines
+
+                # Converter nomes → IDs e mostrar feedback
+                from database import lootables_db
+
+                loot_ids = []
+                for name in loot_lines:
+                    matches = lootables_db.find_loot_by_name(name)
+                    if matches:
+                        loot_ids.extend(matches)
+                        if len(matches) > 1:
+                            log(f"⚠️ '{name}' → {len(matches)} items encontrados")
+                    else:
+                        log(f"❌ '{name}' não encontrado no database")
+
+                drop_ids = []
+                for name in drop_lines:
+                    matches = lootables_db.find_loot_by_name(name)
+                    if matches:
+                        drop_ids.extend(matches)
+                    else:
+                        log(f"❌ DROP: '{name}' não encontrado")
+
+                # Salvar IDs convertidos (para uso interno)
+                BOT_SETTINGS['loot_ids'] = list(set(loot_ids))  # Remove duplicatas
+                BOT_SETTINGS['drop_ids'] = list(set(drop_ids))
+
+                log(f"💰 Loot salvo: {len(loot_ids)} items para lotar, {len(drop_ids)} para dropar")
+            else:
+                # Modo antigo: usar LOOT_IDS/DROP_IDS do config.py
+                log(f"💰 Loot salvo (modo antigo - usando config.py)")
+
             save_config_file()
-            log(f"💰 Loot salvo.")
-        except: log("❌ Use números inteiros.")
+
+        except Exception as e:
+            log(f"❌ Erro ao salvar loot: {e}")
 
     ctk.CTkButton(tab_loot, text="Salvar Loot", command=save_loot, fg_color="#2CC985", height=32).pack(side="bottom", pady=10, fill="x", padx=20)
 
@@ -2858,19 +2970,19 @@ def create_minimap_panel():
     minimap_label = ctk.CTkLabel(
         minimap_container,
         text="⏳ Aguardando Cavebot...",
-        font=("Verdana", 10),
+        font=("Verdana", 9),
         text_color="#888888"
     )
     minimap_label.pack(padx=10, pady=5)
 
     # Status label (below image)
-    minimap_status_label = ctk.CTkLabel(
-        minimap_container,
-        text="",
-        font=("Verdana", 10),
-        text_color="#AAAAAA"
-    )
-    minimap_status_label.pack(pady=(0, 8))
+    # minimap_status_label = ctk.CTkLabel(
+    #     minimap_container,
+    #     text="",
+    #     font=("Verdana", 10),
+    #     text_color="#AAAAAA"
+    # )
+    #minimap_status_label.pack(pady=(0, 8))
 
     # Initialize visualizer
     from utils.realtime_minimap import RealtimeMinimapVisualizer
@@ -2950,8 +3062,8 @@ def update_minimap_loop():
         )
 
         # Limit max size to prevent breaking layout
-        max_width = 600
-        max_height = 400
+        max_width = 150
+        max_height = 100
         if pil_img.width > max_width or pil_img.height > max_height:
             ratio = min(max_width / pil_img.width, max_height / pil_img.height)
             new_size = (int(pil_img.width * ratio), int(pil_img.height * ratio))
@@ -2987,7 +3099,7 @@ def update_minimap_loop():
         elif "Cooldown" in status_text or "⏰" in status_text:
             status_color = "#9696FF"  # Light blue for cooldown
 
-        minimap_status_label.configure(text=status_text, text_color=status_color)
+        #minimap_status_label.configure(text=status_text, text_color=status_color)
 
         # Auto-resize GUI to fit minimap content
         app.after(50, auto_resize_window)
@@ -3006,255 +3118,256 @@ def update_minimap_loop():
 # 7. CONSTRUÇÃO DA INTERFACE GRÁFICA (GUI LAYOUT)
 # ==============================================================================
 
-ctk.set_appearance_mode("Dark")
-ctk.set_default_color_theme("blue")
-app = ctk.CTk()
-app.title("Molodoy Bot Pro")
-#app.geometry("320x450") 
-app.resizable(True, True)
-app.configure(fg_color="#202020")
-try:
-    app.iconbitmap("app.ico")
-except:
-    pass 
-
-# MAIN FRAME
-main_frame = ctk.CTkFrame(app, fg_color="transparent")
-main_frame.pack(fill="both", expand=True)
-
-# ==============================================================================
-# GUI CONDICIONAL: COMPACT vs ORIGINAL
-# ==============================================================================
-# HEADER
-frame_header = ctk.CTkFrame(main_frame, fg_color="transparent")
-frame_header.pack(pady=(10, 5), fill="x", padx=10)
-
-btn_xray = ctk.CTkButton(frame_header, text="Raio-X", command=toggle_xray,
-                         width=25, height=25, fg_color="#303030", font=("Verdana", 10))
-btn_xray.pack(side="right", padx=5)
-
-if config.RELOAD_BUTTON:
-    btn_reload = ctk.CTkButton(frame_header, text="🔄", command=on_reload,
-                               width=35, height=25, fg_color="#303030", hover_color="#505050",
-                               font=("Verdana", 10))
-    btn_reload.pack(side="right", padx=5)
-
-btn_settings = ctk.CTkButton(frame_header, text="⚙️ Config.", command=open_settings,
-                             width=100, height=30, fg_color="#303030", hover_color="#505050",
-                             font=("Verdana", 11, "bold"))
-btn_settings.pack(side="left")
-
-lbl_connection = ctk.CTkLabel(frame_header, text="🔌 Procurando...",
-                              font=("Verdana", 11, "bold"), text_color="#FFA500")
-lbl_connection.pack(side="right", padx=5)
-
-# CONTROLES (TOGGLE)
-frame_controls = ctk.CTkFrame(main_frame, fg_color="#303030", corner_radius=6)
-frame_controls.pack(padx=10, pady=5, fill="x")
-frame_controls.grid_columnconfigure(0, weight=1)
-frame_controls.grid_columnconfigure(1, weight=1)
-
-switch_trainer = ctk.CTkSwitch(frame_controls, text="Trainer",
-                               progress_color="#00C000", font=("Verdana", 11))
-switch_trainer.grid(row=0, column=0, sticky="w", padx=(20, 0), pady=5)
-
-switch_loot = ctk.CTkSwitch(frame_controls, text="Auto Loot",
-                            progress_color="#00C000", font=("Verdana", 11))
-switch_loot.grid(row=1, column=0, sticky="w", padx=(20, 0), pady=5)
-
-switch_alarm = ctk.CTkSwitch(frame_controls, text="Alarm",
-                             progress_color="#00C000", font=("Verdana", 11))
-switch_alarm.grid(row=0, column=1, sticky="w", padx=(10, 0), pady=5)
-
-switch_fisher = ctk.CTkSwitch(frame_controls, text="Auto Fisher", command=on_fisher_toggle,
-                              progress_color="#00C000", font=("Verdana", 11))
-switch_fisher.grid(row=1, column=1, sticky="w", padx=(10, 0), pady=5)
-
-switch_runemaker = ctk.CTkSwitch(frame_controls, text="Runemaker",
-                                 progress_color="#A54EF9", font=("Verdana", 11))
-switch_runemaker.grid(row=2, column=0, sticky="w", padx=(20, 0), pady=5)
-
-switch_cavebot_var = ctk.IntVar(value=0)
-switch_cavebot = ctk.CTkSwitch(frame_controls, text="Cavebot",
-                               variable=switch_cavebot_var, command=toggle_cavebot_func,
-                               progress_color="#2CC985", font=("Verdana", 11))
-switch_cavebot.grid(row=2, column=1, sticky="w", padx=(10, 0), pady=5)
-
-
-# STATS
-frame_stats = ctk.CTkFrame(main_frame, fg_color="transparent", border_color="#303030", border_width=1, corner_radius=6)
-frame_stats.pack(padx=10, pady=5, fill="x")
-frame_stats.grid_columnconfigure(1, weight=1)
-
-# LINHA 2 EXP
-frame_exp_det = ctk.CTkFrame(frame_stats, fg_color="transparent")
-frame_exp_det.grid(row=2, column=1, sticky="e", padx=10)
-lbl_exp_left = ctk.CTkLabel(frame_exp_det, text="--", font=("Verdana", 10), text_color="gray")
-lbl_exp_left.pack(side="left", padx=5)
-lbl_exp_rate = ctk.CTkLabel(frame_exp_det, text="-- xp/h", font=("Verdana", 10), text_color="gray")
-lbl_exp_rate.pack(side="left", padx=5)
-lbl_exp_eta = ctk.CTkLabel(frame_exp_det, text="--", font=("Verdana", 10), text_color="gray")
-lbl_exp_eta.pack(side="left")
-
-# Divisória
-frame_div = ctk.CTkFrame(frame_stats, height=1, fg_color="#303030")
-frame_div.grid(row=1, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 5))
-
-# LINHA 2 REGEN
-lbl_regen = ctk.CTkLabel(frame_stats, text="🍖 --:--", font=("Verdana", 10, "bold"), text_color="gray")
-lbl_regen.grid(row=2, column=0, padx=10, pady=2, sticky="w")
-
-# LINHA 3: RECURSOS (Gold + Regen Stock)
-frame_resources = ctk.CTkFrame(frame_stats, fg_color="transparent")
-frame_resources.grid(row=3, column=0, columnspan=2, sticky="ew", padx=10, pady=2)
-
-lbl_regen_stock = ctk.CTkLabel(frame_resources, text="🍖 --", font=("Verdana", 10))
-lbl_regen_stock.pack(side="left", padx=(0, 10))
-
-lbl_gold_rate = ctk.CTkLabel(frame_resources, text="0 gp/h", font=("Verdana", 10), text_color="gray")
-lbl_gold_rate.pack(side="right")
-
-lbl_gold_total = ctk.CTkLabel(frame_resources, text="🪙 0 gp", font=("Verdana", 10), text_color="#FFD700")
-lbl_gold_total.pack(side="right", padx=(10, 10))
-
-# LINHA 4: SWORD
-box_sword = ctk.CTkFrame(frame_stats, fg_color="transparent")
-box_sword.grid(row=4, column=0, padx=10, sticky="w")
-ctk.CTkLabel(box_sword, text="Sword:", font=("Verdana", 11)).pack(side="left")
-lbl_sword_val = ctk.CTkLabel(box_sword, text="--", font=("Verdana", 11, "bold"), text_color="#4EA5F9")
-lbl_sword_val.pack(side="left", padx=(5, 0))
-
-frame_sw_det = ctk.CTkFrame(frame_stats, fg_color="transparent")
-frame_sw_det.grid(row=4, column=1, padx=10, sticky="e")
-lbl_sword_rate = ctk.CTkLabel(frame_sw_det, text="--m/%", font=("Verdana", 10), text_color="gray")
-lbl_sword_rate.pack(side="left", padx=5)
-lbl_sword_time = ctk.CTkLabel(frame_sw_det, text="ETA: --", font=("Verdana", 10), text_color="gray")
-lbl_sword_time.pack(side="left")
-
-# LINHA 5: SHIELD
-box_shield = ctk.CTkFrame(frame_stats, fg_color="transparent")
-box_shield.grid(row=5, column=0, padx=10, sticky="w")
-ctk.CTkLabel(box_shield, text="Shield:", font=("Verdana", 11)).pack(side="left")
-lbl_shield_val = ctk.CTkLabel(box_shield, text="--", font=("Verdana", 11, "bold"), text_color="#4EA5F9")
-lbl_shield_val.pack(side="left", padx=(5, 0))
-
-frame_sh_det = ctk.CTkFrame(frame_stats, fg_color="transparent")
-frame_sh_det.grid(row=5, column=1, padx=10, sticky="e")
-lbl_shield_rate = ctk.CTkLabel(frame_sh_det, text="--m/%", font=("Verdana", 10), text_color="gray")
-lbl_shield_rate.pack(side="left", padx=5)
-lbl_shield_time = ctk.CTkLabel(frame_sh_det, text="ETA: --", font=("Verdana", 10), text_color="gray")
-lbl_shield_time.pack(side="left")
-
-# LINHA 6: MAGIC
-box_magic = ctk.CTkFrame(frame_stats, fg_color="transparent")
-box_magic.grid(row=6, column=0, padx=10, sticky="w")
-ctk.CTkLabel(box_magic, text="ML:", font=("Verdana", 11)).pack(side="left")
-lbl_magic_val = ctk.CTkLabel(box_magic, text="--", font=("Verdana", 11, "bold"), text_color="#A54EF9")
-lbl_magic_val.pack(side="left", padx=(5, 0))
-
-frame_ml_det = ctk.CTkFrame(frame_stats, fg_color="transparent")
-frame_ml_det.grid(row=6, column=1, padx=10, sticky="e")
-lbl_magic_rate = ctk.CTkLabel(frame_ml_det, text="--m/%", font=("Verdana", 10), text_color="gray")
-lbl_magic_rate.pack(side="left", padx=5)
-lbl_magic_time = ctk.CTkLabel(frame_ml_det, text="ETA: --", font=("Verdana", 10), text_color="gray")
-lbl_magic_time.pack(side="left")
-
-# GRAPH
-frame_graphs_container = ctk.CTkFrame(main_frame, fg_color="transparent",
-                                      border_width=0, border_color="#303030",
-                                      corner_radius=0)
-frame_graphs_container.pack(padx=10, pady=(5, 0), fill="x")
-btn_graph = ctk.CTkButton(frame_graphs_container, text="Mostrar Gráfico 📈", command=toggle_graph,
-                          fg_color="#202020", hover_color="#303030",
-                          height=25, corner_radius=6, border_width=0)
-
-btn_graph.pack(side="top", fill="x", padx=1, pady=0)
-
-frame_graph = ctk.CTkFrame(frame_graphs_container, fg_color="transparent", corner_radius=6)
-
-# Lazy load matplotlib apenas aqui quando realmente necessário
-plt, FigureCanvasTkAgg = setup_matplotlib()
-plt.style.use('dark_background')
-fig, ax = plt.subplots(figsize=(4, 1.6), dpi=100, facecolor='#2B2B2B')
-fig.patch.set_facecolor('#202020')
-ax.set_facecolor('#202020')
-ax.tick_params(axis='x', colors='gray', labelsize=6, pad=2)
-ax.tick_params(axis='y', colors='gray', labelsize=6, pad=2)
-ax.spines['top'].set_visible(False)
-ax.spines['right'].set_visible(False)
-ax.spines['bottom'].set_color('#404040')
-ax.spines['left'].set_color('#404040')
-ax.set_title("Eficiencia de Treino (%)", fontsize=8, color="gray")
-
-canvas = FigureCanvasTkAgg(fig, master=frame_graph)
-widget = canvas.get_tk_widget()
-widget.pack(fill="both", expand=True, padx=1, pady=2)
-
-# MINIMAP PANEL
-create_minimap_panel()
-
-# ==============================================================================
-# STATUS PANEL - Mostra status em tempo real por módulo ativo
-# ==============================================================================
-frame_status_panel = ctk.CTkFrame(main_frame, fg_color="#1a1a1a",
-                                   border_color="#303030", border_width=1,
-                                   corner_radius=6)
-# Criar labels para cada módulo
-for module in ['trainer', 'runemaker', 'fisher', 'cavebot']:
-    status_labels[module] = ctk.CTkLabel(
-        frame_status_panel,
-        text="",
-        font=("Consolas", 10),
-        text_color="#AAAAAA",
-        anchor="w"
-    )
-    # NÃO pack() - visibilidade controlada por update_status_panel()
-
-# LOG / STATUS PANEL
-# Sincroniza log_visible com BOT_SETTINGS (False = mostra Status Panel, True = mostra Log)
-log_visible = BOT_SETTINGS.get('console_log_visible', False)
-
-txt_log = ctk.CTkTextbox(main_frame, height=120, font=("Consolas", 11),
-                         fg_color="#151515", text_color="#00FF00", border_width=1)
-
-if log_visible:
-    txt_log.pack(side="bottom", fill="x", padx=5, pady=5, expand=True)
-else:
-    # Mostrar Status Panel por padrão
-    frame_status_panel.pack(side="bottom", fill="x", padx=8, pady=3)
-
-# ==============================================================================
-# 8. EXECUÇÃO PRINCIPAL
-# ==============================================================================
-
-app.after(1000, attach_window)
-app.protocol("WM_DELETE_WINDOW", on_close)
-
-# Iniciar Threads
-threading.Thread(target=start_trainer_thread, daemon=True).start()
-threading.Thread(target=start_alarm_thread, daemon=True).start()
-threading.Thread(target=combat_loot_monitor_thread, daemon=True).start()
-threading.Thread(target=auto_loot_thread, daemon=True).start()
-threading.Thread(target=skill_monitor_loop, daemon=True).start()
-threading.Thread(target=gui_updater_loop, daemon=True).start()
-threading.Thread(target=regen_monitor_loop, daemon=True).start()
-threading.Thread(target=auto_fisher_thread, daemon=True).start()
-threading.Thread(target=runemaker_thread, daemon=True).start()
-threading.Thread(target=connection_watchdog, daemon=True).start()
-threading.Thread(target=start_cavebot_thread, daemon=True).start()
-threading.Thread(target=lookid_monitor_loop, daemon=True).start()
-
-update_stats_visibility()
-
-# Iniciar loop de atualização do minimap
-app.after(1000, update_minimap_loop)
-
-# Forçar resize inicial para eliminar espaço vazio
-app.update_idletasks()
-h = main_frame.winfo_reqheight() + 12
-app.geometry(f"320x{h}")
-update_status_panel()
-
-log("🚀 Iniciado.")
-app.mainloop()
-state.stop()  # Garante que todas as threads encerrem ao fechar
+if __name__ == "__main__":
+    ctk.set_appearance_mode("Dark")
+    ctk.set_default_color_theme("blue")
+    app = ctk.CTk()
+    app.title("Molodoy Bot Pro")
+    #app.geometry("320x450")
+    app.resizable(True, True)
+    app.configure(fg_color="#202020")
+    try:
+        app.iconbitmap("app.ico")
+    except:
+        pass 
+    
+    # MAIN FRAME
+    main_frame = ctk.CTkFrame(app, fg_color="transparent")
+    main_frame.pack(fill="both", expand=True)
+    
+    # ==============================================================================
+    # GUI CONDICIONAL: COMPACT vs ORIGINAL
+    # ==============================================================================
+    # HEADER
+    frame_header = ctk.CTkFrame(main_frame, fg_color="transparent")
+    frame_header.pack(pady=(10, 5), fill="x", padx=10)
+    
+    btn_xray = ctk.CTkButton(frame_header, text="Raio-X", command=toggle_xray,
+                             width=25, height=25, fg_color="#303030", font=("Verdana", 10))
+    btn_xray.pack(side="right", padx=5)
+    
+    if config.RELOAD_BUTTON:
+        btn_reload = ctk.CTkButton(frame_header, text="🔄", command=on_reload,
+                                   width=35, height=25, fg_color="#303030", hover_color="#505050",
+                                   font=("Verdana", 10))
+        btn_reload.pack(side="right", padx=5)
+    
+    btn_settings = ctk.CTkButton(frame_header, text="⚙️ Config.", command=open_settings,
+                                 width=100, height=30, fg_color="#303030", hover_color="#505050",
+                                 font=("Verdana", 11, "bold"))
+    btn_settings.pack(side="left")
+    
+    lbl_connection = ctk.CTkLabel(frame_header, text="🔌 Procurando...",
+                                  font=("Verdana", 11, "bold"), text_color="#FFA500")
+    lbl_connection.pack(side="right", padx=5)
+    
+    # CONTROLES (TOGGLE)
+    frame_controls = ctk.CTkFrame(main_frame, fg_color="#303030", corner_radius=6)
+    frame_controls.pack(padx=10, pady=5, fill="x")
+    frame_controls.grid_columnconfigure(0, weight=1)
+    frame_controls.grid_columnconfigure(1, weight=1)
+    
+    switch_trainer = ctk.CTkSwitch(frame_controls, text="Trainer",
+                                   progress_color="#00C000", font=("Verdana", 11))
+    switch_trainer.grid(row=0, column=0, sticky="w", padx=(20, 0), pady=5)
+    
+    switch_loot = ctk.CTkSwitch(frame_controls, text="Auto Loot",
+                                progress_color="#00C000", font=("Verdana", 11))
+    switch_loot.grid(row=1, column=0, sticky="w", padx=(20, 0), pady=5)
+    
+    switch_alarm = ctk.CTkSwitch(frame_controls, text="Alarm",
+                                 progress_color="#00C000", font=("Verdana", 11))
+    switch_alarm.grid(row=0, column=1, sticky="w", padx=(10, 0), pady=5)
+    
+    switch_fisher = ctk.CTkSwitch(frame_controls, text="Auto Fisher", command=on_fisher_toggle,
+                                  progress_color="#00C000", font=("Verdana", 11))
+    switch_fisher.grid(row=1, column=1, sticky="w", padx=(10, 0), pady=5)
+    
+    switch_runemaker = ctk.CTkSwitch(frame_controls, text="Runemaker",
+                                     progress_color="#A54EF9", font=("Verdana", 11))
+    switch_runemaker.grid(row=2, column=0, sticky="w", padx=(20, 0), pady=5)
+    
+    switch_cavebot_var = ctk.IntVar(value=0)
+    switch_cavebot = ctk.CTkSwitch(frame_controls, text="Cavebot",
+                                   variable=switch_cavebot_var, command=toggle_cavebot_func,
+                                   progress_color="#2CC985", font=("Verdana", 11))
+    switch_cavebot.grid(row=2, column=1, sticky="w", padx=(10, 0), pady=5)
+    
+    
+    # STATS
+    frame_stats = ctk.CTkFrame(main_frame, fg_color="transparent", border_color="#303030", border_width=1, corner_radius=6)
+    frame_stats.pack(padx=10, pady=5, fill="x")
+    frame_stats.grid_columnconfigure(1, weight=1)
+    
+    # LINHA 2 EXP
+    frame_exp_det = ctk.CTkFrame(frame_stats, fg_color="transparent")
+    frame_exp_det.grid(row=2, column=1, sticky="e", padx=10)
+    lbl_exp_left = ctk.CTkLabel(frame_exp_det, text="--", font=("Verdana", 10), text_color="gray")
+    lbl_exp_left.pack(side="left", padx=5)
+    lbl_exp_rate = ctk.CTkLabel(frame_exp_det, text="-- xp/h", font=("Verdana", 10), text_color="gray")
+    lbl_exp_rate.pack(side="left", padx=5)
+    lbl_exp_eta = ctk.CTkLabel(frame_exp_det, text="--", font=("Verdana", 10), text_color="gray")
+    lbl_exp_eta.pack(side="left")
+    
+    # Divisória
+    frame_div = ctk.CTkFrame(frame_stats, height=1, fg_color="#303030")
+    frame_div.grid(row=1, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 5))
+    
+    # LINHA 2 REGEN
+    lbl_regen = ctk.CTkLabel(frame_stats, text="🍖 --:--", font=("Verdana", 10, "bold"), text_color="gray")
+    lbl_regen.grid(row=2, column=0, padx=10, pady=2, sticky="w")
+    
+    # LINHA 3: RECURSOS (Gold + Regen Stock)
+    frame_resources = ctk.CTkFrame(frame_stats, fg_color="transparent")
+    frame_resources.grid(row=3, column=0, columnspan=2, sticky="ew", padx=10, pady=2)
+    
+    lbl_regen_stock = ctk.CTkLabel(frame_resources, text="🍖 --", font=("Verdana", 10))
+    lbl_regen_stock.pack(side="left", padx=(0, 10))
+    
+    lbl_gold_rate = ctk.CTkLabel(frame_resources, text="0 gp/h", font=("Verdana", 10), text_color="gray")
+    lbl_gold_rate.pack(side="right")
+    
+    lbl_gold_total = ctk.CTkLabel(frame_resources, text="🪙 0 gp", font=("Verdana", 10), text_color="#FFD700")
+    lbl_gold_total.pack(side="right", padx=(10, 10))
+    
+    # LINHA 4: SWORD
+    box_sword = ctk.CTkFrame(frame_stats, fg_color="transparent")
+    box_sword.grid(row=4, column=0, padx=10, sticky="w")
+    ctk.CTkLabel(box_sword, text="Sword:", font=("Verdana", 11)).pack(side="left")
+    lbl_sword_val = ctk.CTkLabel(box_sword, text="--", font=("Verdana", 11, "bold"), text_color="#4EA5F9")
+    lbl_sword_val.pack(side="left", padx=(5, 0))
+    
+    frame_sw_det = ctk.CTkFrame(frame_stats, fg_color="transparent")
+    frame_sw_det.grid(row=4, column=1, padx=10, sticky="e")
+    lbl_sword_rate = ctk.CTkLabel(frame_sw_det, text="--m/%", font=("Verdana", 10), text_color="gray")
+    lbl_sword_rate.pack(side="left", padx=5)
+    lbl_sword_time = ctk.CTkLabel(frame_sw_det, text="ETA: --", font=("Verdana", 10), text_color="gray")
+    lbl_sword_time.pack(side="left")
+    
+    # LINHA 5: SHIELD
+    box_shield = ctk.CTkFrame(frame_stats, fg_color="transparent")
+    box_shield.grid(row=5, column=0, padx=10, sticky="w")
+    ctk.CTkLabel(box_shield, text="Shield:", font=("Verdana", 11)).pack(side="left")
+    lbl_shield_val = ctk.CTkLabel(box_shield, text="--", font=("Verdana", 11, "bold"), text_color="#4EA5F9")
+    lbl_shield_val.pack(side="left", padx=(5, 0))
+    
+    frame_sh_det = ctk.CTkFrame(frame_stats, fg_color="transparent")
+    frame_sh_det.grid(row=5, column=1, padx=10, sticky="e")
+    lbl_shield_rate = ctk.CTkLabel(frame_sh_det, text="--m/%", font=("Verdana", 10), text_color="gray")
+    lbl_shield_rate.pack(side="left", padx=5)
+    lbl_shield_time = ctk.CTkLabel(frame_sh_det, text="ETA: --", font=("Verdana", 10), text_color="gray")
+    lbl_shield_time.pack(side="left")
+    
+    # LINHA 6: MAGIC
+    box_magic = ctk.CTkFrame(frame_stats, fg_color="transparent")
+    box_magic.grid(row=6, column=0, padx=10, sticky="w")
+    ctk.CTkLabel(box_magic, text="ML:", font=("Verdana", 11)).pack(side="left")
+    lbl_magic_val = ctk.CTkLabel(box_magic, text="--", font=("Verdana", 11, "bold"), text_color="#A54EF9")
+    lbl_magic_val.pack(side="left", padx=(5, 0))
+    
+    frame_ml_det = ctk.CTkFrame(frame_stats, fg_color="transparent")
+    frame_ml_det.grid(row=6, column=1, padx=10, sticky="e")
+    lbl_magic_rate = ctk.CTkLabel(frame_ml_det, text="--m/%", font=("Verdana", 10), text_color="gray")
+    lbl_magic_rate.pack(side="left", padx=5)
+    lbl_magic_time = ctk.CTkLabel(frame_ml_det, text="ETA: --", font=("Verdana", 10), text_color="gray")
+    lbl_magic_time.pack(side="left")
+    
+    # GRAPH
+    frame_graphs_container = ctk.CTkFrame(main_frame, fg_color="transparent",
+                                          border_width=0, border_color="#303030",
+                                          corner_radius=0)
+    frame_graphs_container.pack(padx=10, pady=(5, 0), fill="x")
+    btn_graph = ctk.CTkButton(frame_graphs_container, text="Mostrar Gráfico 📈", command=toggle_graph,
+                              fg_color="#202020", hover_color="#303030",
+                              height=25, corner_radius=6, border_width=0)
+    
+    btn_graph.pack(side="top", fill="x", padx=1, pady=0)
+    
+    frame_graph = ctk.CTkFrame(frame_graphs_container, fg_color="transparent", corner_radius=6)
+    
+    # Lazy load matplotlib apenas aqui quando realmente necessário
+    plt, FigureCanvasTkAgg = setup_matplotlib()
+    plt.style.use('dark_background')
+    fig, ax = plt.subplots(figsize=(4, 1.6), dpi=100, facecolor='#2B2B2B')
+    fig.patch.set_facecolor('#202020')
+    ax.set_facecolor('#202020')
+    ax.tick_params(axis='x', colors='gray', labelsize=6, pad=2)
+    ax.tick_params(axis='y', colors='gray', labelsize=6, pad=2)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['bottom'].set_color('#404040')
+    ax.spines['left'].set_color('#404040')
+    ax.set_title("Eficiencia de Treino (%)", fontsize=8, color="gray")
+    
+    canvas = FigureCanvasTkAgg(fig, master=frame_graph)
+    widget = canvas.get_tk_widget()
+    widget.pack(fill="both", expand=True, padx=1, pady=2)
+    
+    # MINIMAP PANEL
+    create_minimap_panel()
+    
+    # ==============================================================================
+    # STATUS PANEL - Mostra status em tempo real por módulo ativo
+    # ==============================================================================
+    frame_status_panel = ctk.CTkFrame(main_frame, fg_color="#1a1a1a",
+                                       border_color="#303030", border_width=1,
+                                       corner_radius=6)
+    # Criar labels para cada módulo
+    for module in ['trainer', 'runemaker', 'fisher', 'cavebot', 'alarm']:
+        status_labels[module] = ctk.CTkLabel(
+            frame_status_panel,
+            text="",
+            font=("Consolas", 10),
+            text_color="#AAAAAA",
+            anchor="w"
+        )
+        # NÃO pack() - visibilidade controlada por update_status_panel()
+    
+    # LOG / STATUS PANEL
+    # Sincroniza log_visible com BOT_SETTINGS (False = mostra Status Panel, True = mostra Log)
+    log_visible = BOT_SETTINGS.get('console_log_visible', False)
+    
+    txt_log = ctk.CTkTextbox(main_frame, height=120, font=("Consolas", 11),
+                             fg_color="#151515", text_color="#00FF00", border_width=1)
+    
+    if log_visible:
+        txt_log.pack(side="bottom", fill="x", padx=5, pady=5, expand=True)
+    else:
+        # Mostrar Status Panel por padrão
+        frame_status_panel.pack(side="bottom", fill="x", padx=8, pady=3)
+    
+    # ==============================================================================
+    # 8. EXECUÇÃO PRINCIPAL
+    # ==============================================================================
+    
+    app.after(1000, attach_window)
+    app.protocol("WM_DELETE_WINDOW", on_close)
+    
+    # Iniciar Threads
+    threading.Thread(target=start_trainer_thread, daemon=True).start()
+    threading.Thread(target=start_alarm_thread, daemon=True).start()
+    threading.Thread(target=combat_loot_monitor_thread, daemon=True).start()
+    threading.Thread(target=auto_loot_thread, daemon=True).start()
+    threading.Thread(target=skill_monitor_loop, daemon=True).start()
+    threading.Thread(target=gui_updater_loop, daemon=True).start()
+    threading.Thread(target=regen_monitor_loop, daemon=True).start()
+    threading.Thread(target=auto_fisher_thread, daemon=True).start()
+    threading.Thread(target=runemaker_thread, daemon=True).start()
+    threading.Thread(target=connection_watchdog, daemon=True).start()
+    threading.Thread(target=start_cavebot_thread, daemon=True).start()
+    threading.Thread(target=lookid_monitor_loop, daemon=True).start()
+    
+    update_stats_visibility()
+    
+    # Iniciar loop de atualização do minimap
+    app.after(1000, update_minimap_loop)
+    
+    # Forçar resize inicial para eliminar espaço vazio
+    app.update_idletasks()
+    h = main_frame.winfo_reqheight() + 12
+    app.geometry(f"320x{h}")
+    update_status_panel()
+    
+    log("🚀 Iniciado.")
+    app.mainloop()
+    state.stop()  # Garante que todas as threads encerrem ao fechar

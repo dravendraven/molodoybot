@@ -935,14 +935,24 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                     log("💀 Alvo eliminado.")
                     
                     if last_target_data and loot_enabled:
-                        gauss_wait(0.9, 15)
+                        # Verifica se criatura está na lista de NO_LOOT (hardcoded em config.py)
+                        monster_name = last_target_data["name"]
 
-                        # CHAMA FUNÇÃO COM LÓGICA DE INDEX DINÂMICO
-                        success = open_corpse_via_packet(pm, base_addr, last_target_data, player_id, log_func=log)
-                        
-                        if success:
-                            log(f"📂 Corpo aberto (Packet).")
-                            gauss_wait(0.5, 20)
+                        # Usa substring matching (mesmo padrão de targets_list linha 588)
+                        should_skip_loot = any(skip_name in monster_name for skip_name in NO_LOOT_CREATURES)
+
+                        if should_skip_loot:
+                            if debug_mode:
+                                log(f"⏭️ Pulando loot de {monster_name} (sem loot)")
+                        else:
+                            gauss_wait(1.2, 15)
+
+                            # CHAMA FUNÇÃO COM LÓGICA DE INDEX DINÂMICO
+                            success = open_corpse_via_packet(pm, base_addr, last_target_data, player_id, log_func=log)
+
+                            if success:
+                                log(f"📂 Corpo aberto (Packet).")
+                                gauss_wait(0.5, 20)
 
                     elif last_target_data and not loot_enabled:
                         if debug_mode: log("ℹ️ Auto Loot desligado.")

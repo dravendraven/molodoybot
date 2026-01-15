@@ -393,18 +393,27 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                             delay = random.uniform(h_min, h_max)
                             next_cast_time = time.time() + delay
                             log_msg(f"⏳ Mana cheia! Aguardando {int(delay)}s (Treino)...")
+                            set_status(f"mana train: aguardando {int(delay)}s")
                         else:
                             next_cast_time = time.time()
 
                     if time.time() >= next_cast_time:
                         log_msg(f"⚡ Mana cheia. Usando {hotkey_str}...")
+                        set_status(f"mana train: usando {hotkey_str}")
                         press_hotkey(hwnd, vk_hotkey)
                         next_cast_time = 0
                         time.sleep(2.2)
+                    else:
+                        # Mostrar countdown em tempo real
+                        remaining = int(next_cast_time - time.time())
+                        if remaining > 0:
+                            set_status(f"mana train: cast em {remaining}s")
                 else:
+                    # Mostrar mana atual vs requerida
+                    set_status(f"mana train: aguardando ({curr_mana}/{mana_req})")
                     next_cast_time = 0
             except: pass
-            
+
             time.sleep(0.5)
             continue # Pula Runemaker se Mana Train está ativo
 

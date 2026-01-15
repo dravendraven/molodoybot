@@ -131,6 +131,29 @@ class MapAnalyzer:
                 height += 1
         return height
 
+    def get_ground_speed(self, rel_x, rel_y):
+        """
+        Retorna o ground speed do tile em posição relativa.
+        Usado pelo A* para calcular custos baseados no tempo real de travessia.
+
+        Args:
+            rel_x, rel_y: Posição relativa ao player
+
+        Returns:
+            int: Ground speed do tile (1-200). Fallback para 150 (grass) se não encontrado.
+        """
+        from database.tiles_config import get_ground_speed as get_speed_from_id
+
+        tile = self.mm.get_tile_visible(rel_x, rel_y)
+
+        if not tile or not tile.items:
+            return 150  # Fallback padrão (grass)
+
+        # O ground é sempre o primeiro item da pilha
+        ground_id = tile.items[0]
+
+        return get_speed_from_id(ground_id)
+
     def get_obstacle_type(self, rel_x, rel_y):
         """
         Analisa um tile bloqueado e retorna o tipo de obstáculo.

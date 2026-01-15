@@ -6,7 +6,7 @@ from core.bot_state import state
 # NOTA: imports de auto_loot são LAZY dentro da função auto_stack_items()
 # para evitar circular import com auto_loot.py
 
-def auto_stack_items(pm, base_addr, hwnd, my_containers_count=None, mutex_context=None):
+def auto_stack_items(pm, base_addr, hwnd, my_containers_count=None, mutex_context=None, loot_ids=None):
     """
     Agrupa itens empilháveis via Pacotes.
 
@@ -16,10 +16,24 @@ def auto_stack_items(pm, base_addr, hwnd, my_containers_count=None, mutex_contex
         hwnd: Window handle
         my_containers_count: Número de containers próprios (None = detecção automática)
         mutex_context: Contexto de mutex externo (ex: fisher_ctx) para reutilizar lock
+        loot_ids: Lista de IDs para stackar (None = usar fallback baseado na flag)
     """
     # Protege ciclo de runemaking - não stacka durante runemaking
     if state.is_runemaking:
         return False
+
+    # NOVO: Fallback baseado na flag se loot_ids não fornecido
+    if loot_ids is None:
+        if USE_CONFIGURABLE_LOOT_SYSTEM:
+            # Modo novo: tentar ler de BOT_SETTINGS
+            try:
+                from main import BOT_SETTINGS
+                loot_ids = BOT_SETTINGS.get('loot_ids', [])
+            except ImportError:
+                loot_ids = []
+        else:
+            # Modo antigo: usar LOOT_IDS hardcoded
+            loot_ids = LOOT_IDS
 
     # Import lazy para evitar circular import
     from modules.auto_loot import scan_containers, get_player_containers, USE_AUTO_CONTAINER_DETECTION
@@ -44,7 +58,7 @@ def auto_stack_items(pm, base_addr, hwnd, my_containers_count=None, mutex_contex
         for i, item_dst in enumerate(cont.items):
 
             # Alvo válido?
-            if item_dst.count < 100 and item_dst.id in LOOT_IDS:
+            if item_dst.count < 100 and item_dst.id in loot_ids:
 
                 # Procura doador
                 for j, item_src in enumerate(cont.items):

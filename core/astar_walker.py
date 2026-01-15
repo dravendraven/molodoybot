@@ -76,28 +76,29 @@ class AStarWalker:
 
                 walkable_count += 1
 
-                # --- CORREÇÃO DE CUSTO (LÓGICA TIBIA) ---
-                is_diagonal = (dx != 0 and dy != 0)
+                # --- CUSTO DINÂMICO BASEADO EM GROUND SPEED ---
+                # Obtém o ground speed do tile destino para cálculo de tempo real
+                ground_speed = self.analyzer.get_ground_speed(nx, ny)
 
-                if is_diagonal:
-                    # Custo 25 faz com que o bot prefira andar 2 tiles retos (10+10=20)
-                    # do que 1 diagonal, evitando o delay de "exhaust" do char.
-                    # Ele só usará diagonal se os vizinhos retos estiverem bloqueados.
-                    move_cost = 30
-                else:
-                    move_cost = 10
+                # Calcula custo baseado no tempo real de travessia
+                is_diagonal = (dx != 0 and dy != 0)
+                move_cost = ground_speed * 3 if is_diagonal else ground_speed
 
                 # Se for o destino final, ignoramos o custo extra de "Special Tile" (Ex: Escada)
                 is_target = (nx == target_rel_x and ny == target_rel_y)
                 tile_cost = 0 if is_target else props['cost']
 
-                if tile_cost >= 999: continue
+                if tile_cost >= 999:
+                    continue
 
                 total_cost = move_cost + tile_cost
                 new_g = current_node.g + total_cost
-                # Heurística Manhattan para grid-based pathfinding (Tibia)
-                # Manhattan distance é mais apropriado que Euclidiano para movimento em tiles
-                new_h = (abs(nx - target_rel_x) + abs(ny - target_rel_y)) * 10
+
+                # Heurística Manhattan otimista usando ground_speed mínimo (marble floor = 100)
+                # Isso garante que a heurística nunca superestima o custo real (admissível)
+                MIN_GROUND_SPEED = 100
+                manhattan_dist = abs(nx - target_rel_x) + abs(ny - target_rel_y)
+                new_h = manhattan_dist * MIN_GROUND_SPEED
 
                 new_node = Node(nx, ny, current_node, new_g, new_h)
                 heapq.heappush(open_list, new_node)
@@ -252,15 +253,20 @@ class AStarWalker:
                 if not props['walkable'] and not is_target_node:
                     continue
 
-                # Custo: 10 para reto, 14 para diagonal
-                move_cost = 30 if dx != 0 and dy != 0 else 10
+                # Obtém o ground speed do tile destino para cálculo de tempo real
+                ground_speed = self.analyzer.get_ground_speed(nx, ny)
+
+                # Custo baseado no tempo real de travessia
+                is_diagonal = (dx != 0 and dy != 0)
+                move_cost = ground_speed * 3 if is_diagonal else ground_speed
                 new_g = current_node.g + move_cost
-                
+
                 if (nx, ny) not in visited or new_g < visited[(nx, ny)].g:
-                    # Heurística Manhattan para grid-based pathfinding
-                    dist_x = abs(target_rel_x - nx)
-                    dist_y = abs(target_rel_y - ny)
-                    h = (dist_x + dist_y) * 10
+                    # Heurística Manhattan otimista usando ground_speed mínimo (marble floor = 100)
+                    # Isso garante que a heurística nunca superestima o custo real (admissível)
+                    MIN_GROUND_SPEED = 100
+                    manhattan_dist = abs(target_rel_x - nx) + abs(target_rel_y - ny)
+                    h = manhattan_dist * MIN_GROUND_SPEED
                     neighbor = Node(nx, ny, parent=current_node, g=new_g, h=h)
                     
                     visited[(nx, ny)] = neighbor

@@ -50,7 +50,7 @@ def get_last_chat_entry(pm, base_addr):
     except:
         return None, None
 
-def alarm_loop(pm, base_addr, check_running, config, callbacks):
+def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=None):
 
     # --- HELPER: LER CONFIGURAÇÃO EM TEMPO REAL ---
     get_cfg = make_config_getter(config)
@@ -61,6 +61,15 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks):
     send_telegram = callbacks.get('telegram', lambda x: None)
     log_msg = callbacks.get('log', print)
     logout_callback = callbacks.get('logout', lambda: None)
+
+    # Helper para atualizar status do alarme na GUI
+    def set_status(msg):
+        """Helper para atualizar status do alarme na GUI."""
+        if status_callback:
+            try:
+                status_callback(msg)
+            except:
+                pass
 
     last_telegram_time = 0
     last_hp_alert = 0 
@@ -78,10 +87,14 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks):
         if not enabled:
             set_safe_state(True)
             set_gm_state(False)
+            set_status("💤 Desativado")
             time.sleep(1)
             continue
 
-        if pm is None: time.sleep(1); continue
+        if pm is None:
+            set_status("⏳ Aguardando conexão...")
+            time.sleep(1)
+            continue
 
         # Lê configs dinâmicas
         safe_list = get_cfg('safe_list', [])
@@ -118,6 +131,7 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks):
                             # Limita o alerta sonoro a cada 2 segundos
                             if (time.time() - last_hp_alert) > 2.0:
                                 log_msg(f"🩸 ALARME DE VIDA: {pct:.1f}% (Abaixo de {hp_threshold}%)")
+                                set_status(f"🩸 HP baixo ({pct:.0f}%)")
                                 winsound.Beep(2500, 200)
                                 winsound.Beep(2500, 200)
                                 last_hp_alert = time.time()
@@ -148,7 +162,8 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks):
                         if chat_gm_enabled and is_gm_talk:
                             log_msg(f"👮 GM NO CHAT: {author} {msg}")
                             chat_danger = True
-                            
+                            set_status(f"👮 GM no chat: {author}")
+
                             # Ações Imediatas
                             set_gm_state(True)
                             set_safe_state(False)
@@ -162,6 +177,7 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks):
                         elif chat_enabled:
                             if "says:" in author or "whispers:" in author or "yells:" in author:
                                 log_msg(f"💬 Chat: {author} {msg}")
+                                set_status(f"💬 {author}")
                                 winsound.Beep(800, 300)
 
             # =================================================================
@@ -232,7 +248,13 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks):
                 # Se detectou visualmente (chat já logou o dele)
                 if visual_danger:
                     log_msg(f"⚠️ PERIGO: {visual_danger_name}!")
-                    
+
+                    # Atualiza status baseado no tipo de perigo
+                    if final_is_gm:
+                        set_status(f"👮 GM DETECTADO: {visual_danger_name}")
+                    else:
+                        set_status(f"⚠️ {visual_danger_name}")
+
                     freq = 2500 if final_is_gm else 1000
                     winsound.Beep(freq, 500)
                     
@@ -243,10 +265,11 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks):
                         send_telegram(f"{prefix}: {visual_danger_name}!")
                         last_telegram_time = time.time()
             
-            elif not chat_danger: 
+            elif not chat_danger:
                 # Se visual está limpo E chat está limpo -> Seguro
                 set_safe_state(True)
                 set_gm_state(False)
+                set_status("🛡️ Seguro - Monitorando...")
 
             time.sleep(0.5)
 

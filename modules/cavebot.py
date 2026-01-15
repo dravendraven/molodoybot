@@ -18,7 +18,7 @@ from core.map_analyzer import MapAnalyzer
 from core.astar_walker import AStarWalker
 from core.memory_map import MemoryMap
 from core.inventory_core import find_item_in_containers, find_item_in_equipment # Necessário para achar a corda
-from database.tiles_config import ROPE_ITEM_ID, SHOVEL_ITEM_ID
+from database.tiles_config import ROPE_ITEM_ID, SHOVEL_ITEM_ID, get_ground_speed
 from core.bot_state import state
 from core.global_map import GlobalMap
 from core.player_core import get_player_speed
@@ -699,40 +699,68 @@ class Cavebot:
 
     def _execute_smooth_step(self, dx, dy):
         """
-        Executa um passo e calcula o delay exato para permitir Pre-Move.
-        Isso garante que o próximo pacote seja enviado antes do char parar.
+        Executa um passo com delay dinâmico baseado no ground speed do tile destino
+        e variação humana natural (jitter + micro-pausas).
         """
         # 1. Envia o pacote de movimento
         self._move_step(dx, dy)
-        
+
         # 2. Atualiza cache de velocidade (a cada 2s)
         if time.time() - self.last_speed_check > 2.0:
             self.cached_speed = get_player_speed(self.pm, self.base_addr)
-            if self.cached_speed <= 0: self.cached_speed = 220
+            if self.cached_speed <= 0:
+                self.cached_speed = 220  # Fallback
             self.last_speed_check = time.time()
-            
+
         player_speed = self.cached_speed
-        
-        # 3. Define Custo do Terreno (Tibia 7.72)
-        # Diagonal gasta muito mais tempo que reto em versões antigas
-        # Ajuste: Use 3 para diagonal, 1 para reto. 
+
+        # 3. NOVO: Obtém o ground speed do tile de destino
+        dest_tile = self.memory_map.get_tile_visible(dx, dy)
+
+        if dest_tile and dest_tile.items:
+            # O ground é sempre o primeiro item da pilha (items[0])
+            ground_id = dest_tile.items[0]
+        else:
+            ground_id = None  # Fallback para 150 (grass)
+
+        ground_speed = get_ground_speed(ground_id)
+
+        # 4. Calcula effective speed (diagonal = 3x mais lento no Tibia 7.7)
         is_diagonal = (dx != 0 and dy != 0)
-        tile_cost = 4 if is_diagonal else 1
-        
-        # 4. Fórmula de Tempo (ms) = (1000 * cost) / speed
-        duration_ms = (1000 * tile_cost) / player_speed
-        
-        # 5. Buffer de Pre-Move (Antecipação)
-        # Enviamos o próximo comando X ms antes de terminar o passo atual.
-        # 90ms é um valor seguro para ping médio. Se tiver lag, diminua para 50ms.
-        pre_move_buffer = 0.090 
-        
-        wait_time = (duration_ms / 1000.0) - pre_move_buffer
-        
-        # Trava de segurança: Delay mínimo de 50ms para evitar flood se a conta der errada
+        effective_speed = ground_speed * 3 if is_diagonal else ground_speed
+
+        # 5. Fórmula de Tempo Base (ms) = (1000 * effective_speed) / player_speed
+        base_ms = (1000.0 * effective_speed) / player_speed
+
+        # 6. NOVO: Adiciona jitter gaussiano (±4% de variação)
+        # Simula variação natural de timing humano
+        jitter_std = base_ms * 0.04  # Desvio padrão = 4% do base
+        jitter = random.gauss(0, jitter_std)
+
+        # 7. NOVO: Adiciona micro-pausa aleatória (2% de chance)
+        # Simula pequenas hesitações humanas (30-100ms)
+        if random.random() < 0.02:
+            jitter += random.uniform(30, 100)
+
+        # 8. Calcula delay final com jitter
+        total_ms = base_ms + jitter
+
+        # 9. Buffer de Pre-Move (Antecipação)
+        # Enviamos o próximo comando X ms antes de terminar o passo atual
+        pre_move_buffer = 90  # ms (90ms é seguro para ping médio)
+
+        wait_time = (total_ms / 1000.0) - (pre_move_buffer / 1000.0)
+
+        # 10. Trava de segurança: Delay mínimo de 50ms para evitar flood
         wait_time = max(0.05, wait_time)
-        
-        # Define o tempo em que o bot vai "acordar" para o próximo passo
+
+        # Debug opcional (pode ser ativado com DEBUG_PATHFINDING)
+        if DEBUG_PATHFINDING:
+            print(f"[Movement] Ground ID={ground_id}, Speed={ground_speed}, "
+                  f"Diagonal={is_diagonal}, Base={base_ms:.1f}ms, "
+                  f"Jitter={jitter:.1f}ms, Total={total_ms:.1f}ms, Wait={wait_time:.3f}s")
+
+        # 11. Define o tempo em que o bot vai "acordar" para o próximo passo
         self.last_action_time = time.time() + wait_time
 
     def _handle_hard_stuck(self, dest_x, dest_y, dest_z, my_x, my_y):

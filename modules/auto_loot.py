@@ -9,8 +9,12 @@ from core.packet import PacketManager, get_container_pos, get_ground_pos
 from database import foods_db
 from core.map_core import get_player_pos
 from core.bot_state import state
-# NOTA: auto_stack_items é importado LAZY dentro da função run_auto_loot()
-# para evitar circular import com stacker.py
+
+# Imports condicionais do novo sistema de loot configurável
+if USE_CONFIGURABLE_LOOT_SYSTEM:
+    from database import lootables_db
+# NOTA: auto_stack_items e get_player_cap são importados LAZY dentro da função run_auto_loot()
+# para evitar circular import com stacker.py e fisher.py
 
 # ==============================================================================
 # CONFIGURAÇÃO: SISTEMA DE DETECÇÃO DE CONTAINERS
@@ -176,6 +180,15 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
     dest_container_index = get_cfg('loot_dest', 0)
     drop_food_if_full = get_cfg('loot_drop_food', False)
 
+    # NOVO: Ler listas configuráveis OU usar hardcoded (depende da flag)
+    if USE_CONFIGURABLE_LOOT_SYSTEM:
+        loot_ids = get_cfg('loot_ids', [])  # Lista de IDs resolvidos da GUI
+        drop_ids = get_cfg('drop_ids', [])
+    else:
+        # Fallback: usar valores hardcoded do config.py
+        loot_ids = LOOT_IDS
+        drop_ids = DROP_IDS
+
     containers = scan_containers(pm, base_addr)
 
     # ==========================================================================
@@ -219,7 +232,7 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
         bag_count = 0
         
         for it in cont.items:
-            if it.id in LOOT_IDS or it.id in FOOD_IDS or it.id in DROP_IDS: useful_items_count += 1
+            if it.id in loot_ids or it.id in FOOD_IDS or it.id in drop_ids: useful_items_count += 1
             if it.id in LOOT_CONTAINER_IDS: bag_count += 1; bag_item_ref = it
 
         if useful_items_count == 0 and bag_count > 0: has_bag_to_open = True
@@ -268,7 +281,21 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
                 return ("EAT", item.id)
 
             # --- AUTO LOOT ---
-            if item.id in LOOT_IDS:
+            if item.id in loot_ids:
+                # NOVO: Weight check antes de lotar (só se sistema configurável ativo)
+                if USE_CONFIGURABLE_LOOT_SYSTEM:
+                    # Import lazy para evitar circular import
+                    from modules.fisher import get_player_cap
+
+                    item_weight = lootables_db.get_loot_weight(item.id)
+                    current_cap = get_player_cap(pm, base_addr)
+
+                    if item_weight > current_cap:
+                        # Item muito pesado para capacity atual
+                        item_name = lootables_db.get_loot_name(item.id)
+                        print(f"⚠️ LOOT IGNORADO: {item_name} ({item_weight:.1f}oz) > Cap ({current_cap:.1f}oz)")
+                        continue  # Pula este item, vai para o próximo
+
                 if is_backpack_full:
                     print(f"⚠️ BACKPACK CHEIA! Não consigo pegar {item.id}")
                     state.set_loot_state(False)
@@ -286,14 +313,15 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
                 # Import lazy para evitar circular import
                 from modules.stacker import auto_stack_items
                 auto_stack_items(pm, base_addr, hwnd,
-                                 my_containers_count=my_containers_count)
+                                 my_containers_count=my_containers_count,
+                                 loot_ids=loot_ids)
 
                 dest_slot += 1
                 state.set_loot_state(False)
                 return ("LOOT", item.id, item.count)
 
             # --- AUTO DROP ---
-            if item.id in DROP_IDS:
+            if item.id in drop_ids:
                 print(f"🗑️ Drop: ID {item.id}")
                 pos_from = get_container_pos(cont.index, item.slot_index)
                 px, py, pz = get_player_pos(pm, base_addr)
