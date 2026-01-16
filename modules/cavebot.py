@@ -257,13 +257,16 @@ class Cavebot:
         # Aguarda combate terminar E auto-loot finalizar completamente
         if state.is_in_combat or state.has_open_loot:
             self.last_action_time = time.time()
+            # Atualiza status para exibição na GUI
+            reasons = []
+            if state.is_in_combat:
+                reasons.append("Combate")
+            if state.has_open_loot:
+                reasons.append("Loot")
+            self.current_state = self.STATE_PAUSED
+            self.state_message = f"⏸️ Pausado ({', '.join(reasons)})"
             if DEBUG_PATHFINDING:
-                reasons = []
-                if state.is_in_combat:
-                    reasons.append("COMBATE")
-                if state.has_open_loot:
-                    reasons.append("AUTO-LOOT")
-                print(f"[Cavebot] ⏸️ Pausado: {', '.join(reasons)}")
+                print(f"[Cavebot] {self.state_message}")
             return
 
         # NOVO: Cooldown de 1s após combate/loot para estabilização
