@@ -34,6 +34,7 @@ Tibia is a **massively multiplayer online RPG** (MMORPG) with heavy player inter
 ### Turn-Based Movement
 - Movement happens in **discrete tile-to-tile steps**, not continuous
 - Each step has a duration based on: player speed + ground type
+- **Diagonal movement costs 3x more than cardinal** (horizontal/vertical)
 - The next movement can only begin after the current step completes
 - `movement_status`: 0 = stopped, 1 = moving (must wait for 0 before actions)
 

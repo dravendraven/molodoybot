@@ -5,6 +5,7 @@ from core.map_core import get_player_pos
 from core.player_core import get_connected_char_name
 from core.bot_state import state
 from core.config_utils import make_config_getter
+from modules.trainer import parse_creature_from_bytes
 
 # Definição de intervalos de alerta (Fallback caso não esteja no config)
 TELEGRAM_INTERVAL_NORMAL = 60
@@ -105,6 +106,9 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
         hp_threshold = get_cfg('hp_percent', 50)
 
         visual_enabled = get_cfg('visual_enabled', True)
+        alarm_players = get_cfg('alarm_players', True)
+        alarm_creatures = get_cfg('alarm_creatures', True)
+        targets_list = get_cfg('targets_list', [])
 
         chat_enabled = get_cfg('chat_enabled', False)
         chat_gm_enabled = get_cfg('chat_gm', True)
@@ -194,40 +198,64 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
                 for i in range(MAX_CREATURES):
                     slot = list_start + (i * STEP_SIZE)
                     try:
-                        c_id = pm.read_int(slot)
-                        if c_id > 0:
-                            name_raw = pm.read_string(slot + OFFSET_NAME, 32)
-                            name = name_raw.split('\x00')[0].strip()
-                            if name == current_name: continue
+                        # Lê bloco completo de bytes (inclui outfit)
+                        raw_bytes = pm.read_bytes(slot, STEP_SIZE)
+                        creature = parse_creature_from_bytes(raw_bytes)
 
-                            vis = pm.read_int(slot + OFFSET_VISIBLE)
-                            cz = pm.read_int(slot + OFFSET_Z)
+                        if not creature or creature['id'] <= 0:
+                            continue
 
-                            valid_floor = False
-                            if floor_mode == "Padrão": valid_floor = (cz == my_z)
-                            elif floor_mode == "Superior (+1)": valid_floor = (cz == my_z or cz == my_z - 1)
-                            elif floor_mode == "Inferior (-1)": valid_floor = (cz == my_z or cz == my_z + 1)
-                            else: valid_floor = (abs(cz - my_z) <= 1)
+                        name = creature['name']
+                        if name == current_name:
+                            continue
 
-                            if vis != 0 and valid_floor:
-                                # Detecta GM Visualmente
-                                if any(name.startswith(prefix) for prefix in GM_PREFIXES):
+                        vis = creature['visible']
+                        cz = creature['z']
+
+                        valid_floor = False
+                        if floor_mode == "Padrão": valid_floor = (cz == my_z)
+                        elif floor_mode == "Superior (+1)": valid_floor = (cz == my_z or cz == my_z - 1)
+                        elif floor_mode == "Inferior (-1)": valid_floor = (cz == my_z or cz == my_z + 1)
+                        else: valid_floor = (abs(cz - my_z) <= 1)
+
+                        if vis != 0 and valid_floor:
+                            # Detecta GM Visualmente (sempre dispara)
+                            if any(name.startswith(prefix) for prefix in GM_PREFIXES):
+                                visual_danger = True
+                                is_visual_gm = True
+                                visual_danger_name = f"GAMEMASTER {name}"
+                                break
+
+                            # Ignora se está na safe_list (funciona para players E criaturas)
+                            is_in_safelist = any(s in name for s in safe_list)
+                            if is_in_safelist:
+                                continue
+
+                            # Calcula distância
+                            cx = creature['x']
+                            cy = creature['y']
+                            dist = max(abs(my_x - cx), abs(my_y - cy))
+                            if dist > alarm_range:
+                                continue
+
+                            # Usa outfit para diferenciar player de criatura
+                            if creature['is_player']:
+                                # É PLAYER (tem cores de outfit)
+                                if alarm_players:
                                     visual_danger = True
-                                    is_visual_gm = True
-                                    visual_danger_name = f"GAMEMASTER {name}"
+                                    visual_danger_name = f"PLAYER: {name} ({dist} sqm)"
                                     break
+                            else:
+                                # É CRIATURA (sem cores de outfit)
+                                # Ignora se é alvo do Trainer (você está caçando ela!)
+                                is_target = any(t in name for t in targets_list)
+                                if is_target:
+                                    continue
 
-                                # Detecta Monstro/Player
-                                is_safe_creature = any(s in name for s in safe_list)
-                                if not is_safe_creature:
-                                    cx = pm.read_int(slot + OFFSET_X)
-                                    cy = pm.read_int(slot + OFFSET_Y)
-                                    dist = max(abs(my_x - cx), abs(my_y - cy))
-
-                                    if dist <= alarm_range:
-                                        visual_danger = True
-                                        visual_danger_name = f"{name} ({dist} sqm)"
-                                        break
+                                if alarm_creatures:
+                                    visual_danger = True
+                                    visual_danger_name = f"{name} ({dist} sqm)"
+                                    break
                     except: continue
 
             # =================================================================

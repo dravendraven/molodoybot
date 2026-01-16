@@ -10,6 +10,7 @@ from config import *
 from core.map_core import get_player_pos
 from core.memory_map import MemoryMap
 from database import corpses
+from database.creature_outfits import is_humanoid_creature
 
 # CORREÇÃO: Importar scan_containers do local original (auto_loot.py)
 from modules.auto_loot import scan_containers
@@ -47,7 +48,7 @@ def parse_creature_from_bytes(raw_bytes):
     Reduz de 7 syscalls para 1 por criatura.
 
     Returns:
-        dict com id, name, x, y, z, hp, visible ou None se inválido
+        dict com id, name, x, y, z, hp, visible, is_player ou None se inválido
     """
     try:
         # ID está no offset 0 (4 bytes, little-endian int)
@@ -66,6 +67,23 @@ def parse_creature_from_bytes(raw_bytes):
         hp = struct.unpack_from('<i', raw_bytes, OFFSET_HP)[0]
         visible = struct.unpack_from('<i', raw_bytes, OFFSET_VISIBLE)[0]
 
+        # Outfit (para diferenciar players de criaturas)
+        outfit_type = struct.unpack_from('<I', raw_bytes, OFFSET_OUTFIT_TYPE)[0]
+        outfit_head = struct.unpack_from('<I', raw_bytes, OFFSET_OUTFIT_HEAD)[0]
+        outfit_body = struct.unpack_from('<I', raw_bytes, OFFSET_OUTFIT_BODY)[0]
+        outfit_legs = struct.unpack_from('<I', raw_bytes, OFFSET_OUTFIT_LEGS)[0]
+        outfit_feet = struct.unpack_from('<I', raw_bytes, OFFSET_OUTFIT_FEET)[0]
+
+        has_colors = (outfit_head + outfit_body + outfit_legs + outfit_feet) > 0
+
+        # Dupla validação: outfit + nome devem bater para ser criatura humanoid
+        # Isso evita que criaturas como Amazon/Hunter sejam detectadas como players
+        # E também detecta players disfarçados com outfit de criatura
+        is_known_humanoid = is_humanoid_creature(name, outfit_type, outfit_head, outfit_body, outfit_legs, outfit_feet)
+
+        # Player = tem cores E NÃO é criatura humanoid conhecida
+        is_player = has_colors and not is_known_humanoid
+
         return {
             'id': c_id,
             'name': name,
@@ -73,7 +91,8 @@ def parse_creature_from_bytes(raw_bytes):
             'y': cy,
             'z': z,
             'hp': hp,
-            'visible': visible
+            'visible': visible,
+            'is_player': is_player
         }
     except:
         return None

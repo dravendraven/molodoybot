@@ -62,6 +62,15 @@ OFFSET_SPEED = 0x88
 OFFSET_VISIBLE = 0x8C
 OFFSET_MOVEMENT_STATUS = 0x4C    # 0=parado, 1=andando
 OFFSET_FACING_DIRECTION = 0x50  # 0=Norte, 1=Este, 2=Sul, 3=Oeste
+
+# Offsets de Outfit (para diferenciar players de criaturas)
+# Players tem cores > 0, criaturas tem cores = 0
+OFFSET_OUTFIT_TYPE = 0x60   # 96 - LookType (sprite base)
+OFFSET_OUTFIT_HEAD = 0x64   # 100 - Cor da cabeça
+OFFSET_OUTFIT_BODY = 0x68   # 104 - Cor do corpo
+OFFSET_OUTFIT_LEGS = 0x6C   # 108 - Cor das pernas
+OFFSET_OUTFIT_FEET = 0x70   # 112 - Cor dos pés
+
 MAX_CREATURES = 250
 
 # Constantes de direção para legibilidade

@@ -105,10 +105,9 @@ BOT_SETTINGS = {
     "alarm_floor": "Padrão",
     "alarm_hp_enabled": False,
     "alarm_hp_percent": 50,
-    "alarm_visual_enabled": True,   # <--- NOVO
-    "alarm_chat_enabled": True,    # <--- NOVO
-    "alarm_chat_gm": True,          # <--- NOVO
-    "alarm_logout_enabled": False,  # Deslogar em caso de alarme (exceto GM)
+    "alarm_chat_enabled": False,
+    "alarm_players": True,          # Disparar alarme para players (detecta por outfit)
+    "alarm_creatures": True,        # Disparar alarme para criaturas fora da safe list
 
     # Loot
     "loot_containers": 2,
@@ -1056,11 +1055,13 @@ def start_alarm_thread():
         'floor': BOT_SETTINGS['alarm_floor'],
         'hp_enabled': BOT_SETTINGS['alarm_hp_enabled'],
         'hp_percent': BOT_SETTINGS['alarm_hp_percent'],
-        'visual_enabled': BOT_SETTINGS['alarm_visual_enabled'],
+        'visual_enabled': True,  # Sempre ativo - controlado por alarm_players/alarm_creatures
         'chat_enabled': BOT_SETTINGS['alarm_chat_enabled'],
-        'chat_gm': BOT_SETTINGS['alarm_chat_gm'],
+        'chat_gm': True,  # Sempre ativo - GM no chat sempre pausa
         'debug_mode': BOT_SETTINGS['debug_mode'],
-        'logout_enabled': BOT_SETTINGS.get('alarm_logout_enabled', False)
+        'alarm_players': BOT_SETTINGS.get('alarm_players', True),
+        'alarm_creatures': BOT_SETTINGS.get('alarm_creatures', True),
+        'targets_list': BOT_SETTINGS.get('targets', [])
     }
 
     check_run = lambda: state.is_running and state.is_connected
@@ -2127,21 +2128,16 @@ def open_settings():
     # ==========================================================================
     frame_alarm = create_grid_frame(tab_alarm)
 
-    # --- VISUAL ALARM ---
-    ctk.CTkLabel(tab_alarm, text="Monitorar Criaturas (Visual):", **UI['H1']).pack(anchor="w", padx=10, pady=(0,5))
+    # --- TIPO DE ENTIDADE (Player vs Criatura) ---
+    ctk.CTkLabel(tab_alarm, text="Detecção Visual:", **UI['H1']).pack(anchor="w", padx=10, pady=(5,5))
 
-    switch_visual = ctk.CTkSwitch(tab_alarm, text="Alarme Visual", command=lambda: None, progress_color="#00D9FF", **UI['BODY'])
-    switch_visual.pack(anchor="w", padx=UI['PAD_INDENT'], pady=2)
-    if BOT_SETTINGS.get('alarm_visual_enabled', True): switch_visual.select()
+    switch_alarm_players = ctk.CTkSwitch(tab_alarm, text="Alarme para Players", command=lambda: None, progress_color="#FF5555", **UI['BODY'])
+    switch_alarm_players.pack(anchor="w", padx=UI['PAD_INDENT'], pady=2)
+    if BOT_SETTINGS.get('alarm_players', True): switch_alarm_players.select()
 
-    ctk.CTkLabel(tab_alarm, text="↳ Detecta criaturas/players não-seguros na tela.", **UI['HINT']).pack(anchor="w", padx=45)
-
-    # --- LOGOUT ON ALARM ---
-    switch_logout_alarm = ctk.CTkSwitch(tab_alarm, text="Deslogar em caso de alarme", command=lambda: None, progress_color="#FF0000", **UI['BODY'])
-    switch_logout_alarm.pack(anchor="w", padx=UI['PAD_INDENT'], pady=2)
-    if BOT_SETTINGS.get('alarm_logout_enabled', False): switch_logout_alarm.select()
-
-    ctk.CTkLabel(tab_alarm, text="↳ Faz logout se detectar perigo (exceto GM).", **UI['HINT']).pack(anchor="w", padx=45)
+    switch_alarm_creatures = ctk.CTkSwitch(tab_alarm, text="Alarme para Criaturas", command=lambda: None, progress_color="#FFA500", **UI['BODY'])
+    switch_alarm_creatures.pack(anchor="w", padx=UI['PAD_INDENT'], pady=2)
+    if BOT_SETTINGS.get('alarm_creatures', True): switch_alarm_creatures.select()
 
     # Distância
     ctk.CTkLabel(frame_alarm, text="Distância (SQM):", **UI['BODY']).grid(row=0, column=0, sticky="e", padx=10, pady=UI['PAD_ITEM'])
@@ -2203,10 +2199,7 @@ def open_settings():
     switch_chat = ctk.CTkSwitch(tab_alarm, text="Alarme de Msg Nova", command=toggle_chat_opts, progress_color="#FFA500", **UI['BODY'])
     switch_chat.pack(anchor="w", padx=UI['PAD_INDENT'], pady=2)
     if BOT_SETTINGS.get('alarm_chat_enabled', False): switch_chat.select()
-
-    switch_gm_chat = ctk.CTkSwitch(tab_alarm, text="Pausar se GM falar", command=toggle_chat_opts, progress_color="#FF0000", **UI['BODY'])
-    switch_gm_chat.pack(anchor="w", padx=UI['PAD_INDENT'], pady=2)
-    if BOT_SETTINGS.get('alarm_chat_gm', True): switch_gm_chat.select()
+    ctk.CTkLabel(tab_alarm, text="↳ GM no chat sempre pausa o bot automaticamente", **UI['HINT']).pack(anchor="w", padx=45)
 
     def save_alarm():
         try:
@@ -2214,21 +2207,18 @@ def open_settings():
             raw_range = combo_alarm.get()
             BOT_SETTINGS['alarm_range'] = 15 if "Tela" in raw_range else int(raw_range.split()[0])
             BOT_SETTINGS['alarm_floor'] = combo_floor.get()
-            
+
             # HP
             BOT_SETTINGS['alarm_hp_enabled'] = bool(switch_hp_alarm.get())
             hp_val = int(entry_hp_pct.get())
             BOT_SETTINGS['alarm_hp_percent'] = hp_val
 
-            # Visual
-            BOT_SETTINGS['alarm_visual_enabled'] = bool(switch_visual.get())
+            # Tipo de Entidade (Player vs Criatura)
+            BOT_SETTINGS['alarm_players'] = bool(switch_alarm_players.get())
+            BOT_SETTINGS['alarm_creatures'] = bool(switch_alarm_creatures.get())
 
             # Chat
             BOT_SETTINGS['alarm_chat_enabled'] = bool(switch_chat.get())
-            BOT_SETTINGS['alarm_chat_gm'] = bool(switch_gm_chat.get())
-
-            # Logout
-            BOT_SETTINGS['alarm_logout_enabled'] = bool(switch_logout_alarm.get())
 
             save_config_file()
             log(f"🔔 Alarme salvo.")
