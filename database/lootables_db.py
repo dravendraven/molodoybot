@@ -1112,3 +1112,13 @@ def find_loot_by_name(name_query):
         if query_lower in data['name'].lower():
             results.append(item_id)
     return results
+
+def is_stackable(item_id):
+    """
+    Verifica se o item é empilhável (tem flag 'Cumulative').
+    Retorna True se empilhável, False caso contrário.
+    """
+    data = LOOTABLES.get(item_id)
+    if data and 'flags' in data:
+        return 'Cumulative' in data['flags']
+    return False

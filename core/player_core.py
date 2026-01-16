@@ -8,6 +8,8 @@ O nome do personagem é constante durante a sessão e pode ser
 armazenado pelo caller após primeira leitura bem-sucedida.
 """
 
+import time
+
 from config import (
     BATTLELIST_BEGIN_ADDRESS,
     TARGET_ID_PTR,
@@ -21,7 +23,165 @@ from config import (
     OFFSET_Z,
     OFFSET_HP,
     OFFSET_SPEED,
+    OFFSET_MOVEMENT_STATUS,
+    OFFSET_FACING_DIRECTION,
 )
+
+# ==============================================================================
+# CACHE DO SLOT DO PLAYER NA BATTLELIST
+# ==============================================================================
+# A posição do player na BattleList é FIXA após login, então podemos cachear
+_cached_player_slot = None  # (player_id, slot_address) ou None
+
+
+def _get_player_slot_address(pm, base_addr):
+    """
+    Retorna o endereço do slot do player na BattleList.
+    Usa cache - a posição é fixa após login.
+
+    Returns:
+        int: Endereço do slot ou None se não encontrar
+    """
+    global _cached_player_slot
+
+    try:
+        player_id = pm.read_int(base_addr + OFFSET_PLAYER_ID)
+        if player_id == 0:
+            return None
+
+        # Se já temos cache válido para este player_id, retorna
+        if _cached_player_slot and _cached_player_slot[0] == player_id:
+            return _cached_player_slot[1]
+
+        # Procura o slot do player na BattleList
+        list_start = base_addr + TARGET_ID_PTR + REL_FIRST_ID
+        for i in range(MAX_CREATURES):
+            slot = list_start + (i * STEP_SIZE)
+            slot_id = pm.read_int(slot)
+            if slot_id == player_id:
+                _cached_player_slot = (player_id, slot)
+                return slot
+
+    except Exception:
+        pass
+
+    return None
+
+
+def clear_player_slot_cache():
+    """Limpa cache do slot do player (chamar ao desconectar/reconectar)."""
+    global _cached_player_slot
+    _cached_player_slot = None
+
+
+# ==============================================================================
+# FUNÇÕES DE MOVIMENTO DO PLAYER
+# ==============================================================================
+
+def is_player_moving(pm, base_addr) -> bool:
+    """
+    Verifica se o jogador está em movimento (leitura direta da memória).
+
+    IMPORTANTE: Muito mais preciso que detecção baseada em posição/tempo.
+    Usa cache do slot do player para performance.
+
+    Returns:
+        True se andando, False se parado ou não encontrado
+    """
+    slot = _get_player_slot_address(pm, base_addr)
+    if not slot:
+        return False
+
+    try:
+        movement_status = pm.read_int(slot + OFFSET_MOVEMENT_STATUS)
+        return movement_status == 1
+    except Exception:
+        return False
+
+
+def get_player_facing_direction(pm, base_addr) -> int:
+    """
+    Retorna a direção para qual o jogador está olhando.
+
+    Returns:
+        0=Norte, 1=Este, 2=Sul, 3=Oeste, -1=Não encontrado
+    """
+    slot = _get_player_slot_address(pm, base_addr)
+    if not slot:
+        return -1
+
+    try:
+        return pm.read_int(slot + OFFSET_FACING_DIRECTION)
+    except Exception:
+        return -1
+
+
+def get_creature_movement_info(pm, base_addr, creature_id) -> dict:
+    """
+    Retorna info de movimento de qualquer criatura na BattleList.
+
+    Args:
+        creature_id: ID da criatura a consultar
+
+    Returns:
+        {'is_moving': bool, 'direction': int} ou None se não encontrar
+    """
+    try:
+        list_start = base_addr + TARGET_ID_PTR + REL_FIRST_ID
+
+        for i in range(MAX_CREATURES):
+            slot = list_start + (i * STEP_SIZE)
+            slot_id = pm.read_int(slot)
+
+            if slot_id == creature_id:
+                return {
+                    'is_moving': pm.read_int(slot + OFFSET_MOVEMENT_STATUS) == 1,
+                    'direction': pm.read_int(slot + OFFSET_FACING_DIRECTION)
+                }
+    except Exception:
+        pass
+
+    return None
+
+
+def wait_until_stopped(pm, base_addr, packet=None, timeout=2.0, check_interval=0.05) -> bool:
+    """
+    Aguarda até o personagem parar de se mover.
+    Se timeout, envia packet.stop() e verifica novamente.
+
+    Args:
+        packet: PacketManager para enviar stop se necessário
+        timeout: Tempo máximo de espera em segundos
+        check_interval: Intervalo entre verificações
+
+    Returns:
+        True se parou, False se ainda em movimento após todas tentativas
+    """
+    start_time = time.time()
+
+    # Primeira tentativa: aguardar naturalmente
+    while time.time() - start_time < timeout:
+        if not is_player_moving(pm, base_addr):
+            return True
+        time.sleep(check_interval)
+
+    # Timeout - enviar packet.stop() se disponível
+    if packet:
+        packet.stop()
+        time.sleep(0.3)  # Aguarda servidor processar
+
+        # Verificar novamente
+        if not is_player_moving(pm, base_addr):
+            return True
+
+        # Segunda tentativa com mais tempo
+        end_time = time.time() + 1.0
+        while time.time() < end_time:
+            if not is_player_moving(pm, base_addr):
+                return True
+            time.sleep(check_interval)
+
+    return False
 
 def get_player_speed(pm, base_addr) -> int:
     """

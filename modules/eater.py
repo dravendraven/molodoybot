@@ -5,6 +5,7 @@ from core.packet import PacketManager, get_container_pos
 from config import *
 from modules.auto_loot import scan_containers, is_player_full
 from core.bot_state import state
+from core.player_core import is_player_moving
 
 def attempt_eat(pm, base_addr, hwnd):
     """
@@ -13,6 +14,10 @@ def attempt_eat(pm, base_addr, hwnd):
     """
     # Protege ciclo de runemaking - não come durante runemaking
     if state.is_runemaking:
+        return False
+
+    # Não come enquanto personagem está andando
+    if is_player_moving(pm, base_addr):
         return False
 
     containers = scan_containers(pm, base_addr)

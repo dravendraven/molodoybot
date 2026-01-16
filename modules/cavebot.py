@@ -21,7 +21,7 @@ from core.inventory_core import find_item_in_containers, find_item_in_equipment 
 from database.tiles_config import ROPE_ITEM_ID, SHOVEL_ITEM_ID, get_ground_speed
 from core.bot_state import state
 from core.global_map import GlobalMap
-from core.player_core import get_player_speed
+from core.player_core import get_player_speed, is_player_moving, wait_until_stopped
 
 
 COOLDOWN_AFTER_COMBAT = random.uniform(2.5, 5)  # 1s a 1.5s de cooldown após combate
@@ -763,6 +763,8 @@ class Cavebot:
                   f"Diagonal={is_diagonal}, Base={base_ms:.1f}ms, "
                   f"Jitter={jitter:.1f}ms, Total={total_ms:.1f}ms, Wait={wait_time:.3f}s")
 
+        print(f"[Cavebot] 🚶 Andando ({dx},{dy}) - Próximo em {wait_time:.2f}s")
+
         # 11. Define o tempo em que o bot vai "acordar" para o próximo passo
         self.last_action_time = time.time() + wait_time
 
@@ -834,6 +836,12 @@ class Cavebot:
 
     def _handle_special_tile(self, rel_x, rel_y, ftype, special_id, px, py, pz):
         """Executa a ação correta para tiles especiais (escadas, buracos, rope)."""
+        # Aguarda personagem parar antes de interagir com tile especial
+        if not wait_until_stopped(self.pm, self.base_addr, packet=self.packet, timeout=1.5):
+            if DEBUG_PATHFINDING:
+                print(f"[Cavebot] ⏳ Aguardando parada para usar {ftype}...")
+            return  # Tenta novamente no próximo ciclo
+
         abs_x = px + rel_x
         abs_y = py + rel_y
         target_pos = get_ground_pos(abs_x, abs_y, pz)
@@ -1379,31 +1387,44 @@ class Cavebot:
 
     def _check_stuck(self, px, py, pz, current_index):
         """
-        Detecta se o player está travado no mesmo tile.
-        Se sim, tenta recuperar pulando waypoint ou aumentando delay.
+        Detecta se o player está travado.
+        Usa is_player_moving como fonte primária de detecção.
+
+        Lógica:
+        - Se estamos em rota e o personagem NÃO está se movendo
+        - E a posição não mudou = provavelmente stuck
         """
         current_pos = (px, py, pz)
+        is_moving = is_player_moving(self.pm, self.base_addr)
 
+        # Se está se movendo, não está stuck - reseta contador
+        if is_moving:
+            self.stuck_counter = 0
+            self.last_known_pos = current_pos
+            return
+
+        # Personagem parado - verificar se deveria estar andando
         if self.last_known_pos == current_pos:
             self.stuck_counter += 1
+
+            if DEBUG_PATHFINDING:
+                print(f"[Cavebot] ⚠️ Parado há {self.stuck_counter} ciclos (is_moving=False)")
 
             if self.stuck_counter >= self.stuck_threshold:
                 stuck_time = self.stuck_counter * self.walk_delay
                 self.current_state = self.STATE_STUCK
                 self.state_message = f"🧱 Stuck! Pulando WP #{current_index + 1}"
-                print(f"[Cavebot] ⚠️ STUCK! {stuck_time:.1f}s parado no mesmo tile ({px}, {py}, {pz})")
+                print(f"[Cavebot] ⚠️ STUCK! {stuck_time:.1f}s parado ({px}, {py}, {pz})")
 
                 # Estratégia de recuperação: Pula para próximo waypoint
                 with self._waypoints_lock:
                     if len(self._waypoints) > 1:
                         print(f"[Cavebot] Pulando para próximo waypoint...")
                         self._advance_waypoint()
-                        self.current_global_path = [] # Reseta ao pular
+                        self.current_global_path = []
 
-                # Reseta contador
                 self.stuck_counter = 0
-                self.last_known_pos = current_pos
         else:
-            # Player se moveu, reseta contador
+            # Posição mudou (mesmo que is_moving=False agora) - não está stuck
             self.stuck_counter = 0
             self.last_known_pos = current_pos

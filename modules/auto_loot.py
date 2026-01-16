@@ -9,6 +9,7 @@ from core.packet import PacketManager, get_container_pos, get_ground_pos
 from database import foods_db
 from core.map_core import get_player_pos
 from core.bot_state import state
+from core.player_core import is_player_moving
 
 # Imports condicionais do novo sistema de loot configurável
 if USE_CONFIGURABLE_LOOT_SYSTEM:
@@ -168,6 +169,10 @@ def get_best_loot_destination(containers, my_containers_max_count, start_index=0
 def run_auto_loot(pm, base_addr, hwnd, config=None):
     # Protege ciclo de runemaking - não processa loot durante runemaking
     if state.is_runemaking:
+        return None
+
+    # Não processa loot enquanto personagem está andando
+    if is_player_moving(pm, base_addr):
         return None
 
     # --- HELPER DE CONFIGURAÇÃO ---

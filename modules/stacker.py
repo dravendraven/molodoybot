@@ -3,6 +3,7 @@ from core.packet import PacketManager, get_container_pos
 from core.packet_mutex import PacketMutex
 from utils.timing import gauss_wait
 from core.bot_state import state
+from database.lootables_db import is_stackable
 # NOTA: imports de auto_loot são LAZY dentro da função auto_stack_items()
 # para evitar circular import com auto_loot.py
 
@@ -57,8 +58,8 @@ def auto_stack_items(pm, base_addr, hwnd, my_containers_count=None, mutex_contex
     for cont in my_containers:
         for i, item_dst in enumerate(cont.items):
 
-            # Alvo válido?
-            if item_dst.count < 100 and item_dst.id in loot_ids:
+            # Alvo válido? (deve ser empilhável - flag Cumulative)
+            if item_dst.count < 100 and item_dst.id in loot_ids and is_stackable(item_dst.id):
 
                 # Procura doador
                 for j, item_src in enumerate(cont.items):

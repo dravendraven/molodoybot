@@ -17,6 +17,7 @@ from core.input_core import press_hotkey, left_click_at
 from database import foods_db
 from core.config_utils import make_config_getter
 from core.bot_state import state
+from core.player_core import wait_until_stopped
 
 # Usar constantes do config.py ao invés de redefinir
 # SLOT_RIGHT e SLOT_LEFT removidos (usar HandSlot do config)
@@ -453,7 +454,11 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                         with PacketMutex("runemaker"):
                             # STOP: Garante que o personagem pare antes de mover itens
                             packet.stop()
-                            time.sleep(0.3)
+                            if not wait_until_stopped(pm, base_addr, packet=packet, timeout=1.5):
+                                log_msg("⚠️ Timeout aguardando parada. Tentando novamente...")
+                                state.set_runemaking(False)
+                                continue  # Volta ao início do loop
+                            time.sleep(0.1)  # Pequena margem adicional
 
                             # PHASE 1: Unequip all hands and store their items
                             # (This fixes the bug where unequipped_item_id gets overwritten with "BOTH" hands)

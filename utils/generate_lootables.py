@@ -116,7 +116,17 @@ def save_lootables_file(db, filename="../database/lootables_db.py"):
         f.write("    for item_id, data in LOOTABLES.items():\n")
         f.write("        if query_lower in data['name'].lower():\n")
         f.write("            results.append(item_id)\n")
-        f.write("    return results\n")
+        f.write("    return results\n\n")
+
+        f.write("def is_stackable(item_id):\n")
+        f.write('    """\n')
+        f.write("    Verifica se o item é empilhável (tem flag 'Cumulative').\n")
+        f.write("    Retorna True se empilhável, False caso contrário.\n")
+        f.write('    """\n')
+        f.write("    data = LOOTABLES.get(item_id)\n")
+        f.write("    if data and 'flags' in data:\n")
+        f.write("        return 'Cumulative' in data['flags']\n")
+        f.write("    return False\n")
 
 if __name__ == "__main__":
     # Encontra o arquivo objects.srv
