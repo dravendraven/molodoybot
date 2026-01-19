@@ -763,7 +763,7 @@ class Cavebot:
                   f"Diagonal={is_diagonal}, Base={base_ms:.1f}ms, "
                   f"Jitter={jitter:.1f}ms, Total={total_ms:.1f}ms, Wait={wait_time:.3f}s")
 
-        print(f"[Cavebot] 🚶 Andando ({dx},{dy}) - Próximo em {wait_time:.2f}s")
+        #print(f"[Cavebot] 🚶 Andando ({dx},{dy}) - Próximo em {wait_time:.2f}s")
 
         # 11. Define o tempo em que o bot vai "acordar" para o próximo passo
         self.last_action_time = time.time() + wait_time

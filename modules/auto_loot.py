@@ -10,6 +10,7 @@ from database import foods_db
 from core.map_core import get_player_pos
 from core.bot_state import state
 from core.player_core import is_player_moving
+from core.models import Item, Container
 
 # Imports condicionais do novo sistema de loot configurável
 if USE_CONFIGURABLE_LOOT_SYSTEM:
@@ -30,30 +31,9 @@ USE_AUTO_CONTAINER_DETECTION = True  # Desabilitado por padrão - testar antes
 _loot_indices = set()  # Índices marcados como loot em tempo real
 
 # ==============================================================================
-# CLASSES DE DADOS
+# CLASSES DE DADOS (importadas de core/models.py)
 # ==============================================================================
-class Item:
-    def __init__(self, item_id, count, slot_index):
-        self.id = item_id
-        self.count = count
-        self.slot_index = slot_index 
-
-    def __repr__(self):
-        return f"[Slot {self.slot_index}] ID: {self.id} | Qt: {self.count}"
-
-class Container:
-    def __init__(self, index, address, name, amount, volume, hasparent, items):
-        self.index = index
-        self.address = address
-        self.name = name
-        self.amount = amount
-        self.volume = volume
-        self.hasparent = hasparent  # 0 = raiz, 1 = filho de outro container
-        self.items = items
-
-    def __repr__(self):
-        parent_str = "filho" if self.hasparent else "raiz"
-        return f"Container {self.index}: '{self.name}' ({self.amount}/{self.volume}) [{parent_str}]"
+# Item e Container são importados de core.models
 
 # ==============================================================================
 # LEITURA DE MEMÓRIA
@@ -76,7 +56,7 @@ def scan_containers(pm, base_addr):
                 name = read_container_name(pm, cnt_addr)
                 amount = pm.read_int(cnt_addr + OFFSET_CNT_AMOUNT)
                 volume = pm.read_int(cnt_addr + OFFSET_CNT_VOLUME)
-                hasparent = pm.read_int(cnt_addr + OFFSET_CNT_HAS_PARENT)  # 0=raiz, 1=filho
+                hasparent_int = pm.read_int(cnt_addr + OFFSET_CNT_HAS_PARENT)  # 0=raiz, 1=filho
 
                 items = []
                 for slot in range(amount):
@@ -89,7 +69,15 @@ def scan_containers(pm, base_addr):
                         if raw_id > 0: items.append(Item(raw_id, final_count, slot))
                     except: pass
 
-                open_containers.append(Container(i, cnt_addr, name, amount, volume, hasparent, items))
+                open_containers.append(Container(
+                    index=i,
+                    name=name,
+                    volume=volume,
+                    amount=amount,
+                    has_parent=(hasparent_int == 1),
+                    items=items,
+                    address=cnt_addr
+                ))
         except: continue
     return open_containers
 
@@ -108,7 +96,7 @@ def is_player_full(pm, base_addr):
 def track_loot_containers(containers):
     """
     Atualiza tracking de quais índices são loot.
-    Usa nome "Dead " + hasparent para classificar.
+    Usa nome "Dead " + has_parent para classificar.
     """
     global _loot_indices
 
@@ -121,10 +109,10 @@ def track_loot_containers(containers):
         if c.name.startswith("Dead ") or c.name.startswith("Slain "):
             # Corpo de criatura = sempre loot
             _loot_indices.add(c.index)
-        elif c.hasparent == 1 and c.index in _loot_indices:
+        elif c.has_parent and c.index in _loot_indices:
             # Bag que substituiu corpo = mantém como loot
             pass
-        elif c.hasparent == 0 and not c.name.startswith("Dead "):
+        elif not c.has_parent and not c.name.startswith("Dead "):
             # Container raiz do player = remove do tracking
             _loot_indices.discard(c.index)
 

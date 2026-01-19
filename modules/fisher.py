@@ -204,7 +204,16 @@ def fishing_loop(pm, base_addr, hwnd, check_running=None, log_callback=None,
             # - Runemaking: SEMPRE pausa (prioridade máxima)
             # - Combate/Loot: Só pausa se cavebot estiver ativo
             #   (permite pesca durante treino em trainer-only mode)
-            if state.is_runemaking or (state.cavebot_active and (state.is_in_combat or state.has_open_loot)):
+            if state.is_runemaking:
+                set_status("pausado (runemaking)")
+                gauss_wait(0.5, 20)
+                continue
+            if state.cavebot_active and state.is_in_combat:
+                set_status("pausado (combate)")
+                gauss_wait(0.5, 20)
+                continue
+            if state.cavebot_active and state.has_open_loot:
+                set_status("pausado (loot)")
                 gauss_wait(0.5, 20)
                 continue
 
@@ -215,14 +224,17 @@ def fishing_loop(pm, base_addr, hwnd, check_running=None, log_callback=None,
                 except: time.sleep(1); continue
 
             if not mapper.read_full_map(player_id):
+                set_status("aguardando mapa...")
                 time.sleep(0.5); continue
-            
+
             if mapper.center_index == -1:
+                set_status("aguardando mapa...")
                 time.sleep(1); continue
 
             rod_pos = get_rod_packet_position(pm, base_addr)
             if not rod_pos:
                 log_msg("❌ Vara não encontrada.")
+                set_status("vara nao encontrada")
                 time.sleep(5); continue
                 
             px, py, pz = get_player_pos(pm, base_addr)
@@ -277,6 +289,7 @@ def fishing_loop(pm, base_addr, hwnd, check_running=None, log_callback=None,
                 debug_hud_callback(final_batch)
 
             if not candidates:
+                set_status("sem tiles de peixe")
                 time.sleep(1)
                 continue
             
@@ -352,6 +365,7 @@ def fishing_loop(pm, base_addr, hwnd, check_running=None, log_callback=None,
             if is_fatigue_enabled and fatigue_count >= fatigue_limit:
                 rest_time = random.uniform(*FATIGUE_REST_RANGE)
                 log_msg(f"🥱 Cansou ({fatigue_count} ações). Pausa de {rest_time:.1f}s...")
+                set_status(f"descansando... ({rest_time:.0f}s)")
                 
                 # Feedback visual de descanso (apenas passivos)
                 if debug_hud_callback: 

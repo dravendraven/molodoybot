@@ -166,7 +166,9 @@ cavebot_instance = None
 current_waypoints_ui = []
 current_waypoints_filename = ""
 label_cavebot_status = None  # Label para mostrar posição atual e waypoint
-txt_waypoints_settings = None
+txt_waypoints_settings = None  # DEPRECATED - substituído por waypoint_listbox
+waypoint_listbox = None  # Listbox para exibir e selecionar waypoints
+lbl_wp_header = None  # Label com contador de waypoints
 entry_waypoint_name = None
 combo_cavebot_scripts = None
 
@@ -387,22 +389,54 @@ def update_waypoint_display():
     """Atualiza a lista visual de waypoints na janela de Settings (Thread-Safe)."""
 
     def _refresh_ui():
-        global txt_waypoints_settings
+        global waypoint_listbox, lbl_wp_header
 
-        # Se a janela de settings não estiver aberta ou o widget não existir, ignora
+        # === NOVO: Usa Listbox se disponível ===
+        if waypoint_listbox is not None:
+            try:
+                if not waypoint_listbox.winfo_exists():
+                    return
+            except:
+                return
+
+            # Salva seleção atual para restaurar depois
+            current_selection = waypoint_listbox.curselection()
+            saved_idx = current_selection[0] if current_selection else None
+
+            # Limpa e repopula o listbox
+            waypoint_listbox.delete(0, tk.END)
+
+            for idx, wp in enumerate(current_waypoints_ui):
+                act = wp.get('action', 'WALK').upper()
+                line = f"{idx+1}. [{act}] {wp['x']}, {wp['y']}, {wp['z']}"
+                waypoint_listbox.insert(tk.END, line)
+
+            # Atualiza header com contador
+            if lbl_wp_header is not None:
+                try:
+                    if lbl_wp_header.winfo_exists():
+                        lbl_wp_header.configure(text=f"Waypoints ({len(current_waypoints_ui)})")
+                except:
+                    pass
+
+            # Restaura seleção se ainda válida
+            if saved_idx is not None and saved_idx < len(current_waypoints_ui):
+                waypoint_listbox.selection_set(saved_idx)
+            return
+
+        # === FALLBACK: Textbox antigo (compatibilidade) ===
+        global txt_waypoints_settings
         if txt_waypoints_settings is None:
             return
         try:
             if not txt_waypoints_settings.winfo_exists():
                 return
         except:
-            return # Widget destruído
+            return
 
-        # Atualiza o conteúdo
         txt_waypoints_settings.configure(state="normal")
         txt_waypoints_settings.delete("1.0", "end")
 
-        # Header com contador
         total = len(current_waypoints_ui)
         header = f"═══ WAYPOINTS (Total: {total}) ═══\n\n"
         txt_waypoints_settings.insert("end", header)
@@ -412,7 +446,6 @@ def update_waypoint_display():
         else:
             for idx, wp in enumerate(current_waypoints_ui):
                 act = wp.get('action', 'WALK').upper()
-                # Formatação: 1. [WALK] 32300, 32100, 7
                 line = f"{idx+1}. [{act}] {wp['x']}, {wp['y']}, {wp['z']}\n"
                 txt_waypoints_settings.insert("end", line)
 
@@ -564,6 +597,82 @@ def remove_last_waypoint():
 
     update_waypoint_display()
     log(f"🗑️ Removido WP #{len(current_waypoints_ui) + 1}: ({removed_wp['x']}, {removed_wp['y']}, {removed_wp['z']})")
+
+def move_waypoint_up():
+    """Move o waypoint selecionado para cima na lista."""
+    global current_waypoints_ui, cavebot_instance, waypoint_listbox
+
+    if waypoint_listbox is None:
+        return
+
+    selection = waypoint_listbox.curselection()
+    if not selection or selection[0] == 0:
+        return
+
+    idx = selection[0]
+    # Swap
+    current_waypoints_ui[idx], current_waypoints_ui[idx-1] = \
+        current_waypoints_ui[idx-1], current_waypoints_ui[idx]
+
+    # Atualiza backend
+    if cavebot_instance:
+        cavebot_instance.load_waypoints(current_waypoints_ui)
+
+    # Atualiza display e mantém seleção
+    update_waypoint_display()
+    waypoint_listbox.selection_clear(0, tk.END)
+    waypoint_listbox.selection_set(idx - 1)
+    waypoint_listbox.see(idx - 1)
+
+def move_waypoint_down():
+    """Move o waypoint selecionado para baixo na lista."""
+    global current_waypoints_ui, cavebot_instance, waypoint_listbox
+
+    if waypoint_listbox is None:
+        return
+
+    selection = waypoint_listbox.curselection()
+    if not selection or selection[0] >= len(current_waypoints_ui) - 1:
+        return
+
+    idx = selection[0]
+    # Swap
+    current_waypoints_ui[idx], current_waypoints_ui[idx+1] = \
+        current_waypoints_ui[idx+1], current_waypoints_ui[idx]
+
+    if cavebot_instance:
+        cavebot_instance.load_waypoints(current_waypoints_ui)
+
+    update_waypoint_display()
+    waypoint_listbox.selection_clear(0, tk.END)
+    waypoint_listbox.selection_set(idx + 1)
+    waypoint_listbox.see(idx + 1)
+
+def remove_selected_waypoint():
+    """Remove o waypoint selecionado."""
+    global current_waypoints_ui, cavebot_instance, waypoint_listbox
+
+    if waypoint_listbox is None:
+        return
+
+    selection = waypoint_listbox.curselection()
+    if not selection:
+        log("⚠️ Selecione um waypoint para remover.")
+        return
+
+    idx = selection[0]
+    removed = current_waypoints_ui.pop(idx)
+
+    if cavebot_instance:
+        cavebot_instance.load_waypoints(current_waypoints_ui)
+
+    update_waypoint_display()
+    log(f"🗑️ Removido WP #{idx+1}: ({removed['x']}, {removed['y']}, {removed['z']})")
+
+    # Seleciona o próximo item (ou anterior se era o último)
+    if current_waypoints_ui:
+        new_idx = min(idx, len(current_waypoints_ui) - 1)
+        waypoint_listbox.selection_set(new_idx)
 
 def open_remove_specific_dialog():
     """Abre janela para inserir o número do waypoint a ser removido."""
@@ -1842,7 +1951,7 @@ def update_status_panel():
     auto_resize_window()
 
 def open_settings():
-    global toplevel_settings, lbl_status, txt_waypoints_settings, entry_waypoint_name, combo_cavebot_scripts, current_waypoints_filename, label_cavebot_status
+    global toplevel_settings, lbl_status, txt_waypoints_settings, entry_waypoint_name, combo_cavebot_scripts, current_waypoints_filename, label_cavebot_status, waypoint_listbox, lbl_wp_header
     
     if toplevel_settings is not None and toplevel_settings.winfo_exists():
         toplevel_settings.lift()
@@ -2567,152 +2676,107 @@ def open_settings():
     ctk.CTkButton(tab_rune, text="Salvar Rune", command=save_rune, height=32, fg_color="#00A86B", hover_color="#008f5b").pack(side="bottom", fill="x", padx=20, pady=5)
 
     # ==========================================================================
-    # 8. ABA CAVEBOT (REFORMULADA - ESTILO ZION)
+    # 8. ABA CAVEBOT (LAYOUT COLUNA ÚNICA - OTIMIZADO)
     # ==========================================================================
-    
-    # Container para compactar a aba Cavebot
+
+    # Container principal - coluna única vertical
     frame_cb_root = ctk.CTkFrame(tab_cavebot, fg_color="transparent")
-    frame_cb_root.pack(fill="both", expand=True, padx=4, pady=4)
-    frame_cb_root.grid_columnconfigure(0, weight=1)
-    frame_cb_root.grid_columnconfigure(1, weight=2)
+    frame_cb_root.pack(fill="both", expand=True, padx=8, pady=8)
 
-    # --- COLUNA ESQUERDA: CONTROLES E MATRIZ ---
-    frame_cb_left = ctk.CTkFrame(frame_cb_root, fg_color="transparent")
-    frame_cb_left.grid(row=0, column=0, sticky="nsew", padx=(0, 3), pady=2)
+    # === SEÇÃO: STATUS ===
+    label_cavebot_status = ctk.CTkLabel(frame_cb_root, text="📍 Posição: ---", **UI['BODY'])
+    label_cavebot_status.pack(anchor="w", pady=(0, 8))
 
-    # 0. Status do Cavebot (Posição Atual + Waypoint Alvo)
-    label_cavebot_status = ctk.CTkLabel(frame_cb_left, text="📍 Posição: ---", **UI['BODY'])
-    label_cavebot_status.pack(anchor="w", pady=(0, 10), fill="x")
+    # === SEÇÃO: ARQUIVO ===
+    frame_arquivo = ctk.CTkFrame(frame_cb_root)
+    frame_arquivo.pack(fill="x", pady=(0, 8))
 
-    ctk.CTkFrame(frame_cb_left, height=1, fg_color="#555").pack(fill="x", pady=5)
+    # Linha 1: Carregar
+    frame_load = ctk.CTkFrame(frame_arquivo, fg_color="transparent")
+    frame_load.pack(fill="x", padx=10, pady=5)
 
-    # Adição Manual - SIMPLIFICADO
-    ctk.CTkLabel(frame_cb_left, text="Adição Manual", **UI['H1']).pack(anchor="w", pady=(0,2))
+    ctk.CTkLabel(frame_load, text="Carregar:", width=60, **UI['BODY']).pack(side="left")
+    combo_cavebot_scripts = ctk.CTkComboBox(frame_load, values=[], width=140, state="readonly", **UI['BODY'])
+    combo_cavebot_scripts.pack(side="left", padx=5)
+    ctk.CTkButton(frame_load, text="📂 Carregar", width=90, command=load_waypoints_file,
+                  **UI['BUTTON_SM']).pack(side="left")
 
-    ctk.CTkLabel(frame_cb_left, text="Clique no botão ou insira coordenadas:",
-                **UI['HINT']).pack(anchor="w", pady=(0, 5))
+    # Linha 2: Salvar
+    frame_save = ctk.CTkFrame(frame_arquivo, fg_color="transparent")
+    frame_save.pack(fill="x", padx=10, pady=5)
 
-    # Botão: Adicionar WP na posição atual
-    btn_add_here = ctk.CTkButton(
-        frame_cb_left,
-        text="Adicionar WP",
-        command=lambda: add_manual_waypoint(0, 0, "walk"),  # dx=0, dy=0 = posição atual
-        fg_color="#2CC985",
-        hover_color="#1FA86E",
-        **UI['BUTTON_SM']
-    )
-    btn_add_here.pack(fill="x", padx=20, pady=5)
+    ctk.CTkLabel(frame_save, text="Salvar:", width=60, **UI['BODY']).pack(side="left")
+    entry_waypoint_name = ctk.CTkEntry(frame_save, width=140, **UI['BODY'])
+    entry_waypoint_name.pack(side="left", padx=5)
+    # Input começa vazio - só preenche ao carregar um script
 
-    # Botão: Inserir coordenadas manualmente
-    btn_add_coords = ctk.CTkButton(
-        frame_cb_left,
-        text="Inserir Coords (X, Y, Z)",
-        command=open_insert_coords_dialog,
-        fg_color="#3B8ED0",
-        hover_color="#2B6EA0",
-        **UI['BUTTON_SM']
-    )
-    btn_add_coords.pack(fill="x", padx=20, pady=(5, 0))
+    ctk.CTkButton(frame_save, text="💾 Salvar", width=70, command=save_waypoints_file,
+                  **UI['BUTTON_SM']).pack(side="left")
+    ctk.CTkButton(frame_save, text="🔄", width=30,
+                  command=lambda: refresh_cavebot_scripts_combo(selected=current_waypoints_filename),
+                  **UI['BUTTON_SM']).pack(side="left", padx=5)
 
-    # --- COLUNA DIREITA: LISTA E ARQUIVOS ---
-    frame_cb_right = ctk.CTkFrame(frame_cb_root, fg_color="transparent")
-    frame_cb_right.grid(row=0, column=1, sticky="nsew", padx=(3, 0), pady=2)
-    
-    ctk.CTkLabel(frame_cb_right, text="Lista de Waypoints", **UI['H1']).pack(anchor="w")
-    
-    # Botões de Arquivo (Topo da lista)
-    frame_files = ctk.CTkFrame(frame_cb_right, fg_color="transparent")
-    frame_files.pack(fill="x", pady=5)
-
-    # Linha 1: Nome do script + salvar
-    frame_file_row1 = ctk.CTkFrame(frame_files, fg_color="transparent")
-    frame_file_row1.pack(fill="x", pady=2)
-
-    #ctk.CTkLabel(frame_file_row1, text="Nome:", **UI['BODY']).pack(side="left", padx=2)
-    entry_waypoint_name = ctk.CTkEntry(frame_file_row1, **UI['INPUT_MED'])
-    entry_waypoint_name.pack(side="left", padx=4, fill="x", expand=True)
-    if current_waypoints_filename:
-        entry_waypoint_name.insert(0, current_waypoints_filename)
-
-    ctk.CTkButton(frame_file_row1, text="💾", command=save_waypoints_file, width=25, **UI['BUTTON_SM']).pack(side="left", padx=2)
-    ctk.CTkButton(frame_file_row1, text="🧹", command=clear_waypoints, width=25, fg_color="#e74c3c", **UI['BUTTON_SM']).pack(side="left", padx=2)
-
-    # Linha 2: Lista de scripts existentes + carregar
-    frame_file_row2 = ctk.CTkFrame(frame_files, fg_color="transparent")
-    frame_file_row2.pack(fill="x", pady=2)
-
-    #ctk.CTkLabel(frame_file_row2, text="Scripts:", **UI['BODY']).pack(side="left", padx=4)
-    combo_cavebot_scripts = ctk.CTkComboBox(frame_file_row2, values=[], **UI['COMBO_MED'])
-    combo_cavebot_scripts.pack(side="left", padx=4, fill="x", expand=True)
-
-    ctk.CTkButton(frame_file_row2, text="📂", command=load_waypoints_file, width=25, **UI['BUTTON_SM']).pack(side="left", padx=2)
-    ctk.CTkButton(frame_file_row2, text="🔄", command=lambda: refresh_cavebot_scripts_combo(selected=current_waypoints_filename), width=25, **UI['BUTTON_SM']).pack(side="left", padx=2)
-
-    # Inicializa combo e campo de nome
+    # Inicializa combo (sem preencher o campo de nome)
     refresh_cavebot_scripts_combo(selected=current_waypoints_filename or None)
-    if not current_waypoints_filename and combo_cavebot_scripts.winfo_exists():
-        # Se não houver nome corrente mas houver scripts, pré-seleciona o primeiro
-        current = combo_cavebot_scripts.get()
-        if current:
-            _set_waypoint_name_field(current)
 
-    # Lista (Log)
-    txt_waypoints_settings = ctk.CTkTextbox(frame_cb_right, font=("Consolas", 10), state="disabled")
-    txt_waypoints_settings.pack(fill="both", expand=True, pady=5)
+    # === SEÇÃO: WAYPOINTS (2 colunas: botões | lista) ===
+    frame_waypoints = ctk.CTkFrame(frame_cb_root, fg_color="#3a3a3a")
+    frame_waypoints.pack(fill="both", expand=True, pady=(0, 8))
 
-    # Frame para botões de remoção (lado a lado)
-    frame_remove_buttons = ctk.CTkFrame(frame_cb_right, fg_color="transparent")
-    frame_remove_buttons.pack(fill="x", pady=(5, 0))
-    frame_remove_buttons.grid_columnconfigure(0, weight=1)
-    frame_remove_buttons.grid_columnconfigure(1, weight=1)
+    # Header com contador
+    lbl_wp_header = ctk.CTkLabel(frame_waypoints, text="Waypoints (0)", **UI['H1'])
+    lbl_wp_header.pack(anchor="w", padx=10, pady=5)
 
-    # Botão: Remover Último WP
-    btn_remove_last = ctk.CTkButton(
-        frame_remove_buttons,
-        text="Remover Último",
-        command=remove_last_waypoint,
-        fg_color="#FF5555",
-        hover_color="#CC4444",
-        height=30,
-        font=("Verdana", 9)
+    # Container 2 colunas (usando pack side-by-side)
+    frame_wp_content = ctk.CTkFrame(frame_waypoints, fg_color="transparent")
+    frame_wp_content.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
+    # Coluna esquerda: Botões empilhados verticalmente
+    frame_buttons = ctk.CTkFrame(frame_wp_content, fg_color="transparent")
+    frame_buttons.pack(side="left", fill="y", padx=(0, 8))
+
+    ctk.CTkButton(frame_buttons, text="Adicionar WP", fg_color="#2CC985", width=90,
+                  hover_color="#1FA86E", command=record_current_pos, height=36,
+                  font=("Verdana", 10)).pack(fill="x", pady=(0, 10))
+    ctk.CTkButton(frame_buttons, text="▲ Subir", width=90, command=move_waypoint_up,
+                  **UI['BUTTON_SM']).pack(fill="x", pady=2)
+    ctk.CTkButton(frame_buttons, text="▼ Descer", width=90, command=move_waypoint_down,
+                  **UI['BUTTON_SM']).pack(fill="x", pady=2)
+    ctk.CTkButton(frame_buttons, text="❌ Remover", width=90, fg_color="#FF5555",
+                  hover_color="#CC4444", command=remove_selected_waypoint,
+                  **UI['BUTTON_SM']).pack(fill="x", pady=2)
+    ctk.CTkButton(frame_buttons, text="🗑️ Limpar", width=90, fg_color="#e74c3c",
+                  hover_color="#c0392b", command=clear_waypoints,
+                  **UI['BUTTON_SM']).pack(fill="x", pady=2)
+
+    # Coluna direita: Listbox com scrollbar
+    frame_listbox = ctk.CTkFrame(frame_wp_content, fg_color="transparent")
+    frame_listbox.pack(side="left", fill="both", expand=True)
+
+    scrollbar_wp = tk.Scrollbar(frame_listbox)
+    scrollbar_wp.pack(side="right", fill="y")
+
+    waypoint_listbox = tk.Listbox(
+        frame_listbox,
+        selectmode=tk.SINGLE,
+        font=("Consolas", 8),
+        bg="#2b2b2b",
+        fg="#ffffff",
+        selectbackground="#4A90E2",
+        selectforeground="#ffffff",
+        highlightthickness=0,
+        borderwidth=0,
+        height=10,
+        yscrollcommand=scrollbar_wp.set
     )
-    btn_remove_last.grid(row=0, column=0, padx=(0, 5), sticky="ew")
+    waypoint_listbox.pack(side="left", fill="both", expand=True)
+    scrollbar_wp.config(command=waypoint_listbox.yview)
 
-    # Botão: Remover Específico (com input)
-    btn_remove_specific = ctk.CTkButton(
-        frame_remove_buttons,
-        text="❌Remover WP #",
-        command=open_remove_specific_dialog,
-        fg_color="#D95050",
-        hover_color="#B03030",
-        height=30,
-        font=("Verdana", 9)
-    )
-    btn_remove_specific.grid(row=0, column=1, padx=(5, 0), sticky="ew")
-
-    # Botão: Gerar Visualização da Rota
-    btn_visualize = ctk.CTkButton(
-        frame_remove_buttons,
-        text="🗺️ Gerar Imagem da Rota",
-        command=generate_route_visualization,
-        fg_color="#4A90E2",
-        hover_color="#357ABD",
-        height=30,
-        font=("Verdana", 9)
-    )
-    btn_visualize.grid(row=1, column=0, columnspan=2, padx=(0, 0), sticky="ew", pady=(5, 0))
-
-    # Botão: Editor Visual de Waypoints
-    btn_editor = ctk.CTkButton(
-        frame_remove_buttons,
-        text="🗺️ Editor Visual de Waypoints",
-        command=open_waypoint_editor_window,
-        fg_color="#2E8B57",
-        hover_color="#228B45",
-        height=30,
-        font=("Verdana", 9)
-    )
-    btn_editor.grid(row=2, column=0, columnspan=2, padx=(0, 0), sticky="ew", pady=(5, 0))
+    # === SEÇÃO: EDITOR (Destaque) ===
+    ctk.CTkButton(frame_cb_root, text="🗺️ Editor Visual",
+                  fg_color="#2E8B57", hover_color="#228B45",
+                  command=open_waypoint_editor_window,
+                  **UI['BUTTON_SM']).pack(fill="x", pady=5)
 
     # Inicializa lista visual
     update_waypoint_display()

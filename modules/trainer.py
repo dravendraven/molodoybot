@@ -19,6 +19,8 @@ from core.bot_state import state
 from core.config_utils import make_config_getter
 from core.map_analyzer import MapAnalyzer
 from core.astar_walker import AStarWalker
+from core.battlelist import BattleListScanner
+from core.models import Position
 
 # Definições de Delay (Throttle Dinâmico)
 SCAN_DELAY_COMBAT = 0.1      # Em combate: scan máximo
@@ -42,6 +44,51 @@ USE_PATHFINDING_DISTANCE = True
 # Diferente de 'range' da config que é a distância para ACIONAR o ataque
 MELEE_RANGE = 1
 
+
+# ==============================================================================
+# FUNÇÕES DE CONVERSÃO: Creature -> Dict (Backward Compatibility)
+# ==============================================================================
+
+def creature_to_candidate_dict(creature, my_x, my_y, trigger_range, visual_line):
+    """
+    Converte Creature (core.models) para dict no formato esperado pelo trainer.
+    Mantém backward compatibility com EngagementDetector e lógica de retargeting.
+    """
+    dist_x = abs(my_x - creature.position.x)
+    dist_y = abs(my_y - creature.position.y)
+    return {
+        "id": creature.id,
+        "name": creature.name,
+        "hp": creature.hp_percent,
+        "dist_x": dist_x,
+        "dist_y": dist_y,
+        "abs_x": creature.position.x,
+        "abs_y": creature.position.y,
+        "z": creature.position.z,
+        "is_in_range": (dist_x <= trigger_range and dist_y <= trigger_range),
+        "line": visual_line
+    }
+
+
+def creature_to_entity_dict(creature):
+    """
+    Converte Creature para dict usado em KS detection (all_visible_entities).
+    """
+    return {
+        'id': creature.id,
+        'name': creature.name,
+        'abs_x': creature.position.x,
+        'abs_y': creature.position.y,
+        'hp': creature.hp_percent
+    }
+
+
+# ==============================================================================
+# DEPRECATED: Funções mantidas para backward compatibility
+# Usar BattleListScanner para novos desenvolvimentos
+# ==============================================================================
+
+# DEPRECATED: Usar BattleListScanner._parse_creature()
 def parse_creature_from_bytes(raw_bytes):
     """
     Parseia dados de uma criatura a partir de um bloco de bytes (batch read).
@@ -97,8 +144,11 @@ def parse_creature_from_bytes(raw_bytes):
     except:
         return None
 
+# DEPRECATED: BattleListScanner já faz validação interna (Creature.is_valid)
 def is_valid_creature_slot(creature):
     """
+    DEPRECATED: Use BattleListScanner - validação é feita internamente.
+
     Validação robusta de slot de criatura para Scan Adaptativo.
     Verifica múltiplos campos para evitar falsos positivos com "sujeira" na memória.
 
@@ -462,6 +512,9 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
     # PacketManager para envio de pacotes
     packet = PacketManager(pm, base_addr)
 
+    # Scanner centralizado do battlelist
+    scanner = BattleListScanner(pm, base_addr)
+
     # Anti Kill-Steal Detection
     engagement_detector = EngagementDetector()
 
@@ -525,7 +578,6 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                 time.sleep(0.5); continue
             
             target_addr = base_addr + TARGET_ID_PTR
-            list_start = base_addr + TARGET_ID_PTR + REL_FIRST_ID
             my_x, my_y, my_z = get_player_pos(pm, base_addr)
             
             if my_z == 0: 
@@ -550,155 +602,142 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                 print(f"  KS Prevention: {ks_enabled}")
                 print(f"{'='*70}\n")
 
-            # SCAN ADAPTATIVO: contador de slots inválidos consecutivos
-            invalid_streak = 0
+            # SCAN via BattleListScanner (centralizado, early-exit interno)
+            all_creatures = scanner.scan_all()
 
-            for i in range(MAX_CREATURES):
-                slot = list_start + (i * STEP_SIZE)
-                try:
-                    # BATCH READ: 1 syscall ao invés de 7
-                    raw_bytes = pm.read_bytes(slot, STEP_SIZE)
-                    creature = parse_creature_from_bytes(raw_bytes)
+            # Filtra entidades visíveis no mesmo andar (para KS detection)
+            all_visible_entities = [
+                creature_to_entity_dict(c)
+                for c in all_creatures
+                if c.is_visible and c.position.z == my_z and c.name != current_name
+            ]
 
-                    # EARLY-EXIT: Validação robusta para detectar fim da lista
-                    if not is_valid_creature_slot(creature):
-                        invalid_streak += 1
-                        if invalid_streak >= INVALID_SLOT_THRESHOLD:
-                            if debug_mode:
-                                print(f"   [EARLY-EXIT] {invalid_streak} slots inválidos consecutivos - parando scan no slot {i}")
-                            break
+            # Processa candidatos válidos
+            for creature in all_creatures:
+                # Skip self
+                if creature.name == current_name:
+                    continue
+
+                # Verifica se é alvo válido (mesmo andar, visível, vivo)
+                if not creature.is_targetable(my_z):
+                    continue
+
+                # Extrai dados
+                c_id = creature.id
+                name = creature.name
+                cx = creature.position.x
+                cy = creature.position.y
+                hp = creature.hp_percent
+
+                dist_x = abs(my_x - cx)
+                dist_y = abs(my_y - cy)
+                is_in_range = (dist_x <= trigger_range and dist_y <= trigger_range)
+
+                if debug_mode:
+                    print(f"Slot {creature.slot_index}: {name} (Vis:1 Z:{my_z} HP:{hp} Dist:({dist_x},{dist_y}))")
+
+                # Conta linha visual
+                current_line = visual_line_count
+                visual_line_count += 1
+
+                if debug_mode:
+                    print(f"   [LINHA {current_line}] -> {name} (ID: {c_id})")
+
+                # Verifica se é alvo desejado
+                if not any(t in name for t in targets_list):
+                    continue
+
+                # Verifica range e HP
+                if not (is_in_range and hp > 0):
+                    continue
+
+                # Atualiza histórico HP para KS detection
+                engagement_detector.update_hp(c_id, hp)
+
+                is_reachable = True
+
+                # Calculamos posição relativa
+                rel_x = cx - my_x
+                rel_y = cy - my_y
+                dist_sqm = max(abs(rel_x), abs(rel_y))
+
+                # DEBUG: Log antes de verificar acessibilidade
+                if debug_mode:
+                    print(f"   📍 Checking {name} (ID:{c_id}) at ({cx},{cy}) | Rel:({rel_x},{rel_y}) Dist:{dist_sqm}")
+
+                # SEMPRE verificar acessibilidade com A*, exceto se dist == 0 (mesmo tile)
+                if dist_sqm == 0:
+                    # Mesmo tile que o player - sempre acessível (não deveria acontecer)
+                    if debug_mode:
+                        print(f"      ⚠️ Monstro no mesmo tile (dist=0)")
+                else:
+                    # Pergunta ao A*: "Consigo dar o primeiro passo em direção a esse destino?"
+                    next_step = walker.get_next_step(rel_x, rel_y, activate_fallback=False)
+
+                    # Se next_step for None, o caminho está bloqueado (parede ou outro monstro)
+                    if next_step is None:
+                        is_reachable = False
+                        if debug_mode:
+                            print(f"      ❌ INACESSÍVEL: {name} (A* retornou None)")
                         continue
                     else:
-                        invalid_streak = 0  # Reset quando encontra slot válido
+                        if debug_mode:
+                            print(f"      ✅ ACESSÍVEL: Next step = {next_step}")
 
-                    if creature:
-                        c_id = creature['id']
-                        name = creature['name']
-                        vis = creature['visible']
-                        z = creature['z']
-                        cx = creature['x']
-                        cy = creature['y']
-                        hp = creature['hp']
+                # Verifica KS prevention antes de adicionar aos candidatos
+                skip_ks = False
 
-                        dist_x = abs(my_x - cx)
-                        dist_y = abs(my_y - cy)
-                        is_in_range = (dist_x <= trigger_range and dist_y <= trigger_range)
+                if ks_enabled:
+                    # Log pré-KS check
+                    if debug_mode:
+                        print(f"\n[KS CHECK] Avaliando {name} (ID:{c_id})")
+                        print(f"[KS CHECK]   Posição: ({cx}, {cy}) | Rel: ({rel_x}, {rel_y})")
+                        print(f"[KS CHECK]   HP: {hp}%")
+                        print(f"[KS CHECK]   Meu Target Atual: {current_target_id}")
+                        print(f"[KS CHECK]   Entidades Visíveis: {len(all_visible_entities)}")
 
-                        if debug_mode: print(f"Slot {i}: {name} (Vis:{vis} Z:{z} HP:{hp} Dist:({dist_x},{dist_y}))")
+                        if len(all_visible_entities) > 0:
+                            print(f"[KS CHECK]   Lista de Entidades:")
+                            for idx, ent in enumerate(all_visible_entities):
+                                ent_dist = max(abs(ent['abs_x'] - my_x), abs(ent['abs_y'] - my_y))
+                                is_player_guess = not any(t in ent['name'] for t in targets_list)
+                                entity_type = "PLAYER?" if is_player_guess else "CREATURE"
+                                print(f"    [{idx:2d}] {ent['name']:25s} | "
+                                      f"ID:{ent['id']:6d} | "
+                                      f"Pos:({ent['abs_x']:5d},{ent['abs_y']:5d}) | "
+                                      f"Dist:{ent_dist:2d} SQM | "
+                                      f"HP:{ent['hp']:3d}% | "
+                                      f"Type:{entity_type}")
 
-                        if name == current_name: continue
+                    is_engaged, ks_reason = engagement_detector.is_engaged_with_other(
+                        creature_to_entity_dict(creature),
+                        current_name,
+                        (my_x, my_y),
+                        all_visible_entities,
+                        current_target_id,
+                        targets_list,
+                        walker=walker,
+                        attack_range=MELEE_RANGE,
+                        debug=debug_mode,
+                        log_func=print
+                    )
 
-                        is_on_battle_list = (vis == 1 and z == my_z)
+                    # Log pós-KS check
+                    if debug_mode:
+                        if is_engaged:
+                            print(f"[KS CHECK]   Resultado: ❌ SKIP - {ks_reason}\n")
+                        else:
+                            print(f"[KS CHECK]   Resultado: ✅ PASS - Sem engagement detectado\n")
 
-                        if is_on_battle_list:
-                            # Adiciona a lista de entidades visíveis (para KS detection)
-                            all_visible_entities.append({
-                                'id': c_id,
-                                'name': name,
-                                'abs_x': cx,
-                                'abs_y': cy,
-                                'hp': hp
-                            })
+                    if is_engaged:
+                        skip_ks = True
 
-                            if debug_mode: print(f"   [LINHA {visual_line_count}] -> {name} (ID: {c_id})")
-                            current_line = visual_line_count
-                            visual_line_count += 1
-
-                            if any(t in name for t in targets_list):
-                                if is_in_range and hp > 0:
-
-                                    # NOVO: Atualiza histórico de HP para KS detection
-                                    engagement_detector.update_hp(c_id, hp)
-
-                                    is_reachable = True
-
-                                    # Calculamos posição relativa
-                                    rel_x = cx - my_x
-                                    rel_y = cy - my_y
-                                    dist_sqm = max(abs(rel_x), abs(rel_y))
-
-                                    # DEBUG: Log antes de verificar acessibilidade
-                                    if debug_mode: print(f"   📍 Checking {name} (ID:{c_id}) at ({cx},{cy}) | Rel:({rel_x},{rel_y}) Dist:{dist_sqm}")
-
-                                    # SEMPRE verificar acessibilidade com A*, exceto se dist == 0 (mesmo tile)
-                                    if dist_sqm == 0:
-                                        # Mesmo tile que o player - sempre acessível (não deveria acontecer)
-                                        if debug_mode: print(f"      ⚠️ Monstro no mesmo tile (dist=0)")
-                                    else:
-                                        # Pergunta ao A*: "Consigo dar o primeiro passo em direção a esse destino?"
-                                        next_step = walker.get_next_step(rel_x, rel_y, activate_fallback=False)
-
-                                        # Se next_step for None, o caminho está bloqueado (parede ou outro monstro)
-                                        if next_step is None:
-                                            is_reachable = False
-                                            if debug_mode: print(f"      ❌ INACESSÍVEL: {name} (A* retornou None)")
-                                        else:
-                                            if debug_mode: print(f"      ✅ ACESSÍVEL: Next step = {next_step}")
-
-                                    if is_reachable:
-                                        # NOVO: Verifica KS prevention antes de adicionar ao candidatos
-                                        skip_ks = False
-
-                                        if ks_enabled:
-                                            # Log pré-KS check
-                                            if debug_mode:
-                                                print(f"\n[KS CHECK] Avaliando {name} (ID:{c_id})")
-                                                print(f"[KS CHECK]   Posição: ({cx}, {cy}) | Rel: ({rel_x}, {rel_y})")
-                                                print(f"[KS CHECK]   HP: {hp}%")
-                                                print(f"[KS CHECK]   Meu Target Atual: {current_target_id}")
-                                                print(f"[KS CHECK]   Entidades Visíveis: {len(all_visible_entities)}")
-
-                                                if len(all_visible_entities) > 0:
-                                                    print(f"[KS CHECK]   Lista de Entidades:")
-                                                    for idx, ent in enumerate(all_visible_entities):
-                                                        ent_dist = max(abs(ent['abs_x'] - my_x), abs(ent['abs_y'] - my_y))
-                                                        is_player_guess = not any(t in ent['name'] for t in targets_list)
-                                                        entity_type = "PLAYER?" if is_player_guess else "CREATURE"
-                                                        print(f"    [{idx:2d}] {ent['name']:25s} | "
-                                                              f"ID:{ent['id']:6d} | "
-                                                              f"Pos:({ent['abs_x']:5d},{ent['abs_y']:5d}) | "
-                                                              f"Dist:{ent_dist:2d} SQM | "
-                                                              f"HP:{ent['hp']:3d}% | "
-                                                              f"Type:{entity_type}")
-
-                                            is_engaged, ks_reason = engagement_detector.is_engaged_with_other(
-                                                {'id': c_id, 'abs_x': cx, 'abs_y': cy, 'hp': hp},
-                                                current_name,
-                                                (my_x, my_y),
-                                                all_visible_entities,
-                                                current_target_id,
-                                                targets_list,
-                                                walker=walker,
-                                                attack_range=MELEE_RANGE,
-                                                debug=debug_mode,
-                                                log_func=print
-                                            )
-
-                                            # Log pós-KS check
-                                            if debug_mode:
-                                                if is_engaged:
-                                                    print(f"[KS CHECK]   Resultado: ❌ SKIP - {ks_reason}\n")
-                                                else:
-                                                    print(f"[KS CHECK]   Resultado: ✅ PASS - Sem engagement detectado\n")
-
-                                            if is_engaged:
-                                                skip_ks = True
-
-                                        if not skip_ks:
-                                            if debug_mode: print(f"      → CANDIDATO: HP:{hp} Dist:({dist_x},{dist_y})")
-                                            valid_candidates.append({
-                                                "id": c_id,
-                                                "name": name,
-                                                "hp": hp,
-                                                "dist_x": dist_x,
-                                                "dist_y": dist_y,
-                                                "abs_x": cx,
-                                                "abs_y": cy,
-                                                "z": z,
-                                                "is_in_range": is_in_range,
-                                                "line": current_line
-                                            })
-                except: continue
+                if not skip_ks:
+                    if debug_mode:
+                        print(f"      → CANDIDATO: HP:{hp} Dist:({dist_x},{dist_y})")
+                    valid_candidates.append(
+                        creature_to_candidate_dict(creature, my_x, my_y, trigger_range, current_line)
+                    )
 
             if debug_mode:
                 print(f"--- FIM DO SCAN ---")
@@ -824,29 +863,14 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
 
                     # Tenta encontrar o alvo na battle list inteira (não filtrada)
                     # para distinguir entre "despawned" e "fora de alcance/inacessível"
-                    target_in_battlelist = None
-
-                    for i in range(MAX_CREATURES):
-                        slot = list_start + (i * STEP_SIZE)
-                        try:
-                            # BATCH READ: 1 syscall ao invés de 7
-                            raw_bytes = pm.read_bytes(slot, STEP_SIZE)
-                            creature = parse_creature_from_bytes(raw_bytes)
-
-                            if creature and creature['id'] == current_target_id:
-                                # Encontrou na battle list!
-                                target_in_battlelist = {
-                                    'id': creature['id'],
-                                    'name': creature['name'],
-                                    'hp': creature['hp'],
-                                    'abs_x': creature['x'],
-                                    'abs_y': creature['y'],
-                                    'z': creature['z'],
-                                    'visible': creature['visible']
-                                }
-                                break
-                        except:
-                            continue
+                    # Usa scanner centralizado - elimina scan duplicado
+                    target_creature = scanner.get_creature_by_id(current_target_id)
+                    if target_creature:
+                        target_in_battlelist = creature_to_entity_dict(target_creature)
+                        target_in_battlelist['z'] = target_creature.position.z
+                        target_in_battlelist['visible'] = 1 if target_creature.is_visible else 0
+                    else:
+                        target_in_battlelist = None
 
                     if target_in_battlelist:
                         # Alvo está na battle list, mas não em valid_candidates
@@ -933,25 +957,40 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                         if debug_mode: print("-> Alvo não está mais na battle list (despawned).")
                         became_unreachable_time = None
 
-           # CENÁRIO B: Alvo Sumiu
+           # CENÁRIO B: Alvo Sumiu (Tibia limpou target_id)
             elif current_target_id == 0 and current_monitored_id != 0:
-                target_still_alive = False
+                # === VERIFICAÇÃO DUPLA DE MORTE ===
+                # Método 1: Verifica se último alvo ainda está em valid_candidates
+                target_in_candidates = False
                 if last_target_data:
                     for m in valid_candidates:
                         if m["id"] == last_target_data["id"]:
-                            target_still_alive = True
+                            target_in_candidates = True
                             break
-                
+
+                # Método 2: Verifica diretamente na battlelist (mais confiável)
+                target_creature = scanner.get_creature_by_id(last_target_data["id"]) if last_target_data else None
+                target_alive_in_battlelist = target_creature is not None and target_creature.is_alive
+
+                if debug_mode:
+                    print(f"   [Death Check] in_candidates={target_in_candidates}, alive_in_bl={target_alive_in_battlelist}")
+
+                # Alvo está vivo se estiver em candidates OU vivo na battlelist
+                target_still_alive = target_in_candidates or target_alive_in_battlelist
+
                 if target_still_alive:
-                    log("🛑 Ataque interrompido (Monstro ainda vivo).")
+                    log("🛑 Ataque interrompido (Monstro ainda vivo - verificação dupla).")
                     monitor.stop_and_report()
                     current_monitored_id = 0
                     last_target_data = None
                     became_unreachable_time = None
-                    should_attack_new = True 
-                
+                    should_attack_new = True
+
                 else:
-                    log("💀 Alvo eliminado.")
+                    # MORTE CONFIRMADA (dupla verificação)
+                    # - Não está em valid_candidates
+                    # - E não está vivo na battlelist (hp <= 0 ou invisible)
+                    log("💀 Alvo eliminado (verificação dupla confirmada).")
                     
                     if last_target_data and loot_enabled:
                         # Verifica se criatura está na lista de NO_LOOT (hardcoded em config.py)
