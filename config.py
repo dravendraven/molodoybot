@@ -70,6 +70,9 @@ OFFSET_OUTFIT_HEAD = 0x64   # 100 - Cor da cabeça
 OFFSET_OUTFIT_BODY = 0x68   # 104 - Cor do corpo
 OFFSET_OUTFIT_LEGS = 0x6C   # 108 - Cor das pernas
 OFFSET_OUTFIT_FEET = 0x70   # 112 - Cor dos pés
+OFFSET_LIGHT = 0x74         # 116 - Light level emitted
+OFFSET_LIGHT_COLOR = 0x78   # 120 - Light color
+OFFSET_BLACKSQUARE = 0x7C   # 124 - Blacksquare indicator (8 bytes, shown when creature attacks player)
 
 MAX_CREATURES = 250
 
@@ -304,6 +307,9 @@ COLOR_FLOOR_ABOVE = "#FFFF00" # Amarelo (Andar de Cima)
 COLOR_FLOOR_BELOW = "#A52A2A" # Marrom (Andar de Baixo)
 COLOR_SAME_FLOOR  = "#FF0000" # Vermelho (Mesmo andar - Alarme visual)
 
+# Debug Overlay - Exibe info (vis, hp%, dist) acima das criaturas no trainer
+XRAY_TRAINER_DEBUG = True    # True = mostra overlay de debug do trainer
+
 # ==============================================================================
 # VOCATION & REGEN CONFIG
 # ==============================================================================
@@ -459,3 +465,40 @@ CLEAR_ATTEMPT_COOLDOWN = 2.0
 # ==============================================================================
 STACK_CLEARING_ENABLED = True     # Master toggle - mover parcels/boxes do caminho
 DEBUG_STACK_CLEARING = False      # Ativa logs detalhados do stack clearing
+
+# ==============================================================================
+# HUMANIZAÇÃO - DETECÇÃO DE FALTA DE PROGRESSO
+# ==============================================================================
+# Detecta quando o bot está andando mas não avançando ao waypoint (ping-pong, etc)
+ADVANCEMENT_TRACKING_ENABLED = True
+ADVANCEMENT_WINDOW_SECONDS = 3.0      # Janela de medição (segundos)
+ADVANCEMENT_MIN_RATIO = 0.3           # Mínimo 30% do avanço esperado
+ADVANCEMENT_EXPECTED_SPEED = 2.0      # SQM/segundo esperado em caminhada normal
+
+# Respostas quando player bloqueando
+PLAYER_BLOCK_WAIT_RANGE = (1.0, 4.0)  # Range de espera (segundos) - gaussiano
+PLAYER_AVOIDANCE_MULTIPLIER = 2       # Custo 2x nos tiles do player no A*
+
+# Debug
+DEBUG_ADVANCEMENT = True             # Logs detalhados de detecção de progresso
+
+# ==============================================================================
+# AI CHAT RESPONDER CONFIG
+# ==============================================================================
+# Sistema de resposta inteligente a mensagens de chat usando IA (OpenAI GPT)
+AI_CHAT_ENABLED = False              # Master toggle - habilita/desabilita sistema
+AI_MODEL = "gpt-4o-mini"            # Modelo OpenAI (~$0.15/1M tokens input)
+
+# Delays humanizados para resposta (parecer humano)
+CHAT_RESPONSE_DELAY_MIN = 1.5       # Delay mínimo antes de responder (segundos)
+CHAT_RESPONSE_DELAY_MAX = 4.0       # Delay máximo antes de responder (segundos)
+
+# Cooldown entre respostas (evita spam/flood)
+CHAT_RESPONSE_COOLDOWN = 2.0        # Segundos entre respostas
+
+# Pausa o bot enquanto em "conversa"
+CHAT_PAUSE_BOT = True               # Se True, pausa cavebot/trainer durante conversa
+CHAT_PAUSE_DURATION = 10.0          # Segundos de pausa após última mensagem
+
+# Debug
+DEBUG_CHAT_HANDLER = True           # Logs detalhados do sistema de chat

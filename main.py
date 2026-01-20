@@ -51,8 +51,11 @@ from database import foods_db
 from modules.trainer import trainer_loop
 from modules.alarm import alarm_loop
 from modules.cavebot import Cavebot
+from modules.spear_picker import spear_picker_loop
 from core.player_core import get_connected_char_name
 from core.bot_state import state
+from core.overlay_renderer import renderer as overlay_renderer
+from core.chat_handler import ChatHandler
 #import corpses
 
 # ==============================================================================
@@ -89,6 +92,7 @@ BOT_SETTINGS = {
     "hit_log_enabled": HIT_LOG_ENABLED,
     "client_path": "",  # Caminho da pasta do cliente (para GlobalMap)
     "lookid_enabled": False,  # Exibir ID dos items ao dar look
+    "spear_picker_enabled": False,  # Pegar spears do chao automaticamente (Paladin)
 
     #trainer
     "ignore_first": False,
@@ -108,6 +112,7 @@ BOT_SETTINGS = {
     "alarm_chat_enabled": False,
     "alarm_players": True,          # Disparar alarme para players (detecta por outfit)
     "alarm_creatures": True,        # Disparar alarme para criaturas fora da safe list
+    "ai_chat_enabled": True,        # Resposta automática via IA quando alguém fala
 
     # Loot
     "loot_containers": 2,
@@ -164,6 +169,9 @@ lbl_status = None
 # ### CAVEBOT: Globais ###
 cavebot_instance = None
 current_waypoints_ui = []
+
+# ### AI CHAT HANDLER: Globais ###
+chat_handler = None
 current_waypoints_filename = ""
 label_cavebot_status = None  # Label para mostrar posição atual e waypoint
 txt_waypoints_settings = None  # DEPRECATED - substituído por waypoint_listbox
@@ -1029,6 +1037,80 @@ def start_cavebot_thread():
                 time.sleep(1)
 
         time.sleep(0.1)
+
+def start_spear_picker_thread():
+    """
+    Thread para o Spear Picker.
+    Pega spears do chao automaticamente (funcionalidade para Paladinos).
+    """
+    global pm, base_addr
+
+    print("[SpearPicker] Thread iniciada.")
+
+    # Funcoes de callback
+    check_running = lambda: state.is_running and state.is_connected
+    get_enabled = lambda: BOT_SETTINGS.get('spear_picker_enabled', False) and state.is_safe()
+
+    while state.is_running:
+        if pm is None or not state.is_connected:
+            time.sleep(1)
+            continue
+
+        try:
+            spear_picker_loop(pm, base_addr, check_running, get_enabled, log_func=log)
+        except Exception as e:
+            print(f"[SpearPicker] Erro: {e}")
+            import traceback
+            traceback.print_exc()
+            time.sleep(1)
+
+
+def start_chat_handler_thread():
+    """
+    Thread para o AI Chat Handler.
+    Monitora mensagens do chat e responde de forma humanizada.
+    """
+    global chat_handler, pm, base_addr
+
+    print("[ChatHandler] Thread iniciada.")
+
+    while state.is_running:
+        # 1. Inicialização Lazy (só cria quando PM existir e conectado)
+        if pm is not None and chat_handler is None and state.is_connected:
+            try:
+                print("[ChatHandler] Inicializando instância...")
+                # Cria PacketManager para enviar mensagens
+                pkt = packet.PacketManager(pm, base_addr)
+                chat_handler = ChatHandler(pm, base_addr, pkt)
+                # Aplica estado inicial do BOT_SETTINGS
+                if BOT_SETTINGS.get('ai_chat_enabled', True):
+                    chat_handler.enable()
+                else:
+                    chat_handler.disable()
+                print("[ChatHandler] Instância criada com sucesso.")
+            except Exception as e:
+                print(f"[ChatHandler] Erro ao inicializar: {e}")
+                import traceback
+                traceback.print_exc()
+
+        # 2. Execução do Ciclo
+        if chat_handler and state.is_connected:
+            try:
+                # Verifica se deve pausar outros módulos
+                should_pause = chat_handler.tick()
+
+                # Atualiza estado global se necessário
+                if should_pause and not state.is_chat_paused:
+                    from config import CHAT_PAUSE_DURATION
+                    state.set_chat_pause(True, CHAT_PAUSE_DURATION)
+
+            except Exception as e:
+                print(f"[ChatHandler] Erro no loop: {e}")
+                import traceback
+                traceback.print_exc()
+                time.sleep(1)
+
+        time.sleep(0.2)  # Check a cada 200ms
 
 def start_trainer_thread():
     """
@@ -2126,6 +2208,15 @@ def open_settings():
     switch_lookid.pack(anchor="w", pady=UI['PAD_ITEM'])
     if BOT_SETTINGS.get('lookid_enabled', False): switch_lookid.select()
 
+    def on_spear_picker_toggle():
+        BOT_SETTINGS['spear_picker_enabled'] = bool(switch_spear_picker.get())
+        status = "ativado" if BOT_SETTINGS['spear_picker_enabled'] else "desativado"
+        log(f"🎯 Pegar Spear: {status}")
+
+    switch_spear_picker = ctk.CTkSwitch(frame_switches, text="Pegar Spear do Chao", command=on_spear_picker_toggle, progress_color="#E67E22", **UI['BODY'])
+    switch_spear_picker.pack(anchor="w", pady=UI['PAD_ITEM'])
+    if BOT_SETTINGS.get('spear_picker_enabled', False): switch_spear_picker.select()
+
     def on_log_toggle():
         global log_visible
         toggle_log_visibility()
@@ -2253,7 +2344,7 @@ def open_settings():
     dist_vals = ["1 SQM", "3 SQM", "5 SQM", "8 SQM (Padrão)", "Tela Toda"]
     combo_alarm = ctk.CTkComboBox(frame_alarm, values=dist_vals, **UI['COMBO'])
     combo_alarm.grid(row=0, column=1, sticky="w")
-    
+
     curr_vis = "Tela Toda" if BOT_SETTINGS['alarm_range'] >= 15 else f"{BOT_SETTINGS['alarm_range']} SQM" if BOT_SETTINGS['alarm_range'] in [1,3,5] else "8 SQM (Padrão)"
     combo_alarm.set(curr_vis)
 
@@ -2272,7 +2363,7 @@ def open_settings():
 
     ctk.CTkLabel(frame_hp, text="Monitorar Vida (HP):", **UI['H1']).pack(anchor="w", padx=10, pady=(0,5))
 
-    entry_hp_pct = None 
+    entry_hp_pct = None
     def toggle_hp_alarm():
         state = "normal" if switch_hp_alarm.get() else "disabled"
         if entry_hp_pct: entry_hp_pct.configure(state=state)
@@ -2283,32 +2374,35 @@ def open_settings():
 
     f_hp_val = ctk.CTkFrame(frame_hp, fg_color="transparent")
     f_hp_val.pack(fill="x", padx=UI['PAD_INDENT'], pady=2)
-    
+
     ctk.CTkLabel(f_hp_val, text="Disparar se <", **UI['BODY']).pack(side="left")
     entry_hp_pct = ctk.CTkEntry(f_hp_val, **UI['INPUT'])
     entry_hp_pct.pack(side="left", padx=5)
     entry_hp_pct.insert(0, str(BOT_SETTINGS.get('alarm_hp_percent', 50)))
     ctk.CTkLabel(f_hp_val, text="%", **UI['BODY']).pack(side="left")
-    
+
     toggle_hp_alarm() # Aplica estado inicial
 
     # Divisória
     #ctk.CTkFrame(tab_alarm, height=1, fg_color="#444").pack(fill="x", padx=10, pady=10)
 
-    
+
 
     # Divisória
     #ctk.CTkFrame(tab_alarm, height=1, fg_color="#444").pack(fill="x", padx=10, pady=10)
 
-    # --- CHAT ALARM ---
-    ctk.CTkLabel(tab_alarm, text="Monitorar Chat (Default):", **UI['H1']).pack(anchor="w", padx=10, pady=(0,5))
+    # --- CHAT ---
+    ctk.CTkLabel(tab_alarm, text="Mensagens (Chat):", **UI['H1']).pack(anchor="w", padx=10, pady=(0,5))
 
     def toggle_chat_opts(): pass
 
     switch_chat = ctk.CTkSwitch(tab_alarm, text="Alarme de Msg Nova", command=toggle_chat_opts, progress_color="#FFA500", **UI['BODY'])
     switch_chat.pack(anchor="w", padx=UI['PAD_INDENT'], pady=2)
     if BOT_SETTINGS.get('alarm_chat_enabled', False): switch_chat.select()
-    ctk.CTkLabel(tab_alarm, text="↳ GM no chat sempre pausa o bot automaticamente", **UI['HINT']).pack(anchor="w", padx=45)
+
+    switch_ai_chat = ctk.CTkSwitch(tab_alarm, text="Responder via IA", command=lambda: None, progress_color="#9B59B6", **UI['BODY'])
+    switch_ai_chat.pack(anchor="w", padx=UI['PAD_INDENT'], pady=2)
+    if BOT_SETTINGS.get('ai_chat_enabled', True): switch_ai_chat.select()
 
     def save_alarm():
         try:
@@ -2328,6 +2422,15 @@ def open_settings():
 
             # Chat
             BOT_SETTINGS['alarm_chat_enabled'] = bool(switch_chat.get())
+
+            # AI Chat Response
+            ai_enabled = bool(switch_ai_chat.get())
+            BOT_SETTINGS['ai_chat_enabled'] = ai_enabled
+            if chat_handler:
+                if ai_enabled:
+                    chat_handler.enable()
+                else:
+                    chat_handler.disable()
 
             save_config_file()
             log(f"🔔 Alarme salvo.")
@@ -2860,6 +2963,42 @@ def toggle_xray():
                 gv = get_game_view(pm, base_addr)
                 my_x, my_y, my_z = get_player_pos(pm, base_addr)
                 #print(f"[XRAY] gv={gv}, pos=({my_x},{my_y},{my_z})")
+
+                # Atualiza o renderer com informações do viewport
+                if gv:
+                    overlay_renderer.update_game_view(gv, (offset_x, offset_y))
+
+                # Renderiza todos os layers registrados no renderer
+                if gv:
+                    all_layers = overlay_renderer.get_all_layers()
+                for layer_id, items in all_layers.items():
+                        for item in items:
+                            item_type = item.get('type', 'tile')
+                            dx = item.get('dx', 0)
+                            dy = item.get('dy', 0)
+                            raw_color = item.get('color', '#FFFFFF')
+                            text = item.get('text', '')
+                            offset_y_px = item.get('offset_y', 0)
+
+                            color = raw_color[:7] if len(raw_color) > 7 else raw_color
+
+                            raw_cx = gv['center'][0] + (dx * gv['sqm'])
+                            raw_cy = gv['center'][1] + (dy * gv['sqm'])
+
+                            cx = raw_cx + offset_x
+                            cy = raw_cy + offset_y + offset_y_px
+
+                            if item_type == 'creature_info' and text:
+                                # Texto com sombra para legibilidade
+                                canvas.create_text(cx+1, cy+1, text=text, fill="black", font=("Verdana", 8, "bold"))
+                                canvas.create_text(cx, cy, text=text, fill=color, font=("Verdana", 8, "bold"))
+                            elif item_type == 'tile':
+                                size = gv['sqm'] / 2
+                                canvas.create_rectangle(cx - size, cy - size, cx + size, cy + size,
+                                                      outline=color, width=2)
+                                if text:
+                                    canvas.create_text(cx+1, cy+1, text=text, fill="black", font=("Verdana", 8, "bold"))
+                                    canvas.create_text(cx, cy, text=text, fill=color, font=("Verdana", 8, "bold"))
 
                 if hud_overlay_data and gv:
                     #print(f"[XRAY] HUD overlay: {len(hud_overlay_data)} itens")
@@ -3410,7 +3549,9 @@ if __name__ == "__main__":
     threading.Thread(target=connection_watchdog, daemon=True).start()
     threading.Thread(target=start_cavebot_thread, daemon=True).start()
     threading.Thread(target=lookid_monitor_loop, daemon=True).start()
-    
+    threading.Thread(target=start_chat_handler_thread, daemon=True).start()
+    threading.Thread(target=start_spear_picker_thread, daemon=True).start()
+
     update_stats_visibility()
     
     # Iniciar loop de atualização do minimap

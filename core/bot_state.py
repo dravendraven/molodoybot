@@ -58,6 +58,8 @@ class BotState:
         self._has_open_loot: bool = False
         self._last_combat_time: float = 0.0
         self._is_runemaking: bool = False
+        self._is_chat_paused: bool = False  # Pausado por conversa de chat
+        self._chat_pause_until: float = 0.0  # Timestamp até quando pausar por chat
     
     # =========================================================================
     # CONEXÃO
@@ -311,6 +313,41 @@ class BotState:
         with self._lock:
             self._is_runemaking = value
 
+    @property
+    def is_chat_paused(self) -> bool:
+        """Retorna True se bot está pausado por conversa de chat."""
+        with self._lock:
+            if not self._is_chat_paused:
+                return False
+            # Verifica se timeout expirou
+            if time.time() >= self._chat_pause_until:
+                self._is_chat_paused = False
+                return False
+            return True
+
+    def set_chat_pause(self, paused: bool, duration: float = 10.0):
+        """
+        Atualiza estado de pausa por chat.
+
+        Args:
+            paused: True para pausar, False para retomar
+            duration: Duração da pausa em segundos (se paused=True)
+        """
+        with self._lock:
+            self._is_chat_paused = paused
+            if paused:
+                self._chat_pause_until = time.time() + duration
+            else:
+                self._chat_pause_until = 0.0
+
+    def get_chat_pause_remaining(self) -> float:
+        """Retorna segundos restantes de pausa por chat."""
+        with self._lock:
+            if not self._is_chat_paused:
+                return 0.0
+            remaining = self._chat_pause_until - time.time()
+            return max(0.0, remaining)
+
     # =========================================================================
     # MÉTODOS DE CONVENIÊNCIA
     # =========================================================================
@@ -357,6 +394,8 @@ class BotState:
                 'has_open_loot': self._has_open_loot,
                 'last_combat_time': self._last_combat_time,
                 'is_runemaking': self._is_runemaking,
+                'is_chat_paused': self._is_chat_paused,
+                'chat_pause_until': self._chat_pause_until,
             }
     
     def reset(self):
@@ -376,6 +415,8 @@ class BotState:
             self._has_open_loot = False
             self._last_combat_time = 0.0
             self._is_runemaking = False
+            self._is_chat_paused = False
+            self._chat_pause_until = 0.0
             # NÃO reseta _bot_running
 
 

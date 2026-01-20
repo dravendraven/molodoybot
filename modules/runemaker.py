@@ -18,6 +18,7 @@ from database import foods_db
 from core.config_utils import make_config_getter
 from core.bot_state import state
 from core.player_core import wait_until_stopped
+from database.runes_db import BLANK_RUNE_ID, is_conjured_rune
 
 # Usar constantes do config.py ao invés de redefinir
 # SLOT_RIGHT e SLOT_LEFT removidos (usar HandSlot do config)
@@ -88,120 +89,201 @@ def get_item_id_in_hand(pm, base_addr, slot_enum):
     except:
         return 0
 
+def find_container_with_space(pm, base_addr, preferred_idx=0):
+    """
+    Busca container com espaco livre.
+    Prioriza preferred_idx, mas busca em outros se cheio.
+
+    Returns: (container_index, free_slot) ou (None, None) se todos cheios
+    """
+    containers = scan_containers(pm, base_addr)
+
+    # Ordenar: preferred primeiro, depois por index
+    sorted_conts = sorted(containers, key=lambda c: (c.index != preferred_idx, c.index))
+
+    for cont in sorted_conts:
+        if cont.amount < cont.volume:
+            return cont.index, cont.amount
+
+    return None, None  # Todos cheios
+
+
 def get_free_slot_in_container(pm, base_addr, target_container_idx=0):
     """
     Encontra o próximo slot livre em um container específico.
+    DEPRECATED: Use find_container_with_space() para busca mais inteligente.
 
     Retorna: (container_index, free_slot) ou (None, None) se container cheio/não encontrado.
-
-    O slot livre é determinado por container.amount (quantidade de itens),
-    que corresponde ao próximo índice disponível (append no final).
     """
     containers = scan_containers(pm, base_addr)
 
     for cont in containers:
         if cont.index == target_container_idx:
-            # Verifica se tem espaço (amount < volume)
             if cont.amount < cont.volume:
-                # Próximo slot livre = quantidade atual de itens
                 return cont.index, cont.amount
             else:
-                # Container cheio
                 return None, None
 
-    # Container não encontrado (fechado?)
     return None, None
-    
-def unequip_hand(pm, base_addr, slot_enum, dest_container_idx=0, dest_slot=None, packet=None):
+
+
+def execute_with_retry(action_fn, validate_fn, max_retries=3, delay=0.5, description="acao"):
     """
-    Unequip item from hand slot and move to container.
-
-    Returns the item ID if successful, None if it failed or slot was empty.
-
-    Uses DUAL VALIDATION to handle:
-    1. Network latency (retries with exponential backoff: 0.5s, 0.8s, 1.1s)
-    2. Memory context staleness (verifies item is in container, not just hand empty)
-
-    The dual validation catches race conditions when Cavebot pauses for Runemaker,
-    which can cause Pymem to read stale memory values during context switch.
+    Executa uma acao e valida o resultado. Retry ate max_retries.
 
     Args:
-        dest_slot: If None (default), automatically finds the next free slot.
-                   If specified, uses that slot (legacy behavior).
+        action_fn: funcao que executa a acao (sem args), pode ser None se acao ja foi executada
+        validate_fn: funcao que retorna True se sucesso
+        max_retries: tentativas maximas
+        delay: delay entre tentativas
+        description: descricao para logs
+
+    Returns: True se sucesso, False se todas tentativas falharam
+    """
+    for attempt in range(max_retries):
+        if action_fn is not None:
+            action_fn()
+        time.sleep(delay)
+
+        if validate_fn():
+            return True
+
+        if attempt < max_retries - 1:
+            print(f"[RUNEMAKER] {description} falhou, tentativa {attempt+1}/{max_retries}")
+            # Re-executa a acao na proxima tentativa se action_fn existir
+
+    print(f"[RUNEMAKER] {description} falhou apos {max_retries} tentativas!")
+    return False
+
+
+def verify_blank_equipped(pm, base_addr, slot_enum, blank_id):
+    """Verifica se blank rune esta equipada na mao."""
+    hand_id = get_item_id_in_hand(pm, base_addr, slot_enum)
+    return hand_id == blank_id
+
+
+def verify_rune_conjured(pm, base_addr, slot_enum, blank_id):
+    """Verifica se a runa foi conjurada (ID mudou de blank)."""
+    hand_id = get_item_id_in_hand(pm, base_addr, slot_enum)
+    # Sucesso se: ID diferente de blank E (ID e runa conhecida OU ID > 0)
+    if hand_id == blank_id:
+        return False
+    return hand_id > 0 and (is_conjured_rune(hand_id) or hand_id != blank_id)
+
+
+def verify_hand_empty(pm, base_addr, slot_enum):
+    """Verifica se a mao esta vazia."""
+    return get_item_id_in_hand(pm, base_addr, slot_enum) == 0
+
+
+def verify_item_in_hand(pm, base_addr, slot_enum, expected_item_id):
+    """Verifica se um item especifico esta na mao."""
+    return get_item_id_in_hand(pm, base_addr, slot_enum) == expected_item_id
+
+
+def unequip_hand(pm, base_addr, slot_enum, preferred_container=0, packet=None):
+    """
+    Desequipa item da mao para um container com espaco.
+
+    Busca inteligente: se container preferido esta cheio, busca outros.
+    Retorna dict com informacoes detalhadas para rastreamento.
+
+    Args:
+        slot_enum: SLOT_LEFT ou SLOT_RIGHT
+        preferred_container: container preferido (default: 0)
         packet: PacketManager instance (created if None)
 
     Returns:
-        int: Item ID if successfully unequipped (hand empty + item in container)
-        None: If unequip failed, slot was empty, or container is full
+        dict: {"item_id": int, "container_idx": int, "slot_idx": int} se sucesso
+        None: Se falha (mao vazia, todos containers cheios, ou validacao falhou)
     """
-    # Cria PacketManager se não foi passado
     if packet is None:
         packet = PacketManager(pm, base_addr)
 
     current_id = get_item_id_in_hand(pm, base_addr, slot_enum)
     if current_id <= 0:
+        return None  # Mao ja vazia
+
+    # Busca container com espaco (busca inteligente em todos containers)
+    dest_idx, dest_slot = find_container_with_space(pm, base_addr, preferred_container)
+    if dest_idx is None:
+        print(f"[RUNEMAKER] Todos containers cheios! Nao e possivel desequipar.")
         return None
 
-    # Encontra o próximo slot livre se dest_slot não foi especificado
-    if dest_slot is None:
-        _, found_slot = get_free_slot_in_container(pm, base_addr, dest_container_idx)
-        if found_slot is None:
-            print(f"[RUNEMAKER] ⚠️ Container {dest_container_idx} está cheio! Não é possível desequipar.")
-            return None
-        dest_slot = found_slot
+    # Se nao e o container preferido, loga a mudanca
+    if dest_idx != preferred_container:
+        print(f"[RUNEMAKER] Container {preferred_container} cheio, usando container {dest_idx}")
 
+    # Envia pacote de movimento
     pos_from = get_inventory_pos(slot_enum)
-    pos_to = get_container_pos(dest_container_idx, dest_slot)
+    pos_to = get_container_pos(dest_idx, dest_slot)
     packet.move_item(pos_from, pos_to, current_id, 1)
 
-    # DUAL VALIDATION: Verify both hand is empty AND item in container
+    # VALIDACAO com retry e backoff exponencial
     max_attempts = 3
     for attempt in range(max_attempts):
-        time.sleep(0.5 + (attempt * 0.3))  # 0.5s, 0.8s, 1.1s waits
+        time.sleep(0.5 + (attempt * 0.3))  # 0.5s, 0.8s, 1.1s
 
-        # Check 1: Hand slot is empty
-        check_id = get_item_id_in_hand(pm, base_addr, slot_enum)
-        if check_id == 0:
-            # Hand is empty - verify item reached destination container
-            # This catches Cavebot context staleness issues
-            try:
-                item_data = find_item_in_containers(pm, base_addr, current_id)
-                if item_data and item_data['container_index'] == dest_container_idx:
-                    # DUAL CONFIRMATION: Hand empty + Item in correct container
-                    return current_id
-                # Item not in container yet, will retry
-                continue
-            except Exception as e:
-                # If container scan fails but hand is empty, trust hand check
-                # (hand check is more direct and reliable than container scan)
-                return current_id
+        # Verifica se mao esta vazia ou item mudou
+        new_id = get_item_id_in_hand(pm, base_addr, slot_enum)
+        if new_id == 0 or new_id != current_id:
+            # Sucesso! Item saiu da mao
+            return {"item_id": current_id, "container_idx": dest_idx, "slot_idx": dest_slot}
 
-    # All attempts failed - item still in hand or not found in containers
+        # Ainda tem o item na mao, tenta novamente
+        if attempt < max_attempts - 1:
+            print(f"[RUNEMAKER] Unequip nao confirmado, tentativa {attempt+1}/{max_attempts}")
+            # Re-envia o pacote
+            packet.move_item(pos_from, pos_to, current_id, 1)
+
+    print(f"[RUNEMAKER] Falha ao desequipar item {current_id} apos {max_attempts} tentativas!")
     return None
 
-def reequip_hand(pm, base_addr, item_id, target_slot_enum, container_idx=0, max_retries=3, packet=None):
-    if not item_id: return False
+def reequip_hand(pm, base_addr, item_id, target_slot_enum, max_retries=3, packet=None):
+    """
+    Re-equipa item na mao COM VALIDACAO de sucesso.
 
-    # Cria PacketManager se não foi passado
+    Args:
+        item_id: ID do item a re-equipar
+        target_slot_enum: SLOT_LEFT ou SLOT_RIGHT
+        max_retries: tentativas maximas
+        packet: PacketManager instance
+
+    Returns:
+        True se item confirmado na mao, False se falhou
+    """
+    if not item_id:
+        return False
+
     if packet is None:
         packet = PacketManager(pm, base_addr)
 
-    # Retry logic: item might not be in containers immediately after move_item
     for attempt in range(max_retries):
-        time.sleep(0.3)  # Wait for server to process the previous move_item
+        time.sleep(0.3)
+
+        # Encontra item nos containers
         item_data = find_item_in_containers(pm, base_addr, item_id)
+        if not item_data:
+            if attempt < max_retries - 1:
+                print(f"[RUNEMAKER] Item {item_id} nao encontrado, tentativa {attempt+1}/{max_retries}")
+            continue
 
-        if item_data:
-            pos_from = get_container_pos(item_data['container_index'], item_data['slot_index'])
-            pos_to = get_inventory_pos(target_slot_enum)
-            packet.move_item(pos_from, pos_to, item_id, 1)
-            time.sleep(0.4)
-            return True
+        # Move para mao
+        pos_from = get_container_pos(item_data['container_index'], item_data['slot_index'])
+        pos_to = get_inventory_pos(target_slot_enum)
+        packet.move_item(pos_from, pos_to, item_id, 1)
 
+        # NOVA VALIDACAO: Confirma que item chegou na mao
+        time.sleep(0.5)
+        hand_id = get_item_id_in_hand(pm, base_addr, target_slot_enum)
+        if hand_id == item_id:
+            return True  # Sucesso confirmado!
+
+        # Item nao chegou, loga e tenta novamente
         if attempt < max_retries - 1:
-            print(f"[RUNEMAKER] ⚠️ Item {item_id} não encontrado, tentativa {attempt + 1}/{max_retries}")
+            print(f"[RUNEMAKER] Item {item_id} nao confirmado na mao (atual: {hand_id}), tentativa {attempt+1}/{max_retries}")
 
-    print(f"[RUNEMAKER] ❌ Falha ao re-equipar item {item_id} após {max_retries} tentativas!")
+    print(f"[RUNEMAKER] Falha ao re-equipar item {item_id} apos {max_retries} tentativas!")
     return False
 
 def get_target_id(pm, base_addr):
@@ -461,76 +543,154 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                             time.sleep(0.1)  # Pequena margem adicional
 
                             # PHASE 1: Unequip all hands and store their items
-                            # (This fixes the bug where unequipped_item_id gets overwritten with "BOTH" hands)
-                            # Agora usa slot livre automaticamente via get_free_slot_in_container
-                            unequipped_items = {}  # slot_enum → (item_id, dest_slot)
+                            # Usa busca inteligente de container com espaco
+                            unequipped_items = {}  # slot_enum → dict com item_id, container_idx, slot_idx
+                            phase1_failed = False
                             for slot_enum in hands_to_use:
-                                if is_safe_callback and not is_safe_callback(): break
+                                if is_safe_callback and not is_safe_callback():
+                                    phase1_failed = True
+                                    break
 
-                                unequipped_item_id = unequip_hand(pm, base_addr, slot_enum, dest_container_idx=0, packet=packet)
-                                unequipped_items[slot_enum] = (unequipped_item_id, 0)
-
-                                log_msg(f"🔓 Desarmou {slot_enum}: Item {unequipped_item_id}")
+                                unequip_result = unequip_hand(pm, base_addr, slot_enum, preferred_container=0, packet=packet)
+                                if unequip_result is None:
+                                    # Mao estava vazia, ok continuar
+                                    unequipped_items[slot_enum] = None
+                                    log_msg(f"Mao {slot_enum} ja estava vazia")
+                                else:
+                                    unequipped_items[slot_enum] = unequip_result
+                                    log_msg(f"Desarmou mao {slot_enum}: Item {unequip_result['item_id']} -> Container {unequip_result['container_idx']}")
 
                                 time.sleep(1.2)
 
-                            # PHASE 2: Equip blank runes
+                            if phase1_failed:
+                                log_msg("PHASE 1 interrompida por seguranca")
+                                state.set_runemaking(False)
+                                continue
+
+                            # PHASE 2: Equip blank runes COM VALIDACAO
                             active_runes = []
+                            phase2_failed = False
 
                             for slot_enum in hands_to_use:
-                                if is_safe_callback and not is_safe_callback(): break
+                                if is_safe_callback and not is_safe_callback():
+                                    phase2_failed = True
+                                    break
 
-                                # Move Blank -> Mão
+                                # Re-busca blank rune (pode ter mudado de posicao)
+                                blank_data = find_item_in_containers(pm, base_addr, blank_id)
+                                if not blank_data:
+                                    log_msg(f"Sem blank runes para equipar na mao {slot_enum}")
+                                    phase2_failed = True
+                                    break
+
+                                # Move Blank -> Mao
                                 pos_from = get_container_pos(blank_data['container_index'], blank_data['slot_index'])
                                 pos_to = get_inventory_pos(slot_enum)
-                                packet.move_item(pos_from, pos_to, blank_id, 1)
 
-                                # Adiciona à lista de runes ativas
-                                restorable_item, orig_dest_slot = unequipped_items[slot_enum]
+                                # Executa com retry e validacao
+                                def do_equip_blank():
+                                    packet.move_item(pos_from, pos_to, blank_id, 1)
+
+                                equip_success = execute_with_retry(
+                                    action_fn=do_equip_blank,
+                                    validate_fn=lambda se=slot_enum: verify_blank_equipped(pm, base_addr, se, blank_id),
+                                    max_retries=3,
+                                    delay=0.6,
+                                    description=f"equipar blank na mao {slot_enum}"
+                                )
+
+                                if not equip_success:
+                                    log_msg(f"Falha ao equipar blank na mao {slot_enum}, abortando ciclo")
+                                    phase2_failed = True
+                                    break
+
+                                # Adiciona a lista de runes ativas
+                                unequip_data = unequipped_items.get(slot_enum)
+                                restorable_item = unequip_data['item_id'] if unequip_data else None
+
                                 active_runes.append({
                                     "hand_pos": pos_to,
                                     "origin_idx": blank_data['container_index'],
                                     "slot_enum": slot_enum,
                                     "restorable_item": restorable_item,
-                                    "orig_dest_slot": orig_dest_slot  # Track where the weapon was stored
+                                    "unequip_data": unequip_data  # Guarda info completa
                                 })
-                                time.sleep(1.2)
+                                log_msg(f"Blank equipada na mao {slot_enum}")
+                                time.sleep(0.8)
+
+                            if phase2_failed:
+                                log_msg("PHASE 2 falhou, tentando restaurar itens...")
+                                # Tenta restaurar itens que foram desequipados
+                                for slot_enum, data in unequipped_items.items():
+                                    if data and data.get('item_id'):
+                                        reequip_hand(pm, base_addr, data['item_id'], slot_enum, packet=packet)
+                                state.set_runemaking(False)
+                                next_cast_time = 0
+                                continue
 
                             if active_runes:
-                                log_msg(f"🪄 Pressionando {hotkey_str}...")
+                                # PHASE 3: Cast spell
+                                log_msg(f"Pressionando {hotkey_str}...")
                                 press_hotkey(hwnd, vk_hotkey)
+                                time.sleep(1.2)
 
-                                time.sleep(1.2) # Wait process
-
-                                # PHASE 4: Return ALL runes to backpack FIRST (before re-equipping)
-                                # IMPORTANTE: Quando usa BOTH hands, precisa devolver AMBAS as runas
-                                # antes de tentar re-equipar (especialmente itens que ocupam 2 mãos)
+                                # Verifica se runas foram conjuradas (informativo)
                                 for info in active_runes:
-                                    # 1. Identifica o que foi fabricado
-                                    detected_id = get_item_id_in_hand(pm, base_addr, info['slot_enum'])
+                                    if verify_rune_conjured(pm, base_addr, info['slot_enum'], blank_id):
+                                        detected_id = get_item_id_in_hand(pm, base_addr, info['slot_enum'])
+                                        log_msg(f"Runa conjurada na mao {info['slot_enum']}: ID {detected_id}")
+                                    else:
+                                        log_msg(f"Runa pode nao ter sido conjurada na mao {info['slot_enum']}")
+
+                                # PHASE 4: Return ALL runes to backpack COM VALIDACAO
+                                for info in active_runes:
+                                    slot_enum = info['slot_enum']
+
+                                    # Identifica o que esta na mao
+                                    detected_id = get_item_id_in_hand(pm, base_addr, slot_enum)
                                     rune_id_to_move = detected_id if detected_id > 0 else blank_id
 
-                                    # 2. Devolve Runa para Backpack
-                                    pos_dest = get_container_pos(info['origin_idx'], 0)
-                                    packet.move_item(info['hand_pos'], pos_dest, rune_id_to_move, 1)
-                                    log_msg(f"📦 Devolvido: Runa {rune_id_to_move} → Container {info['origin_idx']}")
-                                    time.sleep(1.5)  # Aguarda servidor processar movimento
+                                    # Busca container com espaco para devolver
+                                    dest_idx, dest_slot = find_container_with_space(pm, base_addr, info['origin_idx'])
+                                    if dest_idx is None:
+                                        log_msg(f"Todos containers cheios! Nao e possivel devolver runa da mao {slot_enum}")
+                                        continue
 
-                                # PHASE 5: Re-equip ALL original items AFTER all runes are returned
-                                # Separar em outra fase garante que nenhum item fica equipado enquanto
-                                # ainda há runas nas mãos (importante para itens com 2 mãos)
-                                log_msg(f"🔙 Restaurando {len([i for i in active_runes if i['restorable_item']])} item(ns) original(is)...")
-                                for info in active_runes:
-                                    if info['restorable_item']:
-                                        log_msg(f"🔄 Tentando re-equipar {info['restorable_item']} na mão {info['slot_enum']}...")
+                                    pos_dest = get_container_pos(dest_idx, dest_slot)
+
+                                    # Move runa com retry e validacao
+                                    def do_return_rune():
+                                        packet.move_item(info['hand_pos'], pos_dest, rune_id_to_move, 1)
+
+                                    return_success = execute_with_retry(
+                                        action_fn=do_return_rune,
+                                        validate_fn=lambda se=slot_enum: verify_hand_empty(pm, base_addr, se),
+                                        max_retries=3,
+                                        delay=0.6,
+                                        description=f"devolver runa da mao {slot_enum}"
+                                    )
+
+                                    if return_success:
+                                        log_msg(f"Devolvido: Runa {rune_id_to_move} -> Container {dest_idx}")
+                                    else:
+                                        log_msg(f"Falha ao devolver runa da mao {slot_enum}")
+
+                                    time.sleep(0.5)
+
+                                # PHASE 5: Re-equip ALL original items (ja tem validacao interna)
+                                items_to_restore = [i for i in active_runes if i['restorable_item']]
+                                if items_to_restore:
+                                    log_msg(f"Restaurando {len(items_to_restore)} item(ns) original(is)...")
+                                    for info in items_to_restore:
+                                        log_msg(f"Tentando re-equipar {info['restorable_item']} na mao {info['slot_enum']}...")
                                         success = reequip_hand(pm, base_addr, info['restorable_item'], info['slot_enum'], packet=packet)
                                         if success:
-                                            log_msg(f"✅ Item {info['restorable_item']} re-equipado com sucesso!")
+                                            log_msg(f"Item {info['restorable_item']} re-equipado com sucesso!")
                                         else:
-                                            log_msg(f"⚠️ Falha ao re-equipar {info['restorable_item']}")
-                                        time.sleep(0.5)  # Pequena pausa entre re-equipamentos
+                                            log_msg(f"Falha ao re-equipar {info['restorable_item']}")
+                                        time.sleep(0.5)
 
-                                log_msg("✅ Ciclo concluído.")
+                                log_msg("Ciclo concluido.")
                                 next_cast_time = 0
                     finally:
                         state.set_runemaking(False)

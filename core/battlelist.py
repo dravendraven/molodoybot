@@ -17,7 +17,8 @@ from config import (
     OFFSET_HP, OFFSET_SPEED, OFFSET_VISIBLE,
     OFFSET_MOVEMENT_STATUS, OFFSET_FACING_DIRECTION,
     OFFSET_OUTFIT_TYPE, OFFSET_OUTFIT_HEAD, OFFSET_OUTFIT_BODY,
-    OFFSET_OUTFIT_LEGS, OFFSET_OUTFIT_FEET
+    OFFSET_OUTFIT_LEGS, OFFSET_OUTFIT_FEET,
+    OFFSET_LIGHT, OFFSET_LIGHT_COLOR, OFFSET_BLACKSQUARE
 )
 from core.models import Creature, Position
 
@@ -106,6 +107,11 @@ class BattleListScanner:
             outfit_legs = struct.unpack_from('<I', raw_bytes, OFFSET_OUTFIT_LEGS)[0]
             outfit_feet = struct.unpack_from('<I', raw_bytes, OFFSET_OUTFIT_FEET)[0]
 
+            # Parse campos adicionais (tibianic-dll structures.h)
+            light = struct.unpack_from('<I', raw_bytes, OFFSET_LIGHT)[0]
+            light_color = struct.unpack_from('<I', raw_bytes, OFFSET_LIGHT_COLOR)[0]
+            blacksquare = struct.unpack_from('<Q', raw_bytes, OFFSET_BLACKSQUARE)[0]  # uint64_t
+
             return Creature(
                 id=c_id,
                 name=name,
@@ -120,7 +126,10 @@ class BattleListScanner:
                 outfit_head=outfit_head,
                 outfit_body=outfit_body,
                 outfit_legs=outfit_legs,
-                outfit_feet=outfit_feet
+                outfit_feet=outfit_feet,
+                light=light,
+                light_color=light_color,
+                blacksquare=blacksquare
             )
 
         except Exception:

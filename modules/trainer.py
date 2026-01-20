@@ -21,6 +21,7 @@ from core.map_analyzer import MapAnalyzer
 from core.astar_walker import AStarWalker
 from core.battlelist import BattleListScanner
 from core.models import Position
+from core.overlay_renderer import renderer as overlay_renderer
 
 # Definições de Delay (Throttle Dinâmico)
 SCAN_DELAY_COMBAT = 0.1      # Em combate: scan máximo
@@ -81,6 +82,46 @@ def creature_to_entity_dict(creature):
         'abs_y': creature.position.y,
         'hp': creature.hp_percent
     }
+
+
+def update_trainer_overlay(all_creatures, my_x, my_y, my_z, current_target_id, my_name):
+    """
+    Atualiza overlay de debug com informações das criaturas visíveis.
+    Exibe: vis, hp%, distância, blacksquare acima de cada criatura.
+
+    Ativado via XRAY_TRAINER_DEBUG no config.py.
+    """
+    if not XRAY_TRAINER_DEBUG:
+        overlay_renderer.unregister_layer('trainer')
+        return
+
+    overlay_data = []
+    for creature in all_creatures:
+        # Skip próprio personagem
+        if creature.name == my_name:
+            continue
+
+        # Skip se não está visível ou em outro andar
+        if not creature.is_visible or creature.position.z != my_z:
+            continue
+
+        dx = creature.position.x - my_x
+        dy = creature.position.y - my_y
+        dist = max(abs(dx), abs(dy))  # Chebyshev distance
+
+        # Cor diferente para target atual
+        color = '#FF4444' if creature.id == current_target_id else '#FFFF00'
+
+        overlay_data.append({
+            'type': 'creature_info',
+            'dx': dx,
+            'dy': dy,
+            'text': f"hp:{creature.hp_percent}% d:{dist} bs:{creature.blacksquare}",
+            'color': color,
+            'offset_y': -25  # Pixels acima da criatura
+        })
+
+    overlay_renderer.register_layer('trainer', overlay_data)
 
 
 # ==============================================================================
@@ -541,7 +582,12 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
         if state.is_runemaking:
             time.sleep(0.5)
             continue
-        
+
+        # Pausa durante conversa de chat (AI respondendo)
+        if state.is_chat_paused:
+            time.sleep(0.5)
+            continue
+
         min_delay = get_cfg('min_delay', 1.0)
         max_delay = get_cfg('max_delay', 2.0)
         trigger_range = get_cfg('range', 1)  # Range para ACIONAR ataque (não confundir com MELEE_RANGE)
@@ -604,6 +650,9 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
 
             # SCAN via BattleListScanner (centralizado, early-exit interno)
             all_creatures = scanner.scan_all()
+
+            # Atualiza overlay de debug (se XRAY_TRAINER_DEBUG ativo)
+            update_trainer_overlay(all_creatures, my_x, my_y, my_z, current_target_id, current_name)
 
             # Filtra entidades visíveis no mesmo andar (para KS detection)
             all_visible_entities = [

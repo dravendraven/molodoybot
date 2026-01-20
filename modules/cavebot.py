@@ -22,6 +22,8 @@ from database.tiles_config import ROPE_ITEM_ID, SHOVEL_ITEM_ID, get_ground_speed
 from core.bot_state import state
 from core.global_map import GlobalMap
 from core.player_core import get_player_speed, is_player_moving, wait_until_stopped
+from core.advancement_tracker import AdvancementTracker
+from core.battlelist import BattleListScanner
 
 
 COOLDOWN_AFTER_COMBAT = random.uniform(2.5, 5)  # 1s a 1.5s de cooldown após combate
@@ -95,6 +97,13 @@ class Cavebot:
         # --- ESTADO PARA MINIMAP (NOVO) ---
         self.current_state = self.STATE_IDLE
         self.state_message = ""  # Mensagem detalhada para exibição
+
+        # --- HUMANIZAÇÃO: Detecção de Falta de Progresso ---
+        self.advancement_tracker = AdvancementTracker(
+            window_seconds=ADVANCEMENT_WINDOW_SECONDS,
+            min_advancement_ratio=ADVANCEMENT_MIN_RATIO
+        )
+        self.no_progress_response_time = 0  # Timestamp da última resposta a bloqueio
 
     def load_waypoints(self, waypoints_list):
         """
@@ -253,6 +262,16 @@ class Cavebot:
                 print(f"[Cavebot] ⏸️ PAUSA: Runemaker ativo")
             return
 
+        # NOVO: Pausa durante conversa de chat (AI respondendo)
+        if state.is_chat_paused:
+            self.current_state = self.STATE_PAUSED
+            remaining = state.get_chat_pause_remaining()
+            self.state_message = f"💬 Pausado (Chat - {remaining:.1f}s)"
+            self.last_action_time = time.time()
+            if DEBUG_PATHFINDING:
+                print(f"[Cavebot] ⏸️ PAUSA: Chat ativo ({remaining:.1f}s restantes)")
+            return
+
         # NOVO: Pausa para atividades de maior prioridade
         # Aguarda combate terminar E auto-loot finalizar completamente
         if state.is_in_combat or state.has_open_loot:
@@ -323,6 +342,11 @@ class Cavebot:
         # 3. Checar se chegou (Distância < 1.5 SQM e mesmo Z)
         dist = math.sqrt((wp['x'] - px)**2 + (wp['y'] - py)**2)
 
+        # HUMANIZAÇÃO: Registrar distância para tracking de avanço (fallback)
+        # Nodes são registrados mais tarde quando temos a rota global
+        if ADVANCEMENT_TRACKING_ENABLED:
+            self.advancement_tracker.record_distance(dist)
+
         if dist <= 1.5 and wp['z'] == pz:
             self.current_state = self.STATE_WAYPOINT_REACHED
             self.state_message = f"✅ Waypoint #{current_index + 1} alcançado"
@@ -331,7 +355,16 @@ class Cavebot:
                 self._advance_waypoint()
                 self.current_global_path = []
                 self.last_lookahead_idx = -1
+            # Limpa tracker ao mudar de waypoint
+            self.advancement_tracker.reset()
             return
+
+        # HUMANIZAÇÃO: Verificar se estamos avançando (apenas fora de combate/loot)
+        if ADVANCEMENT_TRACKING_ENABLED and wp['z'] == pz:
+            if not state.is_in_combat and not state.has_open_loot:
+                if not self.advancement_tracker.is_advancing(ADVANCEMENT_EXPECTED_SPEED):
+                    self._handle_no_progress(px, py, pz, wp)
+                    return
 
         # ======================================================================
         # 4. LÓGICA DE ANDARES (FLOOR CHANGE)
@@ -387,7 +420,41 @@ class Cavebot:
                     abs_ladder_y = py + target_fy
                     self._navigate_hybrid(abs_ladder_x, abs_ladder_y, pz, px, py)
             else:
-                print(f"[Cavebot] ⚠️ Nenhuma escada/rope encontrada! Z atual={pz}, Z alvo={wp['z']}")
+                # Escada/rope fora da tela - navegar até (wp['x'], wp['y']) no andar atual
+                # O tile exato pode ser intransitável, então usamos fallback com raio maior
+                nav_target_x, nav_target_y = wp['x'], wp['y']
+                dist_to_target = math.sqrt((nav_target_x - px)**2 + (nav_target_y - py)**2)
+
+                if dist_to_target > 2:
+                    # Ainda longe - tentar navegar até lá (ou tile mais próximo)
+                    print(f"[Cavebot] 🔍 Escada não visível. Navegando até ({nav_target_x}, {nav_target_y}) no Z={pz} (dist: {dist_to_target:.1f})")
+
+                    # Usa GlobalMap com fallback maior para achar tile walkable mais próximo
+                    # max_offset=5 permite encontrar tile até 5 sqm de distância se o exato for parede
+                    path = self.global_map.get_path_with_fallback(
+                        (px, py, pz),
+                        (nav_target_x, nav_target_y, pz),
+                        max_offset=5  # Raio maior para floor change
+                    )
+
+                    if path:
+                        self.current_global_path = path
+                        print(f"[Cavebot] 🛤️ Rota para escada: {len(path)} tiles")
+                    else:
+                        # Fallback: usa navegação local direta
+                        print(f"[Cavebot] ⚠️ GlobalMap falhou. Usando navegação local.")
+                        self._navigate_hybrid(nav_target_x, nav_target_y, pz, px, py)
+                else:
+                    # Chegou perto mas ainda não achou escada - incrementa stuck
+                    self.global_recalc_counter += 1
+                    print(f"[Cavebot] ⚠️ Escada não encontrada perto de ({nav_target_x}, {nav_target_y}, {pz})! ({self.global_recalc_counter}/{GLOBAL_RECALC_LIMIT})")
+
+                    if self.global_recalc_counter >= GLOBAL_RECALC_LIMIT:
+                        print(f"[Cavebot] ⚠️ Limite atingido. Pulando para próximo waypoint.")
+                        with self._waypoints_lock:
+                            self._advance_waypoint()
+                            self.current_global_path = []
+                        self.global_recalc_counter = 0
             
             self.last_action_time = time.time()
             return
@@ -476,6 +543,10 @@ class Cavebot:
 
                 tx, ty, tz = self.current_global_path[lookahead]
                 target_local_x, target_local_y = tx, ty
+
+                # HUMANIZAÇÃO: Registrar nodes restantes (mais preciso que distância)
+                if ADVANCEMENT_TRACKING_ENABLED:
+                    self.advancement_tracker.record_nodes(len(self.current_global_path))
             else:
                 # Perdemos a rota, limpa para recalcular
                 print("[Nav] ⚠️ Perdido da rota global. Resetando.")
@@ -1335,7 +1406,8 @@ class Cavebot:
             )
 
             print(f"[Cavebot] 📦 Moveu mesa {obstacle['item_id']} para ({dest_x},{dest_y})")
-            gauss_wait(0.3, 20)
+            # Delay humanizado após mover obstáculo (1s ± 50%)
+            gauss_wait(1.0, 50)
             return True
 
         return False
@@ -1378,7 +1450,8 @@ class Cavebot:
         )
 
         print(f"[Cavebot] 📦 Moveu parcel {obstacle['item_id']} para pé do player ({dest_x},{dest_y})")
-        gauss_wait(0.3, 20)
+        # Delay humanizado após mover obstáculo (1s ± 50%)
+        gauss_wait(1.0, 50)
         return True
 
         # NOTA: Se no futuro a prioridade 0 falhar (ex: height excessivo no tile do player),
@@ -1428,3 +1501,125 @@ class Cavebot:
             # Posição mudou (mesmo que is_moving=False agora) - não está stuck
             self.stuck_counter = 0
             self.last_known_pos = current_pos
+
+    # =========================================================================
+    # HUMANIZAÇÃO: Detecção de Falta de Progresso
+    # =========================================================================
+
+    def _handle_no_progress(self, px, py, pz, wp):
+        """
+        Chamado quando detectamos que não estamos avançando ao waypoint.
+        Identifica causa e aplica resposta humanizada.
+        """
+        # Cooldown entre respostas (evita spam de ações)
+        if time.time() - self.no_progress_response_time < 3.0:
+            return
+
+        # 1. Verificar se há player adjacente (1 tile)
+        nearby_player = self._find_adjacent_player(px, py, pz)
+
+        if nearby_player:
+            # Player é provavelmente a causa
+            self._respond_to_player_blocking(nearby_player, px, py, pz, wp)
+        else:
+            # Outra causa (pathing ruim, obstáculo, etc)
+            self._respond_to_general_stuck(px, py, pz, wp)
+
+        self.no_progress_response_time = time.time()
+
+    def _find_adjacent_player(self, px, py, pz):
+        """
+        Retorna player adjacente (1 tile de distância Chebyshev) ou None.
+        """
+        scanner = BattleListScanner(self.pm, self.base_addr)
+        player_id = self.pm.read_int(self.base_addr + OFFSET_PLAYER_ID)
+        players = scanner.get_players(exclude_self_id=player_id)
+
+        for player in players:
+            if player.position.z != pz:
+                continue
+            # Distância Chebyshev (máximo de dx e dy)
+            dist = max(abs(player.position.x - px), abs(player.position.y - py))
+            if dist <= 1:  # Adjacente
+                return player
+        return None
+
+    def _respond_to_player_blocking(self, player, px, py, pz, wp):
+        """
+        Resposta humanizada quando player está bloqueando.
+        Escolhe aleatoriamente entre: WAIT, AVOID, SKIP
+        """
+        response = random.choices(
+            ['WAIT', 'AVOID', 'SKIP'],
+            weights=[0.6, 0.3, 0.1]  # 60% esperar, 30% desviar, 10% pular
+        )[0]
+
+        info = self.advancement_tracker.get_advancement_info()
+        if DEBUG_ADVANCEMENT or DEBUG_PATHFINDING:
+            if info['mode'] == 'nodes':
+                print(f"[Cavebot] ⚠️ Sem progresso! Modo: nodes, taxa: {info['node_rate']:.2f} nodes/s")
+            else:
+                print(f"[Cavebot] ⚠️ Sem progresso! Modo: distância, taxa: {info['distance_rate']:.2f} SQM/s")
+            print(f"[Cavebot] Player '{player.name}' adjacente em ({player.position.x}, {player.position.y}). Resposta: {response}")
+
+        if response == 'WAIT':
+            # Ficar parado 1-4 segundos (gaussiano)
+            min_wait, max_wait = PLAYER_BLOCK_WAIT_RANGE
+            wait_time = random.gauss((min_wait + max_wait) / 2, (max_wait - min_wait) / 4)
+            wait_time = max(min_wait, min(max_wait, wait_time))
+
+            self.current_state = self.STATE_PAUSED
+            self.state_message = f"⏸️ Aguardando player passar ({wait_time:.1f}s)"
+            print(f"[Cavebot] ⏸️ Aguardando player '{player.name}' passar ({wait_time:.1f}s)")
+
+            time.sleep(wait_time)
+            # Após esperar, limpa o tracker para dar nova chance
+            self.advancement_tracker.reset()
+
+        elif response == 'AVOID':
+            # Aplicar peso 2x nos tiles do player para A* preferir desviar
+            self._set_player_avoidance(player.position.x, player.position.y, px, py)
+            # Limpar cache para forçar recálculo de rota
+            self.local_path_cache = []
+            self.current_global_path = []
+            print(f"[Cavebot] 🔄 Tentando desviar de '{player.name}' (peso 2x nos tiles adjacentes)")
+
+        elif response == 'SKIP':
+            # Pular para próximo waypoint
+            print(f"[Cavebot] ⏭️ Pulando WP #{self._current_index} devido a bloqueio por '{player.name}'")
+            with self._waypoints_lock:
+                self._advance_waypoint()
+                self.current_global_path = []
+            self.advancement_tracker.reset()
+
+    def _respond_to_general_stuck(self, px, py, pz, wp):
+        """
+        Resposta quando não há player adjacente mas não estamos avançando.
+        Provavelmente pathing ruim ou obstáculo não detectado.
+        """
+        info = self.advancement_tracker.get_advancement_info()
+        if DEBUG_ADVANCEMENT or DEBUG_PATHFINDING:
+            if info['mode'] == 'nodes':
+                print(f"[Cavebot] ⚠️ Sem progresso (sem player). Modo: nodes, taxa: {info['node_rate']:.2f} nodes/s")
+            else:
+                print(f"[Cavebot] ⚠️ Sem progresso (sem player). Modo: distância, taxa: {info['distance_rate']:.2f} SQM/s")
+
+        # Limpar player avoidance (pode ter sido setado anteriormente)
+        self.analyzer.clear_player_avoidance()
+
+        # Forçar recálculo de rota global
+        self.current_global_path = []
+        self.local_path_cache = []
+        self.global_recalc_counter += 1
+
+        # Reseta tracker para dar nova chance
+        self.advancement_tracker.reset()
+
+    def _set_player_avoidance(self, player_x, player_y, my_x, my_y):
+        """
+        Configura o MapAnalyzer para penalizar tiles próximos do player.
+        """
+        # Define referência de posição para conversão rel -> abs
+        self.analyzer.set_player_reference(my_x, my_y)
+        # Define penalidade nos tiles do player e adjacentes
+        self.analyzer.set_player_avoidance(player_x, player_y)

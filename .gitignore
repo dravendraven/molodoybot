@@ -10,6 +10,9 @@ env/
 # --- SEGURANÇA ---
 # Ignorar o arquivo de configuração real com suas senhas
 bot_config.json
+.env
+.env.local
+.env.*.local
 fishing_map.json
 cavebot_scripts/
 build/
@@ -42,3 +45,4 @@ cleartable.mp4
 repomix-output.xml
 nul
 to-do.md
+.env.example

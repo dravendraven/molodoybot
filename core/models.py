@@ -135,6 +135,10 @@ class Creature:
     outfit_body: int = 0    # Cor do corpo
     outfit_legs: int = 0    # Cor das pernas
     outfit_feet: int = 0    # Cor dos pés
+    # Campos adicionais do tibianic-dll structures.h
+    light: int = 0          # Light level emitted
+    light_color: int = 0    # Light color
+    blacksquare: int = 0    # Shown when creature attacks player (8 bytes)
 
     @property
     def is_valid(self) -> bool:

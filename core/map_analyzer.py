@@ -1,10 +1,13 @@
 # core/map_analyzer.py
 from database.tiles_config import BLOCKING_IDS, AVOID_IDS, MOVE_IDS, STACK_IDS, get_special_type
-from config import DEBUG_PATHFINDING, DEBUG_OBSTACLE_CLEARING, DEBUG_STACK_CLEARING
+from config import DEBUG_PATHFINDING, DEBUG_OBSTACLE_CLEARING, DEBUG_STACK_CLEARING, PLAYER_AVOIDANCE_MULTIPLIER
 
 class MapAnalyzer:
     def __init__(self, memory_map):
         self.mm = memory_map
+        # Sistema de player avoidance - penaliza tiles próximos de players
+        self._player_avoidance = {}  # {(abs_x, abs_y): multiplier}
+        self._my_abs_pos = None      # Posição absoluta do player para conversão rel -> abs
 
     def get_tile_properties(self, rel_x, rel_y, debug_reason=False):
         """
@@ -108,10 +111,52 @@ class MapAnalyzer:
                 properties['cost'] = 20
                 continue
 
+        # 5. PENALIDADE DE PLAYER AVOIDANCE
+        # Aplica custo extra em tiles próximos de players (para desviar)
+        if self._player_avoidance and self._my_abs_pos:
+            abs_x = self._my_abs_pos[0] + rel_x
+            abs_y = self._my_abs_pos[1] + rel_y
+            if (abs_x, abs_y) in self._player_avoidance:
+                multiplier = self._player_avoidance[(abs_x, abs_y)]
+                properties['cost'] = int(properties['cost'] * multiplier)
+
         return properties
     
     def _make_block(self):
         return {'walkable': False, 'type': 'BLOCK', 'cost': 999}
+
+    # =========================================================================
+    # PLAYER AVOIDANCE - Penaliza tiles próximos de players
+    # =========================================================================
+
+    def set_player_reference(self, my_x, my_y):
+        """
+        Define a posição absoluta do player para conversão rel -> abs.
+        Deve ser chamado antes de usar player avoidance.
+        """
+        self._my_abs_pos = (my_x, my_y)
+
+    def set_player_avoidance(self, player_abs_x, player_abs_y, multiplier=None):
+        """
+        Define tiles a evitar próximos de um player.
+
+        Args:
+            player_abs_x, player_abs_y: Posição absoluta do player a evitar
+            multiplier: Multiplicador de custo (default: PLAYER_AVOIDANCE_MULTIPLIER)
+        """
+        if multiplier is None:
+            multiplier = PLAYER_AVOIDANCE_MULTIPLIER
+
+        self._player_avoidance = {}
+
+        # Tile do player e adjacentes (3x3)
+        for dx in [-1, 0, 1]:
+            for dy in [-1, 0, 1]:
+                self._player_avoidance[(player_abs_x + dx, player_abs_y + dy)] = multiplier
+
+    def clear_player_avoidance(self):
+        """Limpa penalidades de player."""
+        self._player_avoidance = {}
 
     def get_tile_height(self, rel_x, rel_y):
         """
