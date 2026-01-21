@@ -17,6 +17,7 @@ from config import (
     STEP_SIZE,
     MAX_CREATURES,
     OFFSET_PLAYER_ID,
+    OFFSET_PLAYER_CAP,
     OFFSET_NAME,
     OFFSET_X,
     OFFSET_Y,
@@ -385,3 +386,25 @@ def find_player_in_battlelist(pm, base_addr: int, player_id: int = None) -> dict
         pass
 
     return None
+
+
+def get_player_cap(pm, base_addr) -> float:
+    """
+    Lê a capacidade (cap) atual do jogador em oz.
+
+    TEMPO REAL - Este valor muda constantemente.
+
+    Args:
+        pm: Instância do Pymem conectada ao Tibia
+        base_addr: Endereço base do módulo Tibia
+
+    Returns:
+        Capacidade em oz ou 0.0 se falhar
+    """
+    try:
+        val = pm.read_float(base_addr + OFFSET_PLAYER_CAP)
+        if val < 0.1:
+            val = float(pm.read_int(base_addr + OFFSET_PLAYER_CAP))
+        return val
+    except Exception:
+        return 0.0

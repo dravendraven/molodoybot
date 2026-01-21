@@ -55,13 +55,77 @@ def find_item_in_equipment(pm, base_addr, item_id):
 
 def get_item_id_in_hand(pm, base_addr, slot_enum):
     """
-    Lê o ID do item que está na mão especificada (Left/Right) direto da memória.
+    Lê o ID do item que está na mão especificada direto da memória.
+
+    Args:
+        pm: Instância do Pymem
+        base_addr: Endereço base do processo
+        slot_enum: SLOT_RIGHT (5) ou SLOT_LEFT (6)
+
+    Returns:
+        ID do item ou 0 se vazio/erro
     """
     try:
-        offset = 0
-        if slot_enum == 5: offset = 0x1CED90 # OFFSET_SLOT_RIGHT
-        elif slot_enum == 6: offset = 0x1CED9C # OFFSET_SLOT_LEFT
-        else: return 0
-        return pm.read_int(base_addr + offset)
-    except:
+        if slot_enum == SLOT_RIGHT:
+            return pm.read_int(base_addr + OFFSET_SLOT_RIGHT)
+        elif slot_enum == SLOT_LEFT:
+            return pm.read_int(base_addr + OFFSET_SLOT_LEFT)
         return 0
+    except Exception:
+        return 0
+
+
+def get_item_count_in_hand(pm, base_addr, slot_enum):
+    """
+    Lê a quantidade do item que está na mão especificada.
+
+    Args:
+        pm: Instância do Pymem
+        base_addr: Endereço base do processo
+        slot_enum: SLOT_RIGHT (5) ou SLOT_LEFT (6)
+
+    Returns:
+        Quantidade do item ou 0 se vazio/erro
+    """
+    try:
+        if slot_enum == SLOT_RIGHT:
+            return pm.read_int(base_addr + OFFSET_SLOT_RIGHT_COUNT)
+        elif slot_enum == SLOT_LEFT:
+            return pm.read_int(base_addr + OFFSET_SLOT_LEFT_COUNT)
+        return 0
+    except Exception:
+        return 0
+
+
+def get_spear_count_in_hands(pm, base_addr, spear_id=3277):
+    """
+    Conta quantas spears estão nas mãos do jogador.
+    Verifica ambas as mãos e retorna o total.
+
+    Args:
+        pm: Instância do Pymem
+        base_addr: Endereço base do processo
+        spear_id: ID da spear (default: 3277)
+
+    Returns:
+        Tuple (total_count, slot_with_spear) onde slot_with_spear é SLOT_RIGHT, SLOT_LEFT ou None
+    """
+    total = 0
+    slot_with_spear = None
+
+    # Verifica mão direita
+    right_id = get_item_id_in_hand(pm, base_addr, SLOT_RIGHT)
+    if right_id == spear_id:
+        count = get_item_count_in_hand(pm, base_addr, SLOT_RIGHT)
+        total += count if count > 0 else 1  # Se count=0 mas tem item, assume 1
+        slot_with_spear = SLOT_RIGHT
+
+    # Verifica mão esquerda
+    left_id = get_item_id_in_hand(pm, base_addr, SLOT_LEFT)
+    if left_id == spear_id:
+        count = get_item_count_in_hand(pm, base_addr, SLOT_LEFT)
+        total += count if count > 0 else 1
+        if slot_with_spear is None:
+            slot_with_spear = SLOT_LEFT
+
+    return total, slot_with_spear

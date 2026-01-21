@@ -205,6 +205,9 @@ class ChatHandler:
                 # Adiciona ao histórico
                 self.conversation_mgr.add_message(sender, response.text, is_from_me=True)
 
+                # Registra conversa ativa no analyzer (bônus para próximas mensagens)
+                self.analyzer.register_response(sender)
+
                 # Atualiza timestamp
                 self.last_response_time = time.time()
 

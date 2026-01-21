@@ -4,6 +4,7 @@ Analisador de mensagens para determinar se são direcionadas ao bot.
 Usa dados do battlelist (posição, direção, movimento) para calcular probabilidade.
 """
 import random
+import time
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
 
@@ -30,11 +31,12 @@ class MessageAnalyzer:
     """
     Analisa se uma mensagem é direcionada ao bot.
 
-    Fatores considerados:
-    - Distância do player que enviou
-    - Se está parado e olhando para o bot
-    - Se está se movendo em direção ao bot ou se afastando
-    - Tipo de mensagem (greeting, pergunta, etc)
+    Fatores considerados (por ordem de peso):
+    1. Distância relativa do bot (maior peso - > 4 tiles ignora)
+    2. Se está parado e olhando para o bot
+    3. Tipo de mensagem (greeting indica início de conversa)
+    4. Se está se movendo em direção ao bot ou se afastando
+    5. Conversa ativa (respondemos recentemente a este player)
     """
 
     # Greetings comuns que indicam início de conversa
@@ -47,6 +49,9 @@ class MessageAnalyzer:
     # Palavras que indicam pergunta/interação
     QUESTION_INDICATORS = {'?', 'what', 'where', 'how', 'why', 'when', 'who', 'can', 'could', 'do', 'does'}
 
+    # Tempo máximo (segundos) para considerar uma conversa ativa
+    CONVERSATION_TIMEOUT = 30.0
+
     def __init__(self, pm, base_addr):
         self.pm = pm
         self.base_addr = base_addr
@@ -54,6 +59,9 @@ class MessageAnalyzer:
 
         # Cache de posições anteriores para detectar aproximação
         self._position_cache: Dict[str, Position] = {}
+
+        # Histórico de conversas: {player_name: last_response_timestamp}
+        self._conversation_history: Dict[str, float] = {}
 
     def analyze(self, message: ChatMessage, my_pos: Position) -> MessageIntent:
         """
@@ -92,7 +100,7 @@ class MessageAnalyzer:
         should_respond = self._should_respond(confidence, message)
 
         # Gera reasoning para debug
-        reasoning = self._build_reasoning(sender_data, confidence)
+        reasoning = self._build_reasoning(sender_data, confidence, message.sender)
 
         return MessageIntent(
             is_directed_at_me=confidence > 0.5,
@@ -138,7 +146,15 @@ class MessageAnalyzer:
 
     def _calculate_confidence(self, message: ChatMessage, sender: Creature,
                               my_pos: Position, sender_data: Dict) -> float:
-        """Calcula probabilidade (0.0 - 1.0) de a mensagem ser para o bot."""
+        """
+        Calcula probabilidade (0.0 - 1.0) de a mensagem ser para o bot.
+
+        Pesos por prioridade:
+        1. DISTÂNCIA (maior peso) - players > 4 tiles são ignorados
+        2. PARADO OLHANDO - forte indicador de interação
+        3. GREETING - indica início de conversa
+        4. MOVIMENTO - aproximando vs afastando
+        """
         confidence = 0.0
 
         distance = sender_data["distance"]
@@ -146,51 +162,52 @@ class MessageAnalyzer:
         is_moving = sender_data["is_moving"]
         movement_status = sender_data["movement_status"]
 
-        # 1. DISTÂNCIA (quanto mais perto, mais provável)
+        # 1. DISTÂNCIA (MAIOR PESO - fator dominante)
+        # Players distantes (> 4 tiles) são efetivamente ignorados
         if distance <= 1:
-            confidence += 0.45  # Adjacente = muito provável
+            confidence += 0.50  # Adjacente = muito provável
+        elif distance <= 2:
+            confidence += 0.40  # Muito perto
         elif distance <= 3:
-            confidence += 0.35  # Perto
-        elif distance <= 5:
-            confidence += 0.20  # Médio
-        elif distance <= 7:
-            confidence += 0.10  # Borda da tela
+            confidence += 0.30  # Perto
+        elif distance <= 4:
+            confidence += 0.15  # Limite aceitável
         else:
-            confidence += 0.05  # Longe
+            # > 4 tiles = provavelmente não é para mim
+            confidence -= 0.40  # Penalidade forte para distância
 
-        # 2. OLHANDO PARA MIM? (parado + facing = forte indicador)
+        # 2. PARADO E OLHANDO PARA MIM (segundo maior peso)
+        # Player parado olhando diretamente = forte indicador de interação
         if not is_moving and is_facing_me:
-            confidence += 0.35  # Parado e olhando = muito provável
+            confidence += 0.40
 
-        # 3. MOVIMENTO (se aproximando vs se afastando)
+        # 3. TIPO DE MENSAGEM - GREETING (terceiro peso)
+        text_lower = message.text.lower().strip()
+
+        if text_lower in self.GREETINGS:
+            confidence += 0.40  # Greeting = provável início de conversa
+
+        # Pergunta = possível interação
+        if '?' in message.text:
+            confidence += 0.30
+
+        # 4. MOVIMENTO (quarto peso)
         if is_moving:
             if movement_status == "approaching":
                 confidence += 0.15  # Vindo em minha direção
             elif movement_status == "departing":
-                confidence -= 0.20  # Se afastando = provavelmente não é pra mim
-            # "stationary" ou "parallel" não altera
+                confidence -= 0.15  # Se afastando = provavelmente não é pra mim
 
-        # 4. CONTEÚDO DA MENSAGEM
-        text_lower = message.text.lower().strip()
-
-        # Greeting direto = alta probabilidade de ser início de conversa
-        if text_lower in self.GREETINGS:
-            confidence += 0.70
-
-        # Pergunta = provável interação
-        if '?' in message.text:
-            confidence += 0.40
-
-        # Mensagem muito curta (1-2 palavras) = mais provável ser direcionada
-        word_count = len(message.text.split())
-        if word_count <= 2:
-            confidence += 0.05
-
-        # 5. TIPO DE MENSAGEM
+        # Bônus/penalidades secundárias
+        # Whisper é sempre direcionado a alguém específico
         if message.msg_type == "whisper":
-            confidence += 0.30  # Whisper é sempre direcionado
+            confidence += 0.20
         elif message.msg_type == "yell":
             confidence -= 0.10  # Yell geralmente é para todos
+
+        # 5. CONVERSA ATIVA - já estamos falando com esse player
+        if self._is_in_conversation(message.sender):
+            confidence += 0.35  # Bônus significativo para conversa ativa
 
         # Clamp entre 0 e 1
         return max(0.0, min(1.0, confidence))
@@ -289,9 +306,9 @@ class MessageAnalyzer:
 
         Humanos não respondem 100% das vezes, mesmo quando alguém fala com eles.
         """
-        # Confidence muito alta = responde quase sempre
+        # Confidence muito alta = responde sempre
         if confidence >= 0.8:
-            return random.random() < 0.95
+            return True
 
         # Confidence alta = responde geralmente
         if confidence >= 0.6:
@@ -308,7 +325,34 @@ class MessageAnalyzer:
         # Muito baixa = quase nunca
         return random.random() < 0.10
 
-    def _build_reasoning(self, sender_data: Dict, confidence: float) -> str:
+    def _is_in_conversation(self, sender_name: str) -> bool:
+        """
+        Verifica se estamos em uma conversa ativa com o player.
+        Uma conversa é considerada ativa se respondemos nos últimos X segundos.
+        """
+        last_response = self._conversation_history.get(sender_name.lower())
+        if not last_response:
+            return False
+
+        elapsed = time.time() - last_response
+        return elapsed <= self.CONVERSATION_TIMEOUT
+
+    def register_response(self, sender_name: str):
+        """
+        Registra que respondemos a um player.
+        Deve ser chamado pelo ChatHandler após enviar uma resposta.
+        """
+        self._conversation_history[sender_name.lower()] = time.time()
+
+    def clear_conversation(self, sender_name: str):
+        """Remove um player do histórico de conversas."""
+        self._conversation_history.pop(sender_name.lower(), None)
+
+    def clear_all_conversations(self):
+        """Limpa todo o histórico de conversas."""
+        self._conversation_history.clear()
+
+    def _build_reasoning(self, sender_data: Dict, confidence: float, sender_name: str = "") -> str:
         """Constrói string de reasoning para debug/log."""
         if not sender_data.get("found"):
             return "Player não encontrado no battlelist"
@@ -325,6 +369,10 @@ class MessageAnalyzer:
             parts.append("Olhando para mim")
         else:
             parts.append(f"Olhando {sender_data['facing_direction_name']}")
+
+        # Indica se já estamos em conversa com esse player
+        if sender_name and self._is_in_conversation(sender_name):
+            parts.append("Em conversa")
 
         parts.append(f"Confidence: {confidence:.0%}")
 

@@ -234,6 +234,29 @@ class Creature:
         """
         return self.is_alive and self.position.z == player_z
 
+    def is_attacking_player(self, threshold_ms: int = 5000) -> bool:
+        """
+        Verifica se a criatura está nos atacando baseado no blacksquare timestamp.
+
+        O blacksquare armazena GetTickCount() do momento do último ataque.
+        Se (GetTickCount() - blacksquare) < threshold, a criatura está nos atacando.
+
+        Nota: Ataques ocorrem a cada ~2 segundos, usamos 5s para garantir
+        detecção mesmo entre ciclos de scan e delays de movimento.
+
+        Args:
+            threshold_ms: Tempo em ms para considerar ataque ativo (default 5000ms)
+
+        Returns:
+            True se a criatura está nos atacando
+        """
+        if self.blacksquare == 0:
+            return False
+
+        import ctypes
+        current_tick = ctypes.windll.kernel32.GetTickCount64()
+        return (current_tick - self.blacksquare) < threshold_ms
+
 
 @dataclass
 class Item:

@@ -253,7 +253,7 @@ class PacketManager:
 
         self.send_packet(pb.get_code(), PacketType.KEYBOARD)
 
-    def move_item(self, from_pos, to_pos, item_id, count, stack_pos=0):
+    def move_item(self, from_pos, to_pos, item_id, count, stack_pos=0, apply_delay=False):
         """
         Move/Arrasta item.
 
@@ -263,7 +263,13 @@ class PacketManager:
             item_id: ID do item a mover
             count: Quantidade de itens a mover
             stack_pos: Posição na pilha (0=fundo, aumenta para cima)
+            apply_delay: Se True, aplica delay humanizado de drag & drop.
+                         Default: False (compatibilidade com código existente que já tem delays próprios)
         """
+        # Delay humanizado ANTES de enviar o pacote (apenas se solicitado)
+        if apply_delay:
+            self._apply_move_item_delay(from_pos, to_pos)
+
         pb = PacketBuilder()
         pb.add_call(FUNC_CREATE_PACKET, OP_MOVE)
 
@@ -336,6 +342,64 @@ class PacketManager:
         extra_delay = distance_factor * random.gauss(0.015, 0.003)  # ~15ms/unidade
 
         total_delay = max(0.08, base_delay + extra_delay)  # Mínimo 80ms
+        time.sleep(total_delay)
+
+    def _apply_move_item_delay(self, from_pos, to_pos):
+        """
+        Aplica delay humanizado para arrastar item (drag & drop).
+
+        Simula o tempo que um jogador humano levaria para:
+        1. Localizar o item na tela
+        2. Clicar e segurar
+        3. Arrastar até o destino
+        4. Soltar
+
+        Tipos de posição:
+        - Ground: x < 0xFFFF (coordenadas do mapa)
+        - Inventory/Container: x == 0xFFFF (UI)
+
+        Cenários:
+        - Ground → Ground: distância em tiles
+        - Ground → Inventory: tile até UI (direita da tela)
+        - Inventory → Ground: UI até tile
+        - Inventory → Inventory: UI para UI (mais rápido)
+        """
+        is_from_ground = from_pos['x'] != 0xFFFF
+        is_to_ground = to_pos['x'] != 0xFFFF
+
+        # Tempo base de reação (localizar item + iniciar drag)
+        base_reaction = random.gauss(0.25, 0.05)  # ~250ms ± 50ms
+
+        if is_from_ground and is_to_ground:
+            # Ground → Ground: distância em tiles
+            dx = abs(to_pos['x'] - from_pos['x'])
+            dy = abs(to_pos['y'] - from_pos['y'])
+            tile_distance = max(dx, dy)  # Chebyshev distance
+            # ~30ms por tile de distância
+            drag_time = tile_distance * random.gauss(0.03, 0.008)
+
+        elif is_from_ground and not is_to_ground:
+            # Ground → Inventory/Container: tile até UI
+            # UI fica à direita, então tiles à esquerda = mais longe
+            # Assumimos player no centro (rel_x = 0)
+            # Distância média: ~10 "unidades" de tela
+            drag_time = random.gauss(0.15, 0.03)  # ~150ms
+
+        elif not is_from_ground and is_to_ground:
+            # Inventory → Ground: UI até tile
+            drag_time = random.gauss(0.15, 0.03)  # ~150ms
+
+        else:
+            # Inventory → Inventory/Container: UI para UI
+            # Movimento mais curto (mesma região da tela)
+            drag_time = random.gauss(0.08, 0.02)  # ~80ms
+
+        # Tempo de soltar o item (release)
+        release_time = random.gauss(0.05, 0.015)  # ~50ms
+
+        total_delay = base_reaction + drag_time + release_time
+        total_delay = max(0.20, total_delay)  # Mínimo 200ms
+
         time.sleep(total_delay)
 
     def use_with(self, from_pos, from_id, from_stack, to_pos, to_id, to_stack, rel_x=None, rel_y=None):

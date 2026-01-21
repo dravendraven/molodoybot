@@ -737,49 +737,58 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                 skip_ks = False
 
                 if ks_enabled:
-                    # Log pré-KS check
-                    if debug_mode:
-                        print(f"\n[KS CHECK] Avaliando {name} (ID:{c_id})")
-                        print(f"[KS CHECK]   Posição: ({cx}, {cy}) | Rel: ({rel_x}, {rel_y})")
-                        print(f"[KS CHECK]   HP: {hp}%")
-                        print(f"[KS CHECK]   Meu Target Atual: {current_target_id}")
-                        print(f"[KS CHECK]   Entidades Visíveis: {len(all_visible_entities)}")
+                    # BLACKSQUARE EXCEPTION: Se a criatura está nos atacando, ignorar KS check
+                    # Criatura que ataca o bot "pertence" a nós, independente de proximidade de outros players
+                    if creature.is_attacking_player(BLACKSQUARE_THRESHOLD_MS):
+                        if debug_mode:
+                            print(f"\n[KS CHECK] ✅ BYPASS: {name} está nos atacando (blacksquare={creature.blacksquare})")
+                        # skip_ks permanece False - é nosso alvo legítimo
+                    else:
+                        # KS check normal via engagement detector
+                        # Log pré-KS check
+                        if debug_mode:
+                            print(f"\n[KS CHECK] Avaliando {name} (ID:{c_id})")
+                            print(f"[KS CHECK]   Posição: ({cx}, {cy}) | Rel: ({rel_x}, {rel_y})")
+                            print(f"[KS CHECK]   HP: {hp}%")
+                            print(f"[KS CHECK]   Blacksquare: {creature.blacksquare}")
+                            print(f"[KS CHECK]   Meu Target Atual: {current_target_id}")
+                            print(f"[KS CHECK]   Entidades Visíveis: {len(all_visible_entities)}")
 
-                        if len(all_visible_entities) > 0:
-                            print(f"[KS CHECK]   Lista de Entidades:")
-                            for idx, ent in enumerate(all_visible_entities):
-                                ent_dist = max(abs(ent['abs_x'] - my_x), abs(ent['abs_y'] - my_y))
-                                is_player_guess = not any(t in ent['name'] for t in targets_list)
-                                entity_type = "PLAYER?" if is_player_guess else "CREATURE"
-                                print(f"    [{idx:2d}] {ent['name']:25s} | "
-                                      f"ID:{ent['id']:6d} | "
-                                      f"Pos:({ent['abs_x']:5d},{ent['abs_y']:5d}) | "
-                                      f"Dist:{ent_dist:2d} SQM | "
-                                      f"HP:{ent['hp']:3d}% | "
-                                      f"Type:{entity_type}")
+                            if len(all_visible_entities) > 0:
+                                print(f"[KS CHECK]   Lista de Entidades:")
+                                for idx, ent in enumerate(all_visible_entities):
+                                    ent_dist = max(abs(ent['abs_x'] - my_x), abs(ent['abs_y'] - my_y))
+                                    is_player_guess = not any(t in ent['name'] for t in targets_list)
+                                    entity_type = "PLAYER?" if is_player_guess else "CREATURE"
+                                    print(f"    [{idx:2d}] {ent['name']:25s} | "
+                                          f"ID:{ent['id']:6d} | "
+                                          f"Pos:({ent['abs_x']:5d},{ent['abs_y']:5d}) | "
+                                          f"Dist:{ent_dist:2d} SQM | "
+                                          f"HP:{ent['hp']:3d}% | "
+                                          f"Type:{entity_type}")
 
-                    is_engaged, ks_reason = engagement_detector.is_engaged_with_other(
-                        creature_to_entity_dict(creature),
-                        current_name,
-                        (my_x, my_y),
-                        all_visible_entities,
-                        current_target_id,
-                        targets_list,
-                        walker=walker,
-                        attack_range=MELEE_RANGE,
-                        debug=debug_mode,
-                        log_func=print
-                    )
+                        is_engaged, ks_reason = engagement_detector.is_engaged_with_other(
+                            creature_to_entity_dict(creature),
+                            current_name,
+                            (my_x, my_y),
+                            all_visible_entities,
+                            current_target_id,
+                            targets_list,
+                            walker=walker,
+                            attack_range=MELEE_RANGE,
+                            debug=debug_mode,
+                            log_func=print
+                        )
 
-                    # Log pós-KS check
-                    if debug_mode:
+                        # Log pós-KS check
+                        if debug_mode:
+                            if is_engaged:
+                                print(f"[KS CHECK]   Resultado: ❌ SKIP - {ks_reason}\n")
+                            else:
+                                print(f"[KS CHECK]   Resultado: ✅ PASS - Sem engagement detectado\n")
+
                         if is_engaged:
-                            print(f"[KS CHECK]   Resultado: ❌ SKIP - {ks_reason}\n")
-                        else:
-                            print(f"[KS CHECK]   Resultado: ✅ PASS - Sem engagement detectado\n")
-
-                    if is_engaged:
-                        skip_ks = True
+                            skip_ks = True
 
                 if not skip_ks:
                     if debug_mode:

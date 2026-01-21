@@ -4,9 +4,10 @@ from config import *
 
 class MemoryTile:
     """Representa um único quadrado (Tile) lido da memória."""
-    def __init__(self, item_ids):
-        self.items = item_ids  # Lista de IDs (do fundo para o topo)
+    def __init__(self, item_ids, items_debug=None):
+        self.items = item_ids  # Lista de IDs
         self.count = len(item_ids)
+        self.items_debug = items_debug or []  # DEBUG: (id, data1, data2, raw_id_block)
 
     def get_top_item(self):
         """Retorna o ID do item no topo (último da lista), ou 0 se vazio."""
@@ -63,25 +64,27 @@ class MemoryMap:
             if count > 10: count = 10
             
             items = []
+            items_debug = []  # DEBUG: armazena info completa
             player_found_in_tile = False
-            
+
             for j in range(count):
                 item_offset = offset + 4 + (j * 12)
-                
+
                 # Lê 12 bytes: ID(4), Data1(4), Data2(4)
                 # O ID real são apenas os primeiros 2 bytes (u16)
                 raw_id_block, data1, data2 = struct.unpack_from('<III', raw_data, item_offset)
-                
+
                 # CORREÇÃO: Limpa o ID aplicando máscara de 16 bits
                 real_id = raw_id_block & 0xFFFF
-                
+
                 items.append(real_id)
+                items_debug.append((real_id, data1, data2, raw_id_block))
                 
                 # ID 99 (0x63) é o padrão para criaturas
                 if real_id == 99 and data1 == player_id:
                     player_found_in_tile = True
 
-            self.tiles[i] = MemoryTile(items)
+            self.tiles[i] = MemoryTile(items, items_debug)
 
             if player_found_in_tile:
                 self.center_index = i

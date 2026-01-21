@@ -20,12 +20,13 @@ OFFSET_CONNECTION = 0x31C588
 PROCESS_NAME = "Tibia.exe"
 MY_PLAYER_NAME = "It is Molodoy"
 TELEGRAM_TOKEN = "7238077578:AAELH9lr8dLGJqOE5mZlXmYkpH4fIHDAGAM"
-TELEGRAM_CHAT_ID = "452514119"
+TELEGRAM_CHAT_ID = ""  # Vazio por padrão - configurar no bot para receber alertas
 
 # ==============================================================================
 # GUI SETTINGS
 # ==============================================================================
 RELOAD_BUTTON = True  # Exibe botão de reload na interface (desabilitar para release)
+DEBUG_MODE = False    # Modo debug geral - ativa logs extras em diversos módulos
 
 TARGET_MONSTERS = ["Rotworm", "Minotaur"]
 SAFE_CREATURES = ["Minotaur", "Rotworm", "Troll", "Wolf", "Deer", "Rabbit", "Spider", "Poison Spider", "Bug", "Rat", "Bear", "Wasp", "Orc"]
@@ -199,7 +200,7 @@ DROP_IDS = [3286, 3264, 3358, 3354, 3410] # Mace, Sword, Chain Armor, Brass Helm
 
 # MODO NOVO (quando USE_CONFIGURABLE_LOOT_SYSTEM = True)
 # Valores padrão para primeira execução
-DEFAULT_LOOT_NAMES = ["gold coins", "platinum coins", "crystal coins", "a fish"]
+DEFAULT_LOOT_NAMES = ["coin", "a fish"]
 DEFAULT_DROP_NAMES = ["a mace", "a sword", "chain armor", "brass helmet", "plate shield"]
 
 # Constantes sempre ativas (independente da flag)
@@ -265,9 +266,13 @@ FISH_ID = 3578          # Peixe (para comer/contar)
 FISH_WEIGHT = 5.2       # Peso para detectar sucesso
 
 # Offsets de Equipamento (const.h: 0x5CED90 - 0x400000 = 0x1CED90)
+# Estrutura: ID(4 bytes) + Count(4 bytes) + Extra(4 bytes) = 12 bytes por slot
 OFFSET_SLOT_RIGHT = 0x1CED90
+OFFSET_SLOT_RIGHT_COUNT = 0x1CED94
 OFFSET_SLOT_LEFT  = 0x1CED9C
+OFFSET_SLOT_LEFT_COUNT = 0x1CEDA0
 OFFSET_SLOT_AMMO  = 0x1CEDCC
+OFFSET_SLOT_AMMO_COUNT = 0x1CEDD0
 
 # Índices de Slot de Equipamento (para packets/UI)
 SLOT_RIGHT = 5
@@ -423,6 +428,11 @@ KS_HISTORY_DURATION = 5.0             # Segundos de histórico de HP a manter
 # NOTA: Detecção usa comparação RELATIVA de distâncias:
 # Se dist(criatura → player) < dist(criatura → bot), então skip
 
+# Blacksquare Detection (criatura atacando o player)
+# Se (GetTickCount() - blacksquare) < threshold, criatura está nos atacando
+# Nota: Ataques ocorrem a cada ~2 segundos, usamos 5s para garantir detecção entre ciclos de scan
+BLACKSQUARE_THRESHOLD_MS = 5000       # Considerar criatura atacando se atacou há menos de 5 segundos
+
 # ==============================================================================
 # DEBUG CONFIG (PATHFINDING & NAVIGATION)
 # ==============================================================================
@@ -494,7 +504,7 @@ CHAT_RESPONSE_DELAY_MIN = 1.5       # Delay mínimo antes de responder (segundos
 CHAT_RESPONSE_DELAY_MAX = 4.0       # Delay máximo antes de responder (segundos)
 
 # Cooldown entre respostas (evita spam/flood)
-CHAT_RESPONSE_COOLDOWN = 2.0        # Segundos entre respostas
+CHAT_RESPONSE_COOLDOWN = 5.0        # Segundos entre respostas
 
 # Pausa o bot enquanto em "conversa"
 CHAT_PAUSE_BOT = True               # Se True, pausa cavebot/trainer durante conversa

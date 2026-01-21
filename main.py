@@ -88,17 +88,18 @@ BOT_SETTINGS = {
     # Geral
     "telegram_chat_id": TELEGRAM_CHAT_ID, # Do config.py
     "vocation": "Knight",
-    "debug_mode": False,
+    "debug_mode": config.DEBUG_MODE,  # Controlado via config.py
     "hit_log_enabled": HIT_LOG_ENABLED,
     "client_path": "",  # Caminho da pasta do cliente (para GlobalMap)
     "lookid_enabled": False,  # Exibir ID dos items ao dar look
     "spear_picker_enabled": False,  # Pegar spears do chao automaticamente (Paladin)
+    "spear_max_count": 3,  # Maximo de spears para manter na mao
 
     #trainer
     "ignore_first": False,
     "trainer_min_delay": 1.0,
     "trainer_max_delay": 2.0,
-    "trainer_range": 1, # 1 = Melee, 3+ = Distance
+    "trainer_range": 6, # 1 = Melee, 3+ = Distance
     
     # Listas
     "targets": list(TARGET_MONSTERS),
@@ -112,13 +113,13 @@ BOT_SETTINGS = {
     "alarm_chat_enabled": False,
     "alarm_players": True,          # Disparar alarme para players (detecta por outfit)
     "alarm_creatures": True,        # Disparar alarme para criaturas fora da safe list
-    "ai_chat_enabled": True,        # Resposta automática via IA quando alguém fala
+    "ai_chat_enabled": False,        # Resposta automática via IA quando alguém fala
 
     # Loot
     "loot_containers": 2,
     "loot_dest": 0,
     "loot_drop_food": False,
-    "loot_names": ["gold coins", "platinum coins", "crystal coins", "a fish"],  # NOVO - Sistema configurável
+    "loot_names": ["coin", "fish"],  # NOVO - Sistema configurável
     "drop_names": ["a mace", "a sword", "chain armor", "brass helmet"],        # NOVO - Sistema configurável
 
     # Fisher
@@ -126,7 +127,7 @@ BOT_SETTINGS = {
     "fisher_max": 6,
     "fisher_check_cap": True,   # Ativa/Desativa checagem
     "fisher_min_cap": 6.0,     # Valor da Cap mínima
-    "fisher_fatigue": True,
+    "fisher_fatigue": False,
     
     # Runemaker
     "rune_mana": 100,
@@ -139,7 +140,7 @@ BOT_SETTINGS = {
     "rune_flee_delay": 2.0,
     "auto_eat": False,
     "mana_train": False,
-    "rune_movement": True,
+    "rune_movement": False,
     "rune_human_min": 15,   # Segundos mínimos de espera
     "rune_human_max": 300,  # Segundos máximos de espera
 
@@ -1050,6 +1051,7 @@ def start_spear_picker_thread():
     # Funcoes de callback
     check_running = lambda: state.is_running and state.is_connected
     get_enabled = lambda: BOT_SETTINGS.get('spear_picker_enabled', False) and state.is_safe()
+    get_max_spears = lambda: BOT_SETTINGS.get('spear_max_count', 3)
 
     while state.is_running:
         if pm is None or not state.is_connected:
@@ -1057,7 +1059,7 @@ def start_spear_picker_thread():
             continue
 
         try:
-            spear_picker_loop(pm, base_addr, check_running, get_enabled, log_func=log)
+            spear_picker_loop(pm, base_addr, check_running, get_enabled, get_max_spears, log_func=log)
         except Exception as e:
             print(f"[SpearPicker] Erro: {e}")
             import traceback
@@ -2217,21 +2219,41 @@ def open_settings():
     switch_spear_picker.pack(anchor="w", pady=UI['PAD_ITEM'])
     if BOT_SETTINGS.get('spear_picker_enabled', False): switch_spear_picker.select()
 
-    def on_log_toggle():
-        global log_visible
-        toggle_log_visibility()
+    # Input para máximo de spears
+    f_spear_max = ctk.CTkFrame(frame_switches, fg_color="transparent")
+    f_spear_max.pack(anchor="w", padx=20, pady=(0, 5))
+    ctk.CTkLabel(f_spear_max, text="Max Spears:", **UI['BODY']).pack(side="left")
+    entry_spear_max = ctk.CTkEntry(f_spear_max, width=50)
+    entry_spear_max.pack(side="left", padx=5)
+    entry_spear_max.insert(0, str(BOT_SETTINGS.get('spear_max_count', 3)))
 
-    switch_log = ctk.CTkSwitch(frame_switches, text="Console Log", command=on_log_toggle, progress_color="#00FF00", **UI['BODY'])
-    switch_log.pack(anchor="w", pady=UI['PAD_ITEM'])
-    if BOT_SETTINGS.get('console_log_visible', True): switch_log.select()
+    def on_spear_max_change(event=None):
+        try:
+            val = int(entry_spear_max.get())
+            if val < 1: val = 1
+            if val > 100: val = 100
+            BOT_SETTINGS['spear_max_count'] = val
+        except ValueError:
+            pass
 
-    def on_debug_toggle():
-        BOT_SETTINGS['debug_mode'] = bool(switch_debug.get())
-        log(f"🔧 Debug: {BOT_SETTINGS['debug_mode']}")
+    entry_spear_max.bind("<FocusOut>", on_spear_max_change)
+    entry_spear_max.bind("<Return>", on_spear_max_change)
 
-    switch_debug = ctk.CTkSwitch(frame_switches, text="Debug Console", command=on_debug_toggle, progress_color="#FFA500", **UI['BODY'])
-    switch_debug.pack(anchor="w", pady=UI['PAD_ITEM'])
-    if BOT_SETTINGS['debug_mode']: switch_debug.select()
+    # --- RESPOSTA VIA IA (movido da aba Alarme) ---
+    def on_ai_chat_toggle():
+        ai_enabled = bool(switch_ai_chat.get())
+        BOT_SETTINGS['ai_chat_enabled'] = ai_enabled
+        if chat_handler:
+            if ai_enabled:
+                chat_handler.enable()
+            else:
+                chat_handler.disable()
+        status = "ativado" if ai_enabled else "desativado"
+        log(f"🤖 Resposta via IA: {status}")
+
+    switch_ai_chat = ctk.CTkSwitch(frame_switches, text="Responder via IA", command=on_ai_chat_toggle, progress_color="#9B59B6", **UI['BODY'])
+    switch_ai_chat.pack(anchor="w", pady=UI['PAD_ITEM'])
+    if BOT_SETTINGS.get('ai_chat_enabled', True): switch_ai_chat.select()
 
     def save_geral():
         BOT_SETTINGS['vocation'] = combo_voc.get()
@@ -2240,6 +2262,8 @@ def open_settings():
         entry_client_path.configure(state="normal")
         BOT_SETTINGS['client_path'] = entry_client_path.get()
         entry_client_path.configure(state="disabled")
+        # AI Chat já é salvo em tempo real pelo toggle, mas garantimos aqui também
+        BOT_SETTINGS['ai_chat_enabled'] = bool(switch_ai_chat.get())
         update_stats_visibility()
         save_config_file()
         log(f"⚙️ Geral salvo.")
@@ -2400,10 +2424,6 @@ def open_settings():
     switch_chat.pack(anchor="w", padx=UI['PAD_INDENT'], pady=2)
     if BOT_SETTINGS.get('alarm_chat_enabled', False): switch_chat.select()
 
-    switch_ai_chat = ctk.CTkSwitch(tab_alarm, text="Responder via IA", command=lambda: None, progress_color="#9B59B6", **UI['BODY'])
-    switch_ai_chat.pack(anchor="w", padx=UI['PAD_INDENT'], pady=2)
-    if BOT_SETTINGS.get('ai_chat_enabled', True): switch_ai_chat.select()
-
     def save_alarm():
         try:
             # Range
@@ -2422,15 +2442,6 @@ def open_settings():
 
             # Chat
             BOT_SETTINGS['alarm_chat_enabled'] = bool(switch_chat.get())
-
-            # AI Chat Response
-            ai_enabled = bool(switch_ai_chat.get())
-            BOT_SETTINGS['ai_chat_enabled'] = ai_enabled
-            if chat_handler:
-                if ai_enabled:
-                    chat_handler.enable()
-                else:
-                    chat_handler.disable()
 
             save_config_file()
             log(f"🔔 Alarme salvo.")

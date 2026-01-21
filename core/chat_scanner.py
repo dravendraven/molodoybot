@@ -43,7 +43,10 @@ class ChatScanner:
     def __init__(self, pm, base_addr):
         self.pm = pm
         self.base_addr = base_addr
-        self.last_message_hash: Optional[str] = None
+        # Hash da última mensagem RECEBIDA (evita re-detectar mesma mensagem)
+        self.last_received_hash: Optional[str] = None
+        # Hash da mensagem ENVIADA pelo bot (evita detectar própria mensagem)
+        self.last_sent_hash: Optional[str] = None
         self.last_author: str = ""
         self.last_text: str = ""
 
@@ -98,6 +101,21 @@ class ChatScanner:
         # Fallback: retorna string inteira como nome
         return author_str.rstrip(':'), "unknown"
 
+    def _is_valid_chat_author(self, author_str: str) -> bool:
+        """
+        Verifica se a string de autor corresponde a um padrão de mensagem de chat.
+        Retorna False para mensagens de sistema como "You see..." (look).
+        """
+        if not author_str:
+            return False
+        author_str = author_str.strip()
+        # Verifica apenas padrões válidos de chat (says/yells/whispers)
+        # Exclui o fallback genérico que aceita qualquer coisa com ":"
+        for pattern, _ in self.AUTHOR_PATTERNS[:-1]:
+            if re.match(pattern, author_str, re.IGNORECASE):
+                return True
+        return False
+
     def get_new_message(self) -> Optional[ChatMessage]:
         """
         Verifica se há uma nova mensagem no chat.
@@ -119,15 +137,25 @@ class ChatScanner:
         if not author_str or not msg_str:
             return None
 
+        # Valida se o autor segue padrão de mensagem de chat (says/yells/whispers)
+        # Ignora mensagens de sistema como "You see..." (look)
+        if not self._is_valid_chat_author(author_str):
+            return None
+
         # Calcula hash para detectar se é nova
         current_hash = self._compute_hash(author_str, msg_str)
 
-        # Mesma mensagem de antes
-        if current_hash == self.last_message_hash:
+        # Mesma mensagem recebida de antes (evita duplicatas)
+        if current_hash == self.last_received_hash:
+            return None
+
+        # É a própria mensagem do bot aparecendo no console
+        if current_hash == self.last_sent_hash:
+            self.last_sent_hash = None  # Limpa após detectar
             return None
 
         # Nova mensagem detectada!
-        self.last_message_hash = current_hash
+        self.last_received_hash = current_hash
         self.last_author = author_str
         self.last_text = msg_str
 
@@ -161,8 +189,9 @@ class ChatScanner:
         )
 
     def reset(self):
-        """Reseta o estado do scanner (limpa hash anterior)."""
-        self.last_message_hash = None
+        """Reseta o estado do scanner (limpa hashes anteriores)."""
+        self.last_received_hash = None
+        self.last_sent_hash = None
         self.last_author = ""
         self.last_text = ""
 
@@ -177,7 +206,5 @@ class ChatScanner:
         """
         # Formato esperado no jogo: "NomeDoPlayer says:"
         expected_author = f"{my_name} says:"
-        expected_hash = self._compute_hash(expected_author, text)
-        self.last_message_hash = expected_hash
-        self.last_author = expected_author
-        self.last_text = text
+        # Apenas marca o hash da mensagem enviada (não sobrescreve last_received)
+        self.last_sent_hash = self._compute_hash(expected_author, text)
