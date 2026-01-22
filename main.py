@@ -58,6 +58,7 @@ from core.overlay_renderer import renderer as overlay_renderer
 from core.chat_handler import ChatHandler
 #import corpses
 
+
 # ==============================================================================
 # 1. SETUP DE AMBIENTE E SISTEMA
 # ==============================================================================
@@ -1085,7 +1086,7 @@ def start_chat_handler_thread():
                 pkt = packet.PacketManager(pm, base_addr)
                 chat_handler = ChatHandler(pm, base_addr, pkt)
                 # Aplica estado inicial do BOT_SETTINGS
-                if BOT_SETTINGS.get('ai_chat_enabled', True):
+                if BOT_SETTINGS.get('ai_chat_enabled', False):
                     chat_handler.enable()
                 else:
                     chat_handler.disable()
@@ -2253,7 +2254,7 @@ def open_settings():
 
     switch_ai_chat = ctk.CTkSwitch(frame_switches, text="Responder via IA", command=on_ai_chat_toggle, progress_color="#9B59B6", **UI['BODY'])
     switch_ai_chat.pack(anchor="w", pady=UI['PAD_ITEM'])
-    if BOT_SETTINGS.get('ai_chat_enabled', True): switch_ai_chat.select()
+    if BOT_SETTINGS.get('ai_chat_enabled', False): switch_ai_chat.select()
 
     def save_geral():
         BOT_SETTINGS['vocation'] = combo_voc.get()
@@ -2264,6 +2265,12 @@ def open_settings():
         entry_client_path.configure(state="disabled")
         # AI Chat já é salvo em tempo real pelo toggle, mas garantimos aqui também
         BOT_SETTINGS['ai_chat_enabled'] = bool(switch_ai_chat.get())
+        # Spear Picker já é salvo em tempo real pelo toggle e pelo campo, mas garantimos aqui também
+        BOT_SETTINGS['spear_picker_enabled'] = bool(switch_spear_picker.get())
+        try:
+            BOT_SETTINGS['spear_max_count'] = int(entry_spear_max.get())
+        except:
+            pass  # Se invalido, mantem o valor atual
         update_stats_visibility()
         save_config_file()
         log(f"⚙️ Geral salvo.")

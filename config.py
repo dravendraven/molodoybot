@@ -313,7 +313,15 @@ COLOR_FLOOR_BELOW = "#A52A2A" # Marrom (Andar de Baixo)
 COLOR_SAME_FLOOR  = "#FF0000" # Vermelho (Mesmo andar - Alarme visual)
 
 # Debug Overlay - Exibe info (vis, hp%, dist) acima das criaturas no trainer
-XRAY_TRAINER_DEBUG = True    # True = mostra overlay de debug do trainer
+XRAY_TRAINER_DEBUG = False    # True = mostra overlay de debug do trainer
+
+# ==============================================================================
+# BOT STATE DEBUGGER HUD CONFIG
+# ==============================================================================
+# Exibe HUD com status do BotState no canto superior esquerdo da tela
+DEBUG_BOT_STATE = True                      # Master toggle - mostra/esconde HUD
+DEBUG_BOT_STATE_INTERVAL = 0.05              # Intervalo de atualização (segundos)
+DEBUG_BOT_STATE_AUTO_DISABLE_ON_ALARM = False # Desabilitar HUD automaticamente com alarme
 
 # ==============================================================================
 # VOCATION & REGEN CONFIG

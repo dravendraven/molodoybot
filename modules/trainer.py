@@ -87,7 +87,7 @@ def creature_to_entity_dict(creature):
 def update_trainer_overlay(all_creatures, my_x, my_y, my_z, current_target_id, my_name):
     """
     Atualiza overlay de debug com informações das criaturas visíveis.
-    Exibe: vis, hp%, distância, blacksquare acima de cada criatura.
+    Exibe: vis, hp%, distância, is_attacking_player acima de cada criatura.
 
     Ativado via XRAY_TRAINER_DEBUG no config.py.
     """
@@ -112,11 +112,14 @@ def update_trainer_overlay(all_creatures, my_x, my_y, my_z, current_target_id, m
         # Cor diferente para target atual
         color = '#FF4444' if creature.id == current_target_id else '#FFFF00'
 
+        # Calcula is_attacking_player
+        is_attacking = 1 if creature.is_attacking_player() else 0
+
         overlay_data.append({
             'type': 'creature_info',
             'dx': dx,
             'dy': dy,
-            'text': f"hp:{creature.hp_percent}% d:{dist} bs:{creature.blacksquare}",
+            'text': f"hp:{creature.hp_percent}% d:{dist} is_attacking={is_attacking}",
             'color': color,
             'offset_y': -25  # Pixels acima da criatura
         })
@@ -545,6 +548,16 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
     last_reachability_check_time = 0.0
     became_unreachable_time = None
 
+    # Death State Tracking (3-phase death detection)
+    class DeathState:
+        ALIVE = "alive"
+        DYING = "dying"              # hp=0, vis=1 - waiting for despawn
+        CORPSE_READY = "corpse_ready"  # hp=0, vis=0 - corpse spawned
+
+    death_state = DeathState.ALIVE
+    dying_creature_data = None    # Stores creature data during DYING phase
+    death_timestamp = None        # When creature entered DYING state
+
     # Será inicializado dentro do loop com debug_mode
     mapper = None
     analyzer = None
@@ -660,6 +673,78 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                 for c in all_creatures
                 if c.is_visible and c.position.z == my_z and c.name != current_name
             ]
+
+            # ==============================================================================
+            # DEATH PHASE POLLING: Monitor DYING → CORPSE_READY transition
+            # ==============================================================================
+            if death_state == DeathState.DYING and dying_creature_data:
+                # Check elapsed time since death
+                elapsed = time.time() - death_timestamp
+
+                # Safety timeout: 3 seconds max wait
+                if elapsed > 3.0:
+                    if debug_mode:
+                        log(f"⚠️ Death timeout: {dying_creature_data['name']} - assuming corpse ready")
+                    death_state = DeathState.CORPSE_READY
+                    # Will trigger corpse opening below
+                else:
+                    # Re-scan battlelist to check creature's current visibility
+                    dying_creature = scanner.get_creature_by_id(dying_creature_data["id"])
+
+                    if dying_creature and dying_creature.hp_percent == 0:
+                        if not dying_creature.is_visible:
+                            # TRANSITION: DYING → CORPSE_READY
+                            death_state = DeathState.CORPSE_READY
+                            if debug_mode:
+                                log(f"💀 {dying_creature_data['name']} despawned (vis=0) - corpse ready")
+                        else:
+                            # Still visible - remain in DYING state
+                            if debug_mode:
+                                log(f"⏳ {dying_creature_data['name']} dying phase (vis=1, elapsed={elapsed:.2f}s)")
+                    else:
+                        # Creature disappeared from battlelist entirely
+                        # Fallback: assume corpse ready
+                        if debug_mode:
+                            log(f"⚠️ {dying_creature_data['name']} disappeared from battlelist - assuming corpse ready")
+                        death_state = DeathState.CORPSE_READY
+
+                # Execute corpse opening when CORPSE_READY
+                if death_state == DeathState.CORPSE_READY:
+                    # Spear picker já está pausado desde DYING
+                    # Humanized delay for corpse opening (300-500ms)
+                    gauss_wait(0.4, 25)  # 400ms ± 25% = 300-500ms
+
+                    if loot_enabled:
+                        monster_name = dying_creature_data["name"]
+                        should_skip_loot = any(skip_name in monster_name for skip_name in NO_LOOT_CREATURES)
+
+                        if should_skip_loot:
+                            if debug_mode:
+                                log(f"⏭️ Pulando loot de {monster_name} (sem loot)")
+                            # ===== SEM LOOT - LIBERA SPEAR PICKER =====
+                            state.end_loot_cycle()
+                            # ==========================================
+                        else:
+                            success = open_corpse_via_packet(pm, base_addr, dying_creature_data, player_id, log_func=log)
+                            if success:
+                                log(f"📂 Corpo aberto (Packet).")
+                                gauss_wait(0.5, 20)
+                            else:
+                                # ===== FALHA AO ABRIR - LIBERA SPEAR PICKER =====
+                                state.end_loot_cycle()
+                                # ================================================
+
+                    # Reset death state
+                    death_state = DeathState.ALIVE
+                    dying_creature_data = None
+                    death_timestamp = None
+                    current_monitored_id = 0
+                    last_target_data = None
+                    should_attack_new = True
+
+                    # Skip rest of loop - start fresh scan
+                    time.sleep(SCAN_DELAY_COMBAT)
+                    continue
 
             # Processa candidatos válidos
             for creature in all_creatures:
@@ -1026,9 +1111,21 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                             target_in_candidates = True
                             break
 
-                # Método 2: Verifica diretamente na battlelist (mais confiável)
+                # Método 2: Verifica diretamente na battlelist E identifica fase de morte
                 target_creature = scanner.get_creature_by_id(last_target_data["id"]) if last_target_data else None
-                target_alive_in_battlelist = target_creature is not None and target_creature.is_alive
+
+                if target_creature:
+                    # Determine death phase based on hp and visibility
+                    if target_creature.hp_percent > 0:
+                        death_phase = DeathState.ALIVE
+                    elif target_creature.is_visible:
+                        death_phase = DeathState.DYING  # hp=0, vis=1 - corpse not spawned yet
+                    else:
+                        death_phase = DeathState.CORPSE_READY  # hp=0, vis=0 - corpse spawned
+                else:
+                    death_phase = None  # Not in battlelist (despawned)
+
+                target_alive_in_battlelist = (death_phase == DeathState.ALIVE)
 
                 if debug_mode:
                     print(f"   [Death Check] in_candidates={target_in_candidates}, alive_in_bl={target_alive_in_battlelist}")
@@ -1046,38 +1143,69 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
 
                 else:
                     # MORTE CONFIRMADA (dupla verificação)
-                    # - Não está em valid_candidates
-                    # - E não está vivo na battlelist (hp <= 0 ou invisible)
-                    log("💀 Alvo eliminado (verificação dupla confirmada).")
-                    
-                    if last_target_data and loot_enabled:
-                        # Verifica se criatura está na lista de NO_LOOT (hardcoded em config.py)
-                        monster_name = last_target_data["name"]
+                    # Check death phase to decide action
 
-                        # Usa substring matching (mesmo padrão de targets_list linha 588)
-                        should_skip_loot = any(skip_name in monster_name for skip_name in NO_LOOT_CREATURES)
+                    if death_phase == DeathState.DYING:
+                        # hp=0 but still visible - enter DYING state, wait for despawn
+                        log(f"☠️ {last_target_data['name']} morto mas visível (hp=0, vis=1) - aguardando despawn")
 
-                        if should_skip_loot:
-                            if debug_mode:
-                                log(f"⏭️ Pulando loot de {monster_name} (sem loot)")
-                        else:
-                            gauss_wait(1.2, 15)
+                        # ===== MARCA INÍCIO DO CICLO DE LOOT (APENAS SE AUTO_LOOT HABILITADO) =====
+                        # Pausa spear picker IMEDIATAMENTE quando criatura morre (se auto_loot ativo)
+                        if loot_enabled:
+                            state.start_loot_cycle()
+                        # ================================================================================
 
-                            # CHAMA FUNÇÃO COM LÓGICA DE INDEX DINÂMICO
-                            success = open_corpse_via_packet(pm, base_addr, last_target_data, player_id, log_func=log)
+                        death_state = DeathState.DYING
+                        dying_creature_data = last_target_data.copy()
+                        death_timestamp = time.time()
+                        monitor.stop_and_report()
+                        current_monitored_id = 0
+                        # DON'T reset last_target_data - needed for polling
+                        became_unreachable_time = None
+                        # DON'T set should_attack_new - will be set after corpse opened
 
-                            if success:
-                                log(f"📂 Corpo aberto (Packet).")
-                                gauss_wait(0.5, 20)
+                    elif death_phase == DeathState.CORPSE_READY or death_phase is None:
+                        # hp=0 and NOT visible - corpse ready OR creature despawned
+                        log("💀 Alvo eliminado (verificação dupla confirmada).")
 
-                    elif last_target_data and not loot_enabled:
-                        if debug_mode: log("ℹ️ Auto Loot desligado.")
+                        if last_target_data and loot_enabled:
+                            # ===== MARCA INÍCIO DO CICLO DE LOOT =====
+                            state.start_loot_cycle()
+                            # ==========================================
 
-                    monitor.stop_and_report()
-                    current_monitored_id = 0
-                    last_target_data = None
-                    became_unreachable_time = None
-                    should_attack_new = True
+                            monster_name = last_target_data["name"]
+                            should_skip_loot = any(skip_name in monster_name for skip_name in NO_LOOT_CREATURES)
+
+                            if should_skip_loot:
+                                if debug_mode:
+                                    log(f"⏭️ Pulando loot de {monster_name} (sem loot)")
+                                # ===== SEM LOOT - LIBERA SPEAR PICKER =====
+                                state.end_loot_cycle()
+                                # ==========================================
+                            else:
+                                # Corpse ready - wait and open
+                                gauss_wait(0.4, 25)  # 300-500ms humanized delay
+                                success = open_corpse_via_packet(pm, base_addr, last_target_data, player_id, log_func=log)
+                                if success:
+                                    log(f"📂 Corpo aberto (Packet).")
+                                    gauss_wait(0.5, 20)
+                                else:
+                                    # ===== FALHA AO ABRIR - LIBERA SPEAR PICKER =====
+                                    state.end_loot_cycle()
+                                    # ================================================
+
+                        elif last_target_data and not loot_enabled:
+                            if debug_mode: log("ℹ️ Auto Loot desligado.")
+                            # ===== GARANTE QUE LOOT CYCLE NÃO FICA ATIVO =====
+                            # Se start_loot_cycle foi chamado no DYING, garante cleanup
+                            state.end_loot_cycle()
+                            # ================================================
+
+                        monitor.stop_and_report()
+                        current_monitored_id = 0
+                        last_target_data = None
+                        became_unreachable_time = None
+                        should_attack_new = True
 
             # Cenário C: Ninguém atacando
             else:
@@ -1145,6 +1273,11 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                             current_monitored_id = best["id"]
                             last_target_data = best.copy()
                             monitor.start(best["id"], best["name"], best["hp"])
+
+                            # Reset death state when attacking new target
+                            death_state = DeathState.ALIVE
+                            dying_creature_data = None
+                            death_timestamp = None
 
                             next_attack_time = 0
                             gauss_wait(0.5, 20)

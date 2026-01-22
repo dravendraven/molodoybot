@@ -204,131 +204,135 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
     # Se não há loot para coletar, marca state como sem loot
     if not loot_containers:
         state.set_loot_state(False)
+        # ===== SE NÃO HÁ LOOT, GARANTE QUE CICLO TERMINA =====
+        # Caso trainer tenha setado start_loot_cycle() mas não há loot
+        state.end_loot_cycle()
+        # ======================================================
         return None
 
     # NOVO: Marca que há loot sendo processado
     state.set_loot_state(True)
 
-    # PacketManager para envio de pacotes
-    packet = PacketManager(pm, base_addr)
+    # Usa try-finally para garantir cleanup (libera spear picker)
+    try:
+        # PacketManager para envio de pacotes
+        packet = PacketManager(pm, base_addr)
 
-    # Encontra destino nos containers do player
-    dest_idx, dest_slot = get_best_loot_destination(player_containers, len(player_containers), dest_container_index)
-    is_backpack_full = (dest_idx is None)
+        # Encontra destino nos containers do player
+        dest_idx, dest_slot = get_best_loot_destination(player_containers, len(player_containers), dest_container_index)
+        is_backpack_full = (dest_idx is None)
 
-    for cont in loot_containers:
-        
-        # --- LÓGICA DE BAG ---
-        has_bag_to_open = False
-        bag_item_ref = None
-        useful_items_count = 0
-        bag_count = 0
-        
-        for it in cont.items:
-            if it.id in loot_ids or it.id in FOOD_IDS or it.id in drop_ids: useful_items_count += 1
-            if it.id in LOOT_CONTAINER_IDS: bag_count += 1; bag_item_ref = it
+        for cont in loot_containers:
 
-        if useful_items_count == 0 and bag_count > 0: has_bag_to_open = True
+            # --- LÓGICA DE BAG ---
+            has_bag_to_open = False
+            bag_item_ref = None
+            useful_items_count = 0
+            bag_count = 0
 
-        if has_bag_to_open and bag_item_ref:
-            print(f"🎒 Abrindo Bag no corpo...")
-            bag_pos = get_container_pos(cont.index, bag_item_ref.slot_index)
+            for it in cont.items:
+                if it.id in loot_ids or it.id in FOOD_IDS or it.id in drop_ids: useful_items_count += 1
+                if it.id in LOOT_CONTAINER_IDS: bag_count += 1; bag_item_ref = it
 
-            packet.use_item(bag_pos, bag_item_ref.id, index=cont.index)
-            gauss_wait(0.6, 15)
-            state.set_loot_state(False)
-            return "BAG"
+            if useful_items_count == 0 and bag_count > 0: has_bag_to_open = True
 
-        # VARRER ITENS DO CORPO
-        for item in reversed(cont.items):
-            
-            # --- AUTO EAT ---
-            if item.id in FOOD_IDS:
-                if is_player_full(pm, base_addr) and not drop_food_if_full:
-                    # Se não for dropar, apenas ignora e continua o loop para o próximo item
-                    continue
+            if has_bag_to_open and bag_item_ref:
+                print(f"🎒 Abrindo Bag no corpo...")
+                bag_pos = get_container_pos(cont.index, bag_item_ref.slot_index)
 
-                food_pos = get_container_pos(cont.index, item.slot_index)
+                packet.use_item(bag_pos, bag_item_ref.id, index=cont.index)
+                gauss_wait(0.6, 15)
+                return "BAG"
 
-                # Tenta comer
-                packet.use_item(food_pos, item.id)
-                gauss_wait(0.25, 20)
+            # VARRER ITENS DO CORPO
+            for item in reversed(cont.items):
 
-                # Verifica se está full e a config de drop
-                if is_player_full(pm, base_addr):
-                    if drop_food_if_full:
-                        food_name = foods_db.get_food_name(item.id)
-                        print(f"🤢 Barriga cheia! Descartando {food_name}...")
+                # --- AUTO EAT ---
+                if item.id in FOOD_IDS:
+                    if is_player_full(pm, base_addr) and not drop_food_if_full:
+                        # Se não for dropar, apenas ignora e continua o loop para o próximo item
+                        continue
 
-                        px, py, pz = get_player_pos(pm, base_addr)
-                        pos_ground = get_ground_pos(px, py, pz)
+                    food_pos = get_container_pos(cont.index, item.slot_index)
 
-                        packet.move_item(food_pos, pos_ground, item.id, item.count)
-                        state.set_loot_state(False)
-                        return ("DROP_FOOD", item.id, item.count)
-                    else:
-                        state.set_loot_state(False)
-                        return "EAT_FULL"
+                    # Tenta comer
+                    packet.use_item(food_pos, item.id)
+                    gauss_wait(0.25, 20)
 
-                state.set_loot_state(False)
-                return ("EAT", item.id)
+                    # Verifica se está full e a config de drop
+                    if is_player_full(pm, base_addr):
+                        if drop_food_if_full:
+                            food_name = foods_db.get_food_name(item.id)
+                            print(f"🤢 Barriga cheia! Descartando {food_name}...")
 
-            # --- AUTO LOOT ---
-            if item.id in loot_ids:
-                # NOVO: Weight check antes de lotar (só se sistema configurável ativo)
-                if USE_CONFIGURABLE_LOOT_SYSTEM:
+                            px, py, pz = get_player_pos(pm, base_addr)
+                            pos_ground = get_ground_pos(px, py, pz)
+
+                            packet.move_item(food_pos, pos_ground, item.id, item.count)
+                            return ("DROP_FOOD", item.id, item.count)
+                        else:
+                            return "EAT_FULL"
+
+                    return ("EAT", item.id)
+
+                # --- AUTO LOOT ---
+                if item.id in loot_ids:
+                    # NOVO: Weight check antes de lotar (só se sistema configurável ativo)
+                    if USE_CONFIGURABLE_LOOT_SYSTEM:
+                        # Import lazy para evitar circular import
+                        from modules.fisher import get_player_cap
+
+                        item_weight = lootables_db.get_loot_weight(item.id)
+                        current_cap = get_player_cap(pm, base_addr)
+
+                        if item_weight > current_cap:
+                            # Item muito pesado para capacity atual
+                            item_name = lootables_db.get_loot_name(item.id)
+                            print(f"⚠️ LOOT IGNORADO: {item_name} ({item_weight:.1f}oz) > Cap ({current_cap:.1f}oz)")
+                            continue  # Pula este item, vai para o próximo
+
+                    if is_backpack_full:
+                        print(f"⚠️ BACKPACK CHEIA! Não consigo pegar {item.id}")
+                        return "FULL_BP_ALARM"
+
+                    print(f"💰 Loot: ID {item.id} -> BP {dest_idx} Slot {dest_slot}")
+
+                    pos_from = get_container_pos(cont.index, item.slot_index)
+                    pos_to = get_container_pos(dest_idx, dest_slot)
+
+                    packet.move_item(pos_from, pos_to, item.id, item.count)
+                    gauss_wait(0.6, 30)
+
+                    # Stack imediatamente após lotar
                     # Import lazy para evitar circular import
-                    from modules.fisher import get_player_cap
+                    from modules.stacker import auto_stack_items
+                    auto_stack_items(pm, base_addr, hwnd,
+                                     my_containers_count=my_containers_count,
+                                     loot_ids=loot_ids)
 
-                    item_weight = lootables_db.get_loot_weight(item.id)
-                    current_cap = get_player_cap(pm, base_addr)
+                    dest_slot += 1
+                    return ("LOOT", item.id, item.count)
 
-                    if item_weight > current_cap:
-                        # Item muito pesado para capacity atual
-                        item_name = lootables_db.get_loot_name(item.id)
-                        print(f"⚠️ LOOT IGNORADO: {item_name} ({item_weight:.1f}oz) > Cap ({current_cap:.1f}oz)")
-                        continue  # Pula este item, vai para o próximo
+                # --- AUTO DROP ---
+                if item.id in drop_ids:
+                    print(f"🗑️ Drop: ID {item.id}")
+                    pos_from = get_container_pos(cont.index, item.slot_index)
+                    px, py, pz = get_player_pos(pm, base_addr)
+                    pos_ground = get_ground_pos(px, py, pz)
 
-                if is_backpack_full:
-                    print(f"⚠️ BACKPACK CHEIA! Não consigo pegar {item.id}")
-                    state.set_loot_state(False)
-                    return "FULL_BP_ALARM"
+                    packet.move_item(pos_from, pos_ground, item.id, item.count)
+                    gauss_wait(0.3, 20)
+                    return "DROP"
 
-                print(f"💰 Loot: ID {item.id} -> BP {dest_idx} Slot {dest_slot}")
+        # Fecha todos os containers de loot processados
+        for cont in loot_containers:
+            packet.close_container(cont.index)
+            gauss_wait(0.75, 30)
 
-                pos_from = get_container_pos(cont.index, item.slot_index)
-                pos_to = get_container_pos(dest_idx, dest_slot)
+    finally:
+        # ===== SEMPRE RESETA FLAGS, MESMO EM EXCEÇÃO =====
+        state.set_loot_state(False)
+        state.end_loot_cycle()  # ← Libera spear picker
+        # =================================================
 
-                packet.move_item(pos_from, pos_to, item.id, item.count)
-                gauss_wait(0.6, 30)
-
-                # Stack imediatamente após lotar
-                # Import lazy para evitar circular import
-                from modules.stacker import auto_stack_items
-                auto_stack_items(pm, base_addr, hwnd,
-                                 my_containers_count=my_containers_count,
-                                 loot_ids=loot_ids)
-
-                dest_slot += 1
-                state.set_loot_state(False)
-                return ("LOOT", item.id, item.count)
-
-            # --- AUTO DROP ---
-            if item.id in drop_ids:
-                print(f"🗑️ Drop: ID {item.id}")
-                pos_from = get_container_pos(cont.index, item.slot_index)
-                px, py, pz = get_player_pos(pm, base_addr)
-                pos_ground = get_ground_pos(px, py, pz)
-
-                packet.move_item(pos_from, pos_ground, item.id, item.count)
-                gauss_wait(0.3, 20)
-                state.set_loot_state(False)
-                return "DROP"
-
-    # Fecha todos os containers de loot processados
-    for cont in loot_containers:
-        packet.close_container(cont.index)
-        gauss_wait(0.75, 30)
-
-    state.set_loot_state(False)
     return None

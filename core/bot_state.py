@@ -56,6 +56,7 @@ class BotState:
         # ===== Contextos de Jogo (coordenação entre módulos) =====
         self._is_in_combat: bool = False
         self._has_open_loot: bool = False
+        self._is_processing_loot: bool = False  # NOVO: Cobre DYING → fim loot (ciclo completo)
         self._last_combat_time: float = 0.0
         self._is_runemaking: bool = False
         self._is_chat_paused: bool = False  # Pausado por conversa de chat
@@ -298,6 +299,34 @@ class BotState:
             self._has_open_loot = has_loot
 
     @property
+    def is_processing_loot(self) -> bool:
+        """
+        Retorna True se o bot está processando loot (desde DYING até fim).
+        Cobre: polling de despawn + abertura do corpo + processamento + fechamento.
+        Protege contra race conditions durante TODO o ciclo de morte/loot.
+        """
+        with self._lock:
+            return self._is_processing_loot
+
+    def start_loot_cycle(self):
+        """
+        Marca início do ciclo de loot completo.
+        Chamado pelo trainer quando:
+        - death_state = DYING (fluxo normal, antes do polling)
+        - death_state = CORPSE_READY (morte imediata, antes de abrir corpo)
+        """
+        with self._lock:
+            self._is_processing_loot = True
+
+    def end_loot_cycle(self):
+        """
+        Marca fim do ciclo de loot completo.
+        Chamado pelo auto_loot ao finalizar (ou em exceção via finally).
+        """
+        with self._lock:
+            self._is_processing_loot = False
+
+    @property
     def is_runemaking(self) -> bool:
         """Retorna True se runemaker está executando ciclo."""
         with self._lock:
@@ -392,6 +421,7 @@ class BotState:
                 'char_id': self._char_id,
                 'is_in_combat': self._is_in_combat,
                 'has_open_loot': self._has_open_loot,
+                'is_processing_loot': self._is_processing_loot,
                 'last_combat_time': self._last_combat_time,
                 'is_runemaking': self._is_runemaking,
                 'is_chat_paused': self._is_chat_paused,
@@ -413,6 +443,7 @@ class BotState:
             self._char_id = 0
             self._is_in_combat = False
             self._has_open_loot = False
+            self._is_processing_loot = False
             self._last_combat_time = 0.0
             self._is_runemaking = False
             self._is_chat_paused = False

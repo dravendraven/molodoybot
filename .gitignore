@@ -46,3 +46,4 @@ repomix-output.xml
 nul
 to-do.md
 .env.example
+TRAINER_LOOP_DIAGRAM.md
