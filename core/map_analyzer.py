@@ -176,6 +176,57 @@ class MapAnalyzer:
                 height += 1
         return height
 
+    def get_item_stackpos(self, rel_x, rel_y, item_id):
+        """
+        Retorna o stack_pos de um item específico em um tile.
+        Procura do TOPO para BAIXO (retorna a primeira ocorrência mais alta).
+
+        Args:
+            rel_x, rel_y: Posição relativa ao player
+            item_id: ID do item a procurar
+
+        Returns:
+            int: Stack position ou -1 se não encontrado
+        """
+        tile = self.mm.get_tile_visible(rel_x, rel_y)
+
+        if not tile or not tile.items:
+            return -1
+
+        # Procura do topo para baixo (mais comum querer o item mais acessível)
+        for i in range(len(tile.items) - 1, -1, -1):
+            if tile.items[i] == item_id:
+                return i
+
+        return -1
+
+    def get_top_movable_stackpos(self, rel_x, rel_y):
+        """
+        Retorna (item_id, stack_pos) do item movível no topo.
+        Ignora ground (stackpos 0) e criaturas (ID 99).
+
+        Args:
+            rel_x, rel_y: Posição relativa ao player
+
+        Returns:
+            tuple: (item_id, stack_pos) ou (None, -1) se não encontrado
+        """
+        from database.movable_items_db import is_movable
+
+        tile = self.mm.get_tile_visible(rel_x, rel_y)
+
+        if not tile or not tile.items:
+            return (None, -1)
+
+        # Do topo para baixo, ignora ground (index 0)
+        for i in range(len(tile.items) - 1, 0, -1):
+            item_id = tile.items[i]
+            # Ignora criaturas (ID 99) e verifica se é movível
+            if item_id != 99 and is_movable(item_id):
+                return (item_id, i)
+
+        return (None, -1)
+
     def get_ground_speed(self, rel_x, rel_y):
         """
         Retorna o ground speed do tile em posição relativa.

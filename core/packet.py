@@ -288,6 +288,43 @@ class PacketManager:
 
         self.send_packet(pb.get_code(), PacketType.MOUSE)
 
+    def smart_move_item(self, from_pos, to_pos, item_id, count, analyzer, player_x, player_y, apply_delay=False):
+        """
+        Move item com detecção automática de stack_pos.
+
+        Args:
+            from_pos: Posição de origem (dict com x, y, z)
+            to_pos: Posição de destino (dict com x, y, z)
+            item_id: ID do item a mover
+            count: Quantidade a mover
+            analyzer: MapAnalyzer instance (para detectar stack_pos)
+            player_x, player_y: Posição absoluta do player (para converter abs->rel)
+            apply_delay: Se True, aplica delay humanizado
+
+        Returns:
+            tuple: (success: bool, stack_pos: int) - stack_pos usado ou -1 se falhou
+        """
+        stack_pos = 0
+
+        # Se é posição no mapa (não container/inventory), detecta stack_pos
+        if from_pos['x'] != 0xFFFF:
+            # Converte posição absoluta para relativa ao player
+            rel_x = from_pos['x'] - player_x
+            rel_y = from_pos['y'] - player_y
+
+            stack_pos = analyzer.get_item_stackpos(rel_x, rel_y, item_id)
+
+            if stack_pos < 0:
+                # Item específico não encontrado, tenta pegar o topo movível
+                top_id, top_pos = analyzer.get_top_movable_stackpos(rel_x, rel_y)
+                if top_pos >= 0:
+                    stack_pos = top_pos
+                else:
+                    return (False, -1)  # Nada para mover
+
+        self.move_item(from_pos, to_pos, item_id, count, stack_pos, apply_delay)
+        return (True, stack_pos)
+
     def use_item(self, pos, item_id, stack_pos=0, index=0):
         """
         Usa item (Clique Direito).

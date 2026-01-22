@@ -683,8 +683,7 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
 
                 # Safety timeout: 3 seconds max wait
                 if elapsed > 3.0:
-                    if debug_mode:
-                        log(f"⚠️ Death timeout: {dying_creature_data['name']} - assuming corpse ready")
+                    print(f"⚠️ Death timeout: {dying_creature_data['name']} - assuming corpse ready")
                     death_state = DeathState.CORPSE_READY
                     # Will trigger corpse opening below
                 else:
@@ -701,6 +700,16 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                             # Still visible - remain in DYING state
                             if debug_mode:
                                 log(f"⏳ {dying_creature_data['name']} dying phase (vis=1, elapsed={elapsed:.2f}s)")
+                    elif dying_creature and dying_creature.hp_percent > 0:
+                        # NOVO: Criatura REVIVEU (falso positivo ou healing) - abortar loot cycle
+                        if debug_mode:
+                            log(f"⚠️ {dying_creature_data['name']} reviveu (HP={dying_creature.hp_percent}%) - abortando loot")
+                        state.end_loot_cycle()
+                        death_state = DeathState.ALIVE
+                        dying_creature_data = None
+                        death_timestamp = None
+                        current_monitored_id = 0
+                        should_attack_new = True
                     else:
                         # Creature disappeared from battlelist entirely
                         # Fallback: assume corpse ready
@@ -708,43 +717,9 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                             log(f"⚠️ {dying_creature_data['name']} disappeared from battlelist - assuming corpse ready")
                         death_state = DeathState.CORPSE_READY
 
-                # Execute corpse opening when CORPSE_READY
-                if death_state == DeathState.CORPSE_READY:
-                    # Spear picker já está pausado desde DYING
-                    # Humanized delay for corpse opening (300-500ms)
-                    gauss_wait(0.4, 25)  # 400ms ± 25% = 300-500ms
-
-                    if loot_enabled:
-                        monster_name = dying_creature_data["name"]
-                        should_skip_loot = any(skip_name in monster_name for skip_name in NO_LOOT_CREATURES)
-
-                        if should_skip_loot:
-                            if debug_mode:
-                                log(f"⏭️ Pulando loot de {monster_name} (sem loot)")
-                            # ===== SEM LOOT - LIBERA SPEAR PICKER =====
-                            state.end_loot_cycle()
-                            # ==========================================
-                        else:
-                            success = open_corpse_via_packet(pm, base_addr, dying_creature_data, player_id, log_func=log)
-                            if success:
-                                log(f"📂 Corpo aberto (Packet).")
-                                gauss_wait(0.5, 20)
-                            else:
-                                # ===== FALHA AO ABRIR - LIBERA SPEAR PICKER =====
-                                state.end_loot_cycle()
-                                # ================================================
-
-                    # Reset death state
-                    death_state = DeathState.ALIVE
-                    dying_creature_data = None
-                    death_timestamp = None
-                    current_monitored_id = 0
-                    last_target_data = None
-                    should_attack_new = True
-
-                    # Skip rest of loop - start fresh scan
-                    time.sleep(SCAN_DELAY_COMBAT)
-                    continue
+                # DEATH PHASE POLLING não executa mais ações
+                # Apenas monitora transição DYING → CORPSE_READY
+                # As ações serão executadas no CENÁRIO B
 
             # Processa candidatos válidos
             for creature in all_creatures:
@@ -1146,6 +1121,7 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                     # Check death phase to decide action
 
                     if death_phase == DeathState.DYING:
+                        print("DEBUG: DYING phase") 
                         # hp=0 but still visible - enter DYING state, wait for despawn
                         log(f"☠️ {last_target_data['name']} morto mas visível (hp=0, vis=1) - aguardando despawn")
 
@@ -1159,16 +1135,18 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                         dying_creature_data = last_target_data.copy()
                         death_timestamp = time.time()
                         monitor.stop_and_report()
-                        current_monitored_id = 0
+                        # NÃO zera current_monitored_id - mantém vivo para próxima iteração pegar CORPSE_READY
                         # DON'T reset last_target_data - needed for polling
                         became_unreachable_time = None
                         # DON'T set should_attack_new - will be set after corpse opened
 
                     elif death_phase == DeathState.CORPSE_READY or death_phase is None:
+                        print("DEBUG: CORPSE_READY or None")
                         # hp=0 and NOT visible - corpse ready OR creature despawned
                         log("💀 Alvo eliminado (verificação dupla confirmada).")
 
                         if last_target_data and loot_enabled:
+                            print("DEBUG: Tentando abrir corpo...")
                             # ===== MARCA INÍCIO DO CICLO DE LOOT =====
                             state.start_loot_cycle()
                             # ==========================================
@@ -1188,9 +1166,31 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                                 success = open_corpse_via_packet(pm, base_addr, last_target_data, player_id, log_func=log)
                                 if success:
                                     log(f"📂 Corpo aberto (Packet).")
-                                    gauss_wait(0.5, 20)
+
+                                    # NOVO: Polling ativo - aguarda container abrir ou timeout
+                                    timeout = 2.0  # 2 segundos máximo
+                                    poll_interval = 0.1  # Verifica a cada 100ms
+                                    elapsed = 0.0
+
+                                    if debug_mode:
+                                        log("⏳ Aguardando container de loot abrir...")
+
+                                    while elapsed < timeout:
+                                        if state.has_open_loot:
+                                            # Container abriu com sucesso!
+                                            if debug_mode:
+                                                log(f"✓ Container detectado em {elapsed:.1f}s")
+                                            break
+
+                                        time.sleep(poll_interval)
+                                        elapsed += poll_interval
+                                    else:
+                                        # Timeout atingido sem detectar container
+                                        log(f"⚠️ Timeout ({timeout}s): Container de loot não abriu - finalizando ciclo")
+                                        state.end_loot_cycle()
                                 else:
                                     # ===== FALHA AO ABRIR - LIBERA SPEAR PICKER =====
+                                    print("DEBUG: Falha ao abrir corpo.")
                                     state.end_loot_cycle()
                                     # ================================================
 
@@ -1200,6 +1200,12 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                             # Se start_loot_cycle foi chamado no DYING, garante cleanup
                             state.end_loot_cycle()
                             # ================================================
+
+                        # ===== RESET APÓS PROCESSAR LOOT =====
+                        # Reseta death_state aqui (não mais no polling)
+                        death_state = DeathState.ALIVE
+                        dying_creature_data = None
+                        death_timestamp = None
 
                         monitor.stop_and_report()
                         current_monitored_id = 0

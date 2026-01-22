@@ -69,7 +69,7 @@ DROP_ON_PLAYER_CHANCE = 0.5
 # ========== DELAYS DE SCAN (RÁPIDOS, SEM HUMANIZAÇÃO) ==========
 # Estes delays controlam a velocidade dos loops de monitoramento
 SCAN_HAND_DELAY = 0.15         # Delay entre scans de spears na mao (monitoramento constante)
-SCAN_TILES_DELAY = 0.500         # Delay entre scans de tiles ao redor (procurando spears no chao)
+SCAN_TILES_DELAY = 0.5         # Delay entre scans de tiles ao redor (procurando spears no chao)
 
 # ========== DELAYS HUMANIZADOS (APLICADOS APENAS EM AÇÕES) ==========
 # Estes delays simulam tempo de reação humana e são aplicados APENAS em move_item
@@ -458,6 +458,7 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
 
     mapper = MemoryMap(pm, base_addr)
     packet = PacketManager(pm, base_addr)
+    analyzer = MapAnalyzer(mapper)  # Para usar get_item_stackpos() e get_top_movable_stackpos()
 
     while True:
         if check_running and not check_running():
@@ -485,6 +486,12 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
             # Previne conflitos durante abertura do corpo e processamento de loot
             if state.is_processing_loot:
                 time.sleep(SCAN_TILES_DELAY)  # 200ms
+                continue
+
+            # NOVO: Verificação adicional - previne race condition
+            # Se container está aberto, aguarda mesmo que is_processing_loot seja False
+            if state.has_open_loot:
+                time.sleep(SCAN_TILES_DELAY)
                 continue
             # ==========================================
 
@@ -620,17 +627,23 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
                         continue
                     # ============================================================================
 
+                    # Usa get_item_stackpos() para obter o stack_pos do bloqueador específico
+                    # (items_above contém itens com índice < spear = visualmente acima da spear)
+                    blocker_stack_pos = analyzer.get_item_stackpos(rel_x, rel_y, item_id)
+                    if blocker_stack_pos < 0:
+                        print(f"[Spear Action] Bloqueador ID={item_id} não encontrado - pulando")
+                        continue
+
                     from_pos = get_ground_pos(abs_x, abs_y, z)
                     to_pos = get_ground_pos(drop_x, drop_y, drop_z)
-                    top_stack_pos = len(tile.items) - 1
 
                     with PacketMutex("spear_picker"):
-                        packet.move_item(from_pos, to_pos, item_id, 1, top_stack_pos, apply_delay=True)
+                        packet.move_item(from_pos, to_pos, item_id, 1, blocker_stack_pos, apply_delay=True)
 
-                    print(f"[Spear Action] Moveu item ID={item_id} (idx={list_idx}, stack_pos={top_stack_pos}) de ({abs_x},{abs_y},{z}) -> ({drop_x},{drop_y},{drop_z})")
+                    print(f"[Spear Action] Moveu bloqueador ID={item_id} (stack_pos={blocker_stack_pos}) de ({abs_x},{abs_y},{z}) -> ({drop_x},{drop_y},{drop_z})")
 
-                    if len(tile.items) > 1:
-                        tile.items.pop(1)
+                    # Re-lê o mapa para atualizar o estado do tile
+                    mapper.read_full_map(player_id)
 
                     # ========== DELAY GLOBAL ENTRE MOVE_ITEMS ==========
                     if idx_move < len(items_above) - 1:
@@ -652,32 +665,17 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
                     continue
                 # ================================================================================================
 
-            # === CALCULA STACK_POS ===
-            if items_above:
-                new_tile = mapper.get_tile_visible(rel_x, rel_y)
-                if new_tile:
-                    spear_stack_pos = len(new_tile.items) - 1
-                else:
-                    spear_stack_pos = len(tile.items) - 1
-            else:
-                first_movable_idx = 0
-                for idx_check in range(len(tile.items)):
-                    item_id_check = tile.items[idx_check]
-                    if is_movable_item(item_id_check):
-                        first_movable_idx = idx_check
-                        data1 = 0
-                        data2 = 0
-                        if hasattr(tile, 'items_debug') and idx_check < len(tile.items_debug):
-                            _, data1, data2, _ = tile.items_debug[idx_check]
-                        print(f"[Spear Action] Primeiro movable: idx={idx_check}, ID={item_id_check}, data1={data1}, data2={data2}")
-                        break
-
-                movable_position = spear_list_index - first_movable_idx
-                spear_stack_pos = len(tile.items) - 1 - movable_position
-                print(f"[Spear Action] Calculo stack_pos: len(items)={len(tile.items)}, first_movable_idx={first_movable_idx}, spear_list_index={spear_list_index}, movable_position={movable_position}, stack_pos={spear_stack_pos}")
+            # === CALCULA STACK_POS (usando nova função utilitária) ===
+            spear_stack_pos = analyzer.get_item_stackpos(rel_x, rel_y, SPEAR_ID)
+            if spear_stack_pos < 0:
+                print(f"[Spear Action] Spear não encontrada no tile após mover bloqueadores")
+                continue
+            print(f"[Spear Action] Stack_pos da spear: {spear_stack_pos}")
 
             # === CALCULA QUANTIDADE A PEGAR ===
-            spears_on_tile = get_stack_count(tile, spear_list_index)
+            # Obtém tile atualizado para ler o count corretamente
+            fresh_tile = mapper.get_tile_visible(rel_x, rel_y)
+            spears_on_tile = get_stack_count(fresh_tile, spear_stack_pos) if fresh_tile else 1
             cap_allows = int(current_cap / SPEAR_WEIGHT)
             space_left = max_spears - current_spears
 
@@ -686,8 +684,7 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
 
             print(f"[Spear Action] Estado: cap={current_cap:.1f}oz, spears_na_mao={current_spears}/{max_spears}, spears_no_tile={spears_on_tile}")
             print(f"[Spear Action] Limites: tile={spears_on_tile}, cap_permite={cap_allows}, falta_para_max={space_left}")
-            print(f"[Spear Action] Calculado stack_pos={spear_stack_pos} (movable_pos entre items moveis)")
-            print(f"[Spear Action] Pegando count={count_to_pick} spear(s) (min entre tile/cap/max)")
+            print(f"[Spear Action] Pegando count={count_to_pick} spear(s) com stack_pos={spear_stack_pos}")
 
             # === MOVE SPEAR PARA MÃO ===
             # ===== VERIFICAÇÃO FINAL: Loot pode ter sido aberto durante moves de bloqueadores =====

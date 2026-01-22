@@ -52,16 +52,31 @@ class MessageAnalyzer:
     # Tempo máximo (segundos) para considerar uma conversa ativa
     CONVERSATION_TIMEOUT = 30.0
 
-    def __init__(self, pm, base_addr):
+    def __init__(self, pm, base_addr, my_name: str = ""):
         self.pm = pm
         self.base_addr = base_addr
         self.scanner = BattleListScanner(pm, base_addr)
+
+        # Nome do personagem do bot (para detectar menções)
+        self.my_name = my_name
+        self._name_parts: list[str] = []  # Partes do nome em lowercase
+        if my_name:
+            self.set_my_name(my_name)
 
         # Cache de posições anteriores para detectar aproximação
         self._position_cache: Dict[str, Position] = {}
 
         # Histórico de conversas: {player_name: last_response_timestamp}
         self._conversation_history: Dict[str, float] = {}
+
+    def set_my_name(self, name: str):
+        """Define o nome do personagem e extrai partes para matching."""
+        self.my_name = name
+        # Extrai partes do nome (mínimo 3 caracteres para evitar falsos positivos)
+        self._name_parts = [
+            part.lower() for part in name.split()
+            if len(part) >= 3
+        ]
 
     def analyze(self, message: ChatMessage, my_pos: Position) -> MessageIntent:
         """
@@ -100,7 +115,7 @@ class MessageAnalyzer:
         should_respond = self._should_respond(confidence, message)
 
         # Gera reasoning para debug
-        reasoning = self._build_reasoning(sender_data, confidence, message.sender)
+        reasoning = self._build_reasoning(sender_data, confidence, message.sender, message.text)
 
         return MessageIntent(
             is_directed_at_me=confidence > 0.5,
@@ -117,6 +132,30 @@ class MessageAnalyzer:
             if player.name.lower() == sender_name.lower():
                 return player
         return None
+
+    def _check_name_mention(self, text: str) -> tuple[bool, bool]:
+        """
+        Verifica se a mensagem menciona o nome do bot.
+
+        Returns:
+            (partial_match, full_match):
+            - partial_match: True se alguma parte do nome foi mencionada
+            - full_match: True se o nome completo foi mencionado
+        """
+        if not self._name_parts:
+            return False, False
+
+        text_lower = text.lower()
+
+        # Verifica nome completo primeiro
+        full_name_lower = self.my_name.lower()
+        if full_name_lower in text_lower:
+            return True, True
+
+        # Verifica partes individuais do nome
+        partial_match = any(part in text_lower for part in self._name_parts)
+
+        return partial_match, False
 
     def _build_sender_data(self, sender: Creature, my_pos: Position) -> Dict[str, Any]:
         """Constrói dicionário com dados relevantes do sender."""
@@ -150,6 +189,7 @@ class MessageAnalyzer:
         Calcula probabilidade (0.0 - 1.0) de a mensagem ser para o bot.
 
         Pesos por prioridade:
+        0. MENÇÃO AO NOME (prioridade máxima) - nome completo = 100%
         1. DISTÂNCIA (maior peso) - players > 4 tiles são ignorados
         2. PARADO OLHANDO - forte indicador de interação
         3. GREETING - indica início de conversa
@@ -161,6 +201,16 @@ class MessageAnalyzer:
         is_facing_me = sender_data["is_facing_me"]
         is_moving = sender_data["is_moving"]
         movement_status = sender_data["movement_status"]
+
+        # 0. MENÇÃO AO NOME DO BOT (PRIORIDADE MÁXIMA)
+        # Se alguém fala meu nome, está definitivamente falando comigo
+        partial_match, full_match = self._check_name_mention(message.text)
+        if full_match:
+            # Nome completo mencionado = 100% certeza
+            return 1.0
+        elif partial_match:
+            # Parte do nome mencionada = muito provável
+            confidence += 0.60
 
         # 1. DISTÂNCIA (MAIOR PESO - fator dominante)
         # Players distantes (> 4 tiles) são efetivamente ignorados
@@ -174,7 +224,9 @@ class MessageAnalyzer:
             confidence += 0.15  # Limite aceitável
         else:
             # > 4 tiles = provavelmente não é para mim
-            confidence -= 0.40  # Penalidade forte para distância
+            # Mas se mencionou meu nome, não penaliza tanto
+            if not partial_match:
+                confidence -= 0.40  # Penalidade forte para distância
 
         # 2. PARADO E OLHANDO PARA MIM (segundo maior peso)
         # Player parado olhando diretamente = forte indicador de interação
@@ -352,12 +404,22 @@ class MessageAnalyzer:
         """Limpa todo o histórico de conversas."""
         self._conversation_history.clear()
 
-    def _build_reasoning(self, sender_data: Dict, confidence: float, sender_name: str = "") -> str:
+    def _build_reasoning(self, sender_data: Dict, confidence: float,
+                         sender_name: str = "", message_text: str = "") -> str:
         """Constrói string de reasoning para debug/log."""
         if not sender_data.get("found"):
             return "Player não encontrado no battlelist"
 
         parts = []
+
+        # Verifica menção ao nome
+        if message_text:
+            partial, full = self._check_name_mention(message_text)
+            if full:
+                parts.append("NOME COMPLETO MENCIONADO")
+            elif partial:
+                parts.append("Parte do nome mencionada")
+
         parts.append(f"Distância: {sender_data['distance']} tiles")
 
         if sender_data["is_moving"]:

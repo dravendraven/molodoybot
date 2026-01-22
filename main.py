@@ -149,7 +149,7 @@ BOT_SETTINGS = {
     "ks_prevention_enabled": True,
 
     # Console Log
-    "console_log_visible": False  # Default: Status Panel visível, Console Log escondido
+    "console_log_visible": True  # Default: Status Panel visível, Console Log escondido
 }
 
 _cached_player_name = ""
@@ -263,6 +263,7 @@ minimap_image_ref = None
 
 # Log visibility toggle (inicializado após load_config)
 log_visible = True  # Será atualizado por BOT_SETTINGS['console_log_visible']
+txt_log = None  # Inicializado na criação da GUI
 
 # ==============================================================================
 # STATUS PANEL - Status em tempo real por módulo
@@ -2256,6 +2257,29 @@ def open_settings():
     switch_ai_chat.pack(anchor="w", pady=UI['PAD_ITEM'])
     if BOT_SETTINGS.get('ai_chat_enabled', False): switch_ai_chat.select()
 
+    def on_console_log_toggle():
+        global log_visible, txt_log, frame_status_panel
+        log_visible = bool(switch_console_log.get())
+        BOT_SETTINGS['console_log_visible'] = log_visible
+        # Atualizar visibilidade dos painéis
+        if log_visible:
+            # Mostra Console Log (txt_log) e esconde Status Panel
+            if frame_status_panel:
+                frame_status_panel.pack_forget()
+            if txt_log:
+                txt_log.pack(side="bottom", fill="x", padx=5, pady=5, expand=True)
+        else:
+            # Mostra Status Panel e esconde Console Log
+            if txt_log:
+                txt_log.pack_forget()
+            if frame_status_panel:
+                frame_status_panel.pack(side="bottom", fill="x", padx=8, pady=3)
+        log(f"📊 Console Log: {'Visível' if log_visible else 'Oculto'}")
+
+    switch_console_log = ctk.CTkSwitch(frame_switches, text="Mostrar Console Log", command=on_console_log_toggle, progress_color="#3498DB", **UI['BODY'])
+    switch_console_log.pack(anchor="w", pady=UI['PAD_ITEM'])
+    if BOT_SETTINGS.get('console_log_visible', True): switch_console_log.select()
+
     def save_geral():
         BOT_SETTINGS['vocation'] = combo_voc.get()
         BOT_SETTINGS['telegram_chat_id'] = entry_telegram.get()
@@ -2271,6 +2295,8 @@ def open_settings():
             BOT_SETTINGS['spear_max_count'] = int(entry_spear_max.get())
         except:
             pass  # Se invalido, mantem o valor atual
+        # Console Log já é salvo em tempo real pelo toggle, mas garantimos aqui também
+        BOT_SETTINGS['console_log_visible'] = bool(switch_console_log.get())
         update_stats_visibility()
         save_config_file()
         log(f"⚙️ Geral salvo.")

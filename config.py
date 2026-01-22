@@ -26,7 +26,7 @@ TELEGRAM_CHAT_ID = ""  # Vazio por padrão - configurar no bot para receber aler
 # GUI SETTINGS
 # ==============================================================================
 RELOAD_BUTTON = True  # Exibe botão de reload na interface (desabilitar para release)
-DEBUG_MODE = False    # Modo debug geral - ativa logs extras em diversos módulos
+DEBUG_MODE = True    # Modo debug geral - ativa logs extras em diversos módulos
 
 TARGET_MONSTERS = ["Rotworm", "Minotaur"]
 SAFE_CREATURES = ["Minotaur", "Rotworm", "Troll", "Wolf", "Deer", "Rabbit", "Spider", "Poison Spider", "Bug", "Rat", "Bear", "Wasp", "Orc"]

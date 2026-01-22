@@ -48,15 +48,16 @@ class ChatHandler:
         self.packet = packet
         self.memory_map = memory_map
 
+        # Configuração - lê nome do personagem da memória (dinâmico)
+        # Captura antes de criar o analyzer para passar o nome
+        self.my_name = get_connected_char_name(pm, base_addr) or "Unknown"
+
         # Componentes
         self.chat_scanner = ChatScanner(pm, base_addr)
-        self.analyzer = MessageAnalyzer(pm, base_addr)
+        self.analyzer = MessageAnalyzer(pm, base_addr, my_name=self.my_name)
         self.conversation_mgr = ConversationManager(max_history=10, timeout_seconds=300)
         self.ai_responder = AIResponder(model=AI_MODEL)
         self.battlelist = BattleListScanner(pm, base_addr)
-
-        # Configuração - lê nome do personagem da memória (dinâmico)
-        self.my_name = get_connected_char_name(pm, base_addr) or "Unknown"
         self.enabled = True  # Controlado externamente via enable()/disable()
 
         # Estado
@@ -101,6 +102,8 @@ class ChatHandler:
             detected_name = get_connected_char_name(self.pm, self.base_addr)
             if detected_name:
                 self.my_name = detected_name
+                # Atualiza o analyzer para detectar menções ao nome
+                self.analyzer.set_my_name(detected_name)
                 print(f"[ChatHandler] Player detectado: {self.my_name}")
 
         # Já respondendo

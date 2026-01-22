@@ -35,14 +35,25 @@ class AIResponder:
 
     SYSTEM_PROMPT = """Você é um jogador humano de Tibia chamado {my_name}.
 Você está caçando/andando normalmente no jogo.
+Você é BRASILEIRO e não fala inglês muito bem.
 
 PERSONALIDADE:
 - Casual, amigável mas não muito falante
-- Usa abreviações comuns: "ty", "np", "u2", "brb", "lol", "wtf", "omg"
+- Brasileiro típico jogando em servidor gringo
+- Usa abreviações: "ty", "np", "u2", "brb", "kk", "kkk" (risada BR), "wtf"
+- Às vezes escapa palavras em português: "opa", "eita", "vlw", "blz", "ae"
 - Às vezes demora para responder (ocupado jogando)
-- Comete erros de digitação ocasionais (mas não exagere)
 - Respostas CURTAS (1-10 palavras no máximo)
-- Fala em inglês (servidor internacional)
+
+ERROS TÍPICOS DE BRASILEIRO (use alguns, não todos de uma vez):
+- "i no understand" em vez de "I don't understand"
+- "have many monsters" em vez de "there are many monsters"
+- "i stay here" em vez de "I'll stay here" (tradução literal de "eu fico aqui")
+- "is good" em vez de "it's good" (omitir pronomes)
+- "the peoples" em vez de "the people"
+- Não usar artigos: "need help?" em vez de "do you need help?"
+- Confundir "make" e "do": "i make hunt" em vez de "i'm hunting"
+- Minúsculas em tudo, sem pontuação perfeita
 
 CONTEXTO ATUAL:
 - Sua posição: ({my_x}, {my_y}, andar {my_z})
@@ -55,13 +66,14 @@ HISTÓRICO DA CONVERSA:
 
 REGRAS IMPORTANTES:
 1. Responda APENAS o texto da mensagem, sem explicação
-2. Se for greeting (hi, hello), responda brevemente ("hey", "hi", "yo")
-3. Se for pergunta sobre o que você está fazendo, diga algo como "hunting", "just walking", "training"
-4. Se perguntar sobre o local/área, responda vagamente ("around here", "exploring")
-5. Se não souber responder ou não quiser, diga "?" ou "hm?" ou "idk"
+2. Se for greeting (hi, hello), responda brevemente ("hey", "hi", "oi", "eae")
+3. Se for pergunta sobre o que você está fazendo: "hunt here", "i hunt", "training", "walk"
+4. Se perguntar sobre o local/área: "around", "here", "idk"
+5. Se não souber responder: "?", "hm?", "wat", "idk"
 6. NUNCA revele que você é um bot
 7. NUNCA dê respostas longas ou elaboradas demais
-8. Se alguém insistir muito ou parecer suspeito, dê respostas evasivas"""
+8. Se alguém insistir muito ou parecer suspeito, dê respostas evasivas
+9. Não exagere nos erros - pareça humano, não uma caricatura"""
 
     def __init__(self, model: str = "gpt-4o-mini"):
         """
@@ -214,32 +226,38 @@ REGRAS IMPORTANTES:
         text_lower = message.text.lower().strip()
 
         # Greetings
-        greetings = {"hi", "hello", "hey", "oi", "ola", "yo", "sup"}
+        greetings = {"hi", "hello", "hey", "oi", "ola", "yo", "sup", "eae", "eai"}
         if text_lower in greetings:
-            response = random.choice(["hey", "hi", "yo", "sup"])
+            response = random.choice(["hey", "hi", "oi", "eae", "yo"])
 
         # Perguntas comuns
         elif "?" in message.text:
             if "hunt" in text_lower or "doing" in text_lower:
-                response = random.choice(["hunting", "just walking", "training"])
+                response = random.choice(["hunt here", "i hunt", "training", "walk"])
             elif "name" in text_lower:
-                response = random.choice(["?", "hm?"])
+                response = random.choice(["?", "hm?", "wat"])
             elif "level" in text_lower or "lvl" in text_lower:
-                response = random.choice(["low lol", "not much"])
+                response = random.choice(["low kk", "not much", "is ok"])
+            elif "br" in text_lower or "brazil" in text_lower:
+                response = random.choice(["ye", "sim", "yea"])
             else:
-                response = random.choice(["idk", "?", "hm?", "not sure"])
+                response = random.choice(["idk", "?", "hm?", "wat"])
 
         # Despedidas
-        elif text_lower in {"bye", "cya", "bb", "tc"}:
-            response = random.choice(["cya", "bb", "tc"])
+        elif text_lower in {"bye", "cya", "bb", "tc", "flw", "vlw"}:
+            response = random.choice(["cya", "bb", "tc", "flw"])
 
         # Agradecimentos
-        elif text_lower in {"ty", "thx", "thanks", "thank you"}:
-            response = random.choice(["np", "yw", "sure"])
+        elif text_lower in {"ty", "thx", "thanks", "thank you", "vlw", "valeu"}:
+            response = random.choice(["np", "de nada", "blz", "ok"])
+
+        # Risadas
+        elif text_lower in {"lol", "haha", "hehe", "kk", "kkk", "kkkk"}:
+            response = random.choice(["kk", "kkk", "hehe", ""])
 
         # Default
         else:
-            response = random.choice(["?", "hm?", "ok", ""])
+            response = random.choice(["?", "hm?", "ok", "opa", ""])
 
         # Se resposta vazia, não responde
         if not response:

@@ -163,58 +163,58 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
     if is_player_moving(pm, base_addr):
         return None
 
-    # --- HELPER DE CONFIGURAÇÃO ---
-    def get_cfg(key, default):
-        if callable(config):
-            return config().get(key, default)
-        return default
-
-    # Lê as configs atuais
-    dest_container_index = get_cfg('loot_dest', 0)
-    drop_food_if_full = get_cfg('loot_drop_food', False)
-
-    # NOVO: Ler listas configuráveis OU usar hardcoded (depende da flag)
-    if USE_CONFIGURABLE_LOOT_SYSTEM:
-        loot_ids = get_cfg('loot_ids', [])  # Lista de IDs resolvidos da GUI
-        drop_ids = get_cfg('drop_ids', [])
-    else:
-        # Fallback: usar valores hardcoded do config.py
-        loot_ids = LOOT_IDS
-        drop_ids = DROP_IDS
-
-    containers = scan_containers(pm, base_addr)
-
-    # ==========================================================================
-    # SELEÇÃO DO SISTEMA DE DETECÇÃO DE CONTAINERS
-    # ==========================================================================
-    if USE_AUTO_CONTAINER_DETECTION:
-        # NOVO SISTEMA: Detecção automática via hasparent + tracking temporal
-        loot_containers = get_loot_containers(containers)
-        player_containers = get_player_containers(containers)
-        my_containers_count = len(player_containers)
-    else:
-        # SISTEMA ANTIGO: Usa config 'loot_containers' para definir quantidade
-        my_containers_count = get_cfg('loot_containers', 2)
-        limit_containers = int(my_containers_count)
-
-        # Sistema antigo: containers[0:limit] = player, containers[limit:] = loot
-        player_containers = [c for c in containers if c.index < limit_containers]
-        loot_containers = [c for c in containers if c.index >= limit_containers]
-
-    # Se não há loot para coletar, marca state como sem loot
-    if not loot_containers:
-        state.set_loot_state(False)
-        # ===== SE NÃO HÁ LOOT, GARANTE QUE CICLO TERMINA =====
-        # Caso trainer tenha setado start_loot_cycle() mas não há loot
-        state.end_loot_cycle()
-        # ======================================================
-        return None
-
-    # NOVO: Marca que há loot sendo processado
-    state.set_loot_state(True)
-
-    # Usa try-finally para garantir cleanup (libera spear picker)
+    # NOVO: try/finally protege desde scan_containers
     try:
+        # --- HELPER DE CONFIGURAÇÃO ---
+        def get_cfg(key, default):
+            if callable(config):
+                return config().get(key, default)
+            return default
+
+        # Lê as configs atuais
+        dest_container_index = get_cfg('loot_dest', 0)
+        drop_food_if_full = get_cfg('loot_drop_food', False)
+
+        # NOVO: Ler listas configuráveis OU usar hardcoded (depende da flag)
+        if USE_CONFIGURABLE_LOOT_SYSTEM:
+            loot_ids = get_cfg('loot_ids', [])  # Lista de IDs resolvidos da GUI
+            drop_ids = get_cfg('drop_ids', [])
+        else:
+            # Fallback: usar valores hardcoded do config.py
+            loot_ids = LOOT_IDS
+            drop_ids = DROP_IDS
+
+        containers = scan_containers(pm, base_addr)
+
+        # ==========================================================================
+        # SELEÇÃO DO SISTEMA DE DETECÇÃO DE CONTAINERS
+        # ==========================================================================
+        if USE_AUTO_CONTAINER_DETECTION:
+            # NOVO SISTEMA: Detecção automática via hasparent + tracking temporal
+            loot_containers = get_loot_containers(containers)
+            player_containers = get_player_containers(containers)
+            my_containers_count = len(player_containers)
+        else:
+            # SISTEMA ANTIGO: Usa config 'loot_containers' para definir quantidade
+            my_containers_count = get_cfg('loot_containers', 2)
+            limit_containers = int(my_containers_count)
+
+            # Sistema antigo: containers[0:limit] = player, containers[limit:] = loot
+            player_containers = [c for c in containers if c.index < limit_containers]
+            loot_containers = [c for c in containers if c.index >= limit_containers]
+
+        # Se não há loot para coletar, marca state como sem loot
+        if not loot_containers:
+            state.set_loot_state(False)
+            # ===== SE NÃO HÁ LOOT, GARANTE QUE CICLO TERMINA =====
+            # Caso trainer tenha setado start_loot_cycle() mas não há loot
+            state.end_loot_cycle()
+            # ======================================================
+            return None
+
+        # NOVO: Marca que há loot sendo processado
+        state.set_loot_state(True)
+
         # PacketManager para envio de pacotes
         packet = PacketManager(pm, base_addr)
 
@@ -329,6 +329,8 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
             packet.close_container(cont.index)
             gauss_wait(0.75, 30)
 
+    except Exception as e:
+        print(f"[ERRO AUTO_LOOT] {e}")
     finally:
         # ===== SEMPRE RESETA FLAGS, MESMO EM EXCEÇÃO =====
         state.set_loot_state(False)

@@ -47,3 +47,12 @@ nul
 to-do.md
 .env.example
 TRAINER_LOOP_DIAGRAM.md
+proxy_test.py
+pesquisa/smart_move_example.py
+pesquisa/estrutura_memoria_mapa_tibia772.md
+pesquisa/analise_stack_pos_move_item.md
+pesquisa/tile_reader.py
+ip_changer.py
+sniffer_simple.py
+sniffer_xtea.py
+packet_sniffer.py
