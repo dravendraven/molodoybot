@@ -149,7 +149,7 @@ BOT_SETTINGS = {
     "ks_prevention_enabled": True,
 
     # Console Log
-    "console_log_visible": True  # Default: Status Panel visível, Console Log escondido
+    "console_log_visible": False  # Default: Status Panel visível, Console Log escondido
 }
 
 _cached_player_name = ""
@@ -2183,11 +2183,9 @@ def open_settings():
         entry_client_path.insert(0, BOT_SETTINGS['client_path'])
         entry_client_path.configure(state="disabled")
 
-    ctk.CTkLabel(frame_geral, text="↳ Necessário para o Cavebot (GlobalMap)", **UI['HINT']).grid(row=4, column=0, columnspan=2, sticky="e", padx=60, pady=(0, 5))
-
     # Switches
     frame_switches = ctk.CTkFrame(tab_geral, fg_color="transparent")
-    frame_switches.pack(pady=10)
+    frame_switches.pack(pady=(5, 10))
 
     ctk.CTkLabel(frame_switches, text="Hack", **UI['H1']).pack(anchor="w", pady=(0, 2))
 
