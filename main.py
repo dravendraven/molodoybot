@@ -52,11 +52,22 @@ from modules.trainer import trainer_loop
 from modules.alarm import alarm_loop
 from modules.cavebot import Cavebot
 from modules.spear_picker import spear_picker_loop
+from modules.debug_monitor import init_debug_monitor, show_debug_monitor
 from core.player_core import get_connected_char_name
 from core.bot_state import state
 from core.overlay_renderer import renderer as overlay_renderer
 from core.chat_handler import ChatHandler
 #import corpses
+
+# Sniffer de pacotes (opcional - requer Npcap e execução como Admin)
+try:
+    from core.sniffer import start_sniffer, stop_sniffer, get_sniffer
+    SNIFFER_AVAILABLE = True
+except ImportError:
+    SNIFFER_AVAILABLE = False
+    def start_sniffer(*args, **kwargs): return None
+    def stop_sniffer(): pass
+    def get_sniffer(): return None
 
 
 # ==============================================================================
@@ -1390,8 +1401,112 @@ def regen_monitor_loop():
             print(f"Erro Regen Loop: {e}")
             time.sleep(1)
 
+
+# ==============================================================================
+# CONTAINER EVENT TRACKING (EventBus Integration)
+# ==============================================================================
+# Rastreia containers de loot via eventos do sniffer ao invés de polling
+# ==============================================================================
+_open_loot_containers: set = set()  # Container IDs que são containers de loot
+_loot_containers_lock = threading.Lock()
+_container_listener_setup = False
+_loot_container_was_opened_event = False
+
+
+def _is_loot_container_name(name: str) -> bool:
+    """Determina se o nome do container indica um corpo (loot container)."""
+    lower = name.lower()
+    return lower.startswith("dead ") or lower.startswith("slain ")
+
+
+def _handle_container_open(event):
+    """Processa evento de container aberto do sniffer."""
+    global _loot_container_was_opened_event
+
+    # DEBUG: Mostra TODOS os containers abertos (para diagnóstico)
+    print(f"[CONTAINER EVENT] Opened: {event.name} (id:{event.container_id}, items:{event.item_count})")
+
+    is_loot = _is_loot_container_name(event.name)
+
+    with _loot_containers_lock:
+        if is_loot:
+            # Novo corpo aberto
+            _open_loot_containers.add(event.container_id)
+            _loot_container_was_opened_event = True
+            state.set_loot_state(True)
+            print(f"[CONTAINER] Loot opened: {event.name} (id:{event.container_id}, items:{event.item_count})")
+        elif event.container_id in _open_loot_containers:
+            # Bag aberta DENTRO do corpo - substitui mesmo slot, continua rastreando
+            print(f"[CONTAINER] Bag in loot slot: {event.name} (id:{event.container_id})")
+
+
+def _handle_container_close(event):
+    """Processa evento de container fechado do sniffer."""
+    # DEBUG: Mostra TODOS os containers fechados (para diagnóstico)
+    print(f"[CONTAINER EVENT] Closed: id:{event.container_id}")
+
+    with _loot_containers_lock:
+        if event.container_id in _open_loot_containers:
+            _open_loot_containers.discard(event.container_id)
+            print(f"[CONTAINER] Loot closed: id:{event.container_id}")
+
+            if len(_open_loot_containers) == 0:
+                state.set_loot_state(False)
+
+
+def _setup_container_event_listener():
+    """Configura listener para eventos de container do sniffer."""
+    global _container_listener_setup
+    if _container_listener_setup:
+        return
+
+    try:
+        from core.event_bus import EventBus, EVENT_CONTAINER_OPEN, EVENT_CONTAINER_CLOSE
+
+        event_bus = EventBus.get_instance()
+        event_bus.subscribe(EVENT_CONTAINER_OPEN, _handle_container_open)
+        event_bus.subscribe(EVENT_CONTAINER_CLOSE, _handle_container_close)
+        _container_listener_setup = True
+        print("[LOOT] Container event listener configured (EventBus)")
+    except ImportError:
+        print("[LOOT] EventBus not available - using memory detection")
+
+
+def has_open_loot_containers() -> bool:
+    """Verifica thread-safe se há containers de loot abertos."""
+    with _loot_containers_lock:
+        return len(_open_loot_containers) > 0
+
+
+def reset_loot_cycle_flags():
+    """Reseta flags para o próximo ciclo de loot."""
+    global _loot_container_was_opened_event
+    with _loot_containers_lock:
+        _loot_container_was_opened_event = False
+        _open_loot_containers.clear()
+
+
+def _use_event_based_detection() -> bool:
+    """Verifica se detecção baseada em eventos está disponível."""
+    if not _container_listener_setup:
+        return False
+    try:
+        sniffer = get_sniffer()
+        return sniffer is not None and sniffer.is_connected()
+    except:
+        return False
+
+
+# ==============================================================================
+
+
 def auto_loot_thread():
     """Thread dedicada para verificar, coletar loot e organizar."""
+
+    # ===== SETUP: Configura listener de eventos de container (EventBus) =====
+    _setup_container_event_listener()
+    # ========================================================================
+
     hwnd = 0
     last_stack_time = 0       # Controla intervalo do stacker periódico
     STACK_INTERVAL = 5        # Intervalo em segundos
@@ -1400,6 +1515,11 @@ def auto_loot_thread():
     last_pos = (0, 0, 0)
     last_pos_time = 0
     MOVE_COOLDOWN = 1.5       # Segundos sem mover para considerar "parado" (> loop interval)
+
+    # ===== FALLBACK: Para quando sniffer não está disponível =====
+    # Usado como fallback quando EventBus não está disponível
+    loot_container_was_opened_memory = False
+    # =============================================================
 
     # Montar config provider com base na flag
     if USE_CONFIGURABLE_LOOT_SYSTEM:
@@ -1419,11 +1539,59 @@ def auto_loot_thread():
             'loot_drop_food': BOT_SETTINGS.get('loot_drop_food', False)
         }
 
+    # ===== SAFETY NET: Limpa ciclo de loot travado (TIME-BASED) =====
+    stuck_loot_cycle_start = None  # Timestamp quando detectamos ciclo travado
+    STUCK_LOOT_TIMEOUT = 3.0        # 3 segundos (menor que container timeout, pega ciclos travados)
+
+    def check_stuck_loot_cycle():
+        """
+        Finaliza ciclo de loot se estiver travado por mais de 2 segundos.
+        Previne race condition: só força cleanup se is_processing_loot=True
+        mas has_open_loot=False por tempo prolongado (não instantâneo).
+
+        Cenários protegidos:
+        - Usuário desabilita Auto Loot durante ciclo
+        - Alarme dispara durante ciclo
+        - Container nunca abre após trainer iniciar ciclo
+        """
+        nonlocal stuck_loot_cycle_start
+
+        # Verifica se ciclo está em estado suspeito
+        is_stuck = state.is_processing_loot and not state.has_open_loot
+
+        if is_stuck:
+            # Primeira vez detectando? Marca timestamp
+            if stuck_loot_cycle_start is None:
+                stuck_loot_cycle_start = time.time()
+
+            # Verifica se já passou tempo suficiente
+            elapsed = time.time() - stuck_loot_cycle_start
+            if elapsed >= STUCK_LOOT_TIMEOUT:
+                # Ativa spear pickup pendente antes de finalizar
+                if BOT_SETTINGS.get('spear_picker_enabled', False):
+                    state.set_spear_pickup_pending(True)
+                    print("[LOOT SAFETY] Spear pickup pendente após timeout")
+                state.end_loot_cycle()
+                print(f"[LOOT SAFETY] Ciclo de loot finalizado após {elapsed:.1f}s travado (sem containers)")
+                stuck_loot_cycle_start = None  # Reset
+        else:
+            # Condição normalizada, reseta timer
+            stuck_loot_cycle_start = None
+    # ================================================================
+
     while state.is_running:
-        if not state.is_connected: time.sleep(1); continue
-        if not switch_loot.get(): time.sleep(1); continue
-        if not state.is_safe(): time.sleep(1); continue
-        if pm is None: time.sleep(1); continue   
+        if not state.is_connected:
+            check_stuck_loot_cycle()
+            time.sleep(1); continue
+        if not switch_loot.get():
+            check_stuck_loot_cycle()
+            time.sleep(1); continue
+        if not state.is_safe():
+            check_stuck_loot_cycle()
+            time.sleep(1); continue
+        if pm is None:
+            check_stuck_loot_cycle()
+            time.sleep(1); continue
         if hwnd == 0: hwnd = win32gui.FindWindow("TibiaClient", None) or win32gui.FindWindow(None, "Tibia")
         
         try:
@@ -1439,7 +1607,15 @@ def auto_loot_thread():
 
             # 1. Tenta Lootear
             did_loot = run_auto_loot(pm, base_addr, hwnd, config=config_provider)
-            
+
+            # ===== TRACKING: Verifica modo de detecção (EventBus vs Memory) =====
+            use_events = _use_event_based_detection()
+
+            # FALLBACK: Para quando sniffer não está disponível
+            if not use_events and state.has_open_loot:
+                loot_container_was_opened_memory = True
+            # ====================================================================
+
             if did_loot:
                 # --- CASOS COM DADOS (TUPLAS) ---
                 if isinstance(did_loot, tuple):
@@ -1479,12 +1655,43 @@ def auto_loot_thread():
                 gauss_wait(0.5, 20)
                 continue
 
+            # ===== FIM DO CICLO DE LOOT (EVENT-BASED vs MEMORY) =====
+            if use_events:
+                # EVENT-BASED: Container foi aberto E todos estão fechados agora
+                if _loot_container_was_opened_event and not has_open_loot_containers():
+                    if state.is_processing_loot:
+                        # Ativa spear pickup pendente antes de finalizar loot
+                        if BOT_SETTINGS.get('spear_picker_enabled', False):
+                            state.set_spear_pickup_pending(True)
+                            print("[LOOT] Spear pickup pendente após loot")
+                        state.end_loot_cycle()
+                        print("[LOOT] Ciclo finalizado (EventBus - containers fechados)")
+                    reset_loot_cycle_flags()
+            else:
+                # FALLBACK: Detecção via memória (quando sniffer indisponível)
+                if loot_container_was_opened_memory and not state.has_open_loot:
+                    if state.is_processing_loot:
+                        # Ativa spear pickup pendente antes de finalizar loot
+                        if BOT_SETTINGS.get('spear_picker_enabled', False):
+                            state.set_spear_pickup_pending(True)
+                            print("[LOOT] Spear pickup pendente após loot")
+                        state.end_loot_cycle()
+                        print("[LOOT] Ciclo finalizado (memory scan)")
+                    loot_container_was_opened_memory = False
+            # ============================================================
+
+            # ===== SAFETY NET: Verifica ciclo travado =====
+            check_stuck_loot_cycle()
+            # ==============================================
+
             # 2. Stacker periódico (a cada 5 segundos)
             # Só roda se NÃO estiver em movimento e sem conflitos
+            # Usa detecção de loot baseada em eventos se disponível
+            loot_open = has_open_loot_containers() if use_events else state.has_open_loot
             can_stack = (
                 current_time - last_stack_time >= STACK_INTERVAL and
                 # not is_moving and               # Não está andando
-                not state.has_open_loot and     # Não está processando loot
+                not loot_open and               # Não está processando loot
                 not state.is_runemaking         # Não está fazendo runa
             )
             # Nota: OK stackar em combate (não conflita com ataques)
@@ -3158,6 +3365,7 @@ def on_reload():
 def on_close():
     print("Encerrando bot e threads...")
     state.stop()
+    stop_sniffer()  # Para o sniffer de pacotes
     clear_player_name_cache()
 
     try:
@@ -3578,6 +3786,12 @@ if __name__ == "__main__":
     app.after(1000, attach_window)
     app.protocol("WM_DELETE_WINDOW", on_close)
     
+    # Iniciar Sniffer de Pacotes (se habilitado)
+    if SNIFFER_AVAILABLE and getattr(config, 'SNIFFER_ENABLED', False):
+        server_ip = getattr(config, 'SNIFFER_SERVER_IP', '135.148.27.135')
+        log(f"🔌 Iniciando Sniffer de Pacotes ({server_ip})...")
+        start_sniffer(server_ip, PROCESS_NAME)
+
     # Iniciar Threads
     threading.Thread(target=start_trainer_thread, daemon=True).start()
     threading.Thread(target=start_alarm_thread, daemon=True).start()
@@ -3595,7 +3809,14 @@ if __name__ == "__main__":
     threading.Thread(target=start_spear_picker_thread, daemon=True).start()
 
     update_stats_visibility()
-    
+
+    # Inicializar Debug Monitor
+    init_debug_monitor(app)
+
+    # Abrir Debug Monitor automaticamente se habilitado
+    if getattr(config, 'DEBUG_BOT_STATE', False):
+        app.after(500, show_debug_monitor)  # Delay de 500ms para GUI estabilizar
+
     # Iniciar loop de atualização do minimap
     app.after(1000, update_minimap_loop)
     

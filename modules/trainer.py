@@ -14,7 +14,7 @@ from database.creature_outfits import is_humanoid_creature
 
 # CORREÇÃO: Importar scan_containers do local original (auto_loot.py)
 from modules.auto_loot import scan_containers
-from core.player_core import get_connected_char_name
+from core.player_core import get_connected_char_name, get_player_id
 from core.bot_state import state
 from core.config_utils import make_config_getter
 from core.map_analyzer import MapAnalyzer
@@ -313,6 +313,13 @@ def get_my_char_name(pm, base_addr):
         name = get_connected_char_name(pm, base_addr)
         if name:
             state.char_name = name
+            # Também setar o char_id
+            try:
+                player_id = get_player_id(pm, base_addr)
+                if player_id and player_id > 0:
+                    state.char_id = player_id
+            except:
+                pass
     return state.char_name
 
 def open_corpse_via_packet(pm, base_addr, target_data, player_id, log_func=print, packet=None):
@@ -558,6 +565,10 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
     dying_creature_data = None    # Stores creature data during DYING phase
     death_timestamp = None        # When creature entered DYING state
 
+    # Follow State Tracking (Spear Picker Integration)
+    is_currently_following = False
+    follow_target_id = 0
+
     # Será inicializado dentro do loop com debug_mode
     mapper = None
     analyzer = None
@@ -611,6 +622,10 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
         ignore_first = get_cfg('ignore_first', False)
         ks_enabled = get_cfg('ks_prevention_enabled', KS_PREVENTION_ENABLED)
 
+        # Spear Picker Integration - Follow before attack quando range > 1
+        spear_picker_enabled = get_cfg('spear_picker_enabled', False)
+        follow_before_attack = spear_picker_enabled and trigger_range > 1
+
         # Log de configuração anti-KS (apenas primeira iteração)
         if debug_mode and mapper is None:
             log("="*70)
@@ -621,6 +636,17 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                 log(f"  HP Loss Threshold: {KS_HP_LOSS_THRESHOLD}%")
                 log(f"  History Duration: {KS_HISTORY_DURATION}s")
                 log(f"  Detection: Distance comparison + HP tracking")
+            log("="*70)
+
+            # Log de configuração Follow-Before-Attack
+            log("="*70)
+            log("[TRAINER] Configuração Follow-Before-Attack (Spear Picker)")
+            log("="*70)
+            log(f"  Spear Picker Enabled: {spear_picker_enabled}")
+            log(f"  Trigger Range: {trigger_range}")
+            log(f"  Follow Before Attack: {follow_before_attack}")
+            if follow_before_attack:
+                log(f"  Modo: FOLLOW quando dist > 1, ATTACK quando dist <= 1")
             log("="*70)
 
         # Inicializa componentes de pathfinding na primeira iteração com debug_mode
@@ -705,6 +731,7 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                         if debug_mode:
                             log(f"⚠️ {dying_creature_data['name']} reviveu (HP={dying_creature.hp_percent}%) - abortando loot")
                         state.end_loot_cycle()
+                        print(f"⚠️ Loot cycle abortado: {dying_creature_data['name']} reviveu")
                         death_state = DeathState.ALIVE
                         dying_creature_data = None
                         death_timestamp = None
@@ -770,85 +797,92 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                 rel_y = cy - my_y
                 dist_sqm = max(abs(rel_x), abs(rel_y))
 
+                # ===== BLACKSQUARE EXCEPTION (criatura atacando player) =====
+                # Criaturas que estão nos atacando SEMPRE são candidatos válidos,
+                # independente de acessibilidade ou KS prevention.
+                is_attacking_me = creature.is_attacking_player(BLACKSQUARE_THRESHOLD_MS)
+
                 # DEBUG: Log antes de verificar acessibilidade
                 if debug_mode:
-                    print(f"   📍 Checking {name} (ID:{c_id}) at ({cx},{cy}) | Rel:({rel_x},{rel_y}) Dist:{dist_sqm}")
+                    print(f"   📍 Checking {name} (ID:{c_id}) at ({cx},{cy}) | Rel:({rel_x},{rel_y}) Dist:{dist_sqm} | Attacking:{is_attacking_me}")
 
-                # SEMPRE verificar acessibilidade com A*, exceto se dist == 0 (mesmo tile)
-                if dist_sqm == 0:
-                    # Mesmo tile que o player - sempre acessível (não deveria acontecer)
-                    if debug_mode:
-                        print(f"      ⚠️ Monstro no mesmo tile (dist=0)")
-                else:
-                    # Pergunta ao A*: "Consigo dar o primeiro passo em direção a esse destino?"
-                    next_step = walker.get_next_step(rel_x, rel_y, activate_fallback=False)
-
-                    # Se next_step for None, o caminho está bloqueado (parede ou outro monstro)
-                    if next_step is None:
-                        is_reachable = False
+                # Pula check de acessibilidade se criatura está nos atacando
+                if not is_attacking_me:
+                    # SEMPRE verificar acessibilidade com A*, exceto se dist == 0 (mesmo tile)
+                    if dist_sqm == 0:
+                        # Mesmo tile que o player - sempre acessível (não deveria acontecer)
                         if debug_mode:
-                            print(f"      ❌ INACESSÍVEL: {name} (A* retornou None)")
-                        continue
+                            print(f"      ⚠️ Monstro no mesmo tile (dist=0)")
                     else:
-                        if debug_mode:
-                            print(f"      ✅ ACESSÍVEL: Next step = {next_step}")
+                        # Pergunta ao A*: "Consigo dar o primeiro passo em direção a esse destino?"
+                        next_step = walker.get_next_step(rel_x, rel_y, activate_fallback=False)
+
+                        # Se next_step for None, o caminho está bloqueado (parede ou outro monstro)
+                        if next_step is None:
+                            is_reachable = False
+                            if debug_mode:
+                                print(f"      ❌ INACESSÍVEL: {name} (A* retornou None)")
+                            continue
+                        else:
+                            if debug_mode:
+                                print(f"      ✅ ACESSÍVEL: Next step = {next_step}")
+                else:
+                    if debug_mode:
+                        print(f"      ⚡ BYPASS: Criatura nos atacando - ignorando check de acessibilidade")
 
                 # Verifica KS prevention antes de adicionar aos candidatos
                 skip_ks = False
 
-                if ks_enabled:
-                    # BLACKSQUARE EXCEPTION: Se a criatura está nos atacando, ignorar KS check
-                    # Criatura que ataca o bot "pertence" a nós, independente de proximidade de outros players
-                    if creature.is_attacking_player(BLACKSQUARE_THRESHOLD_MS):
-                        if debug_mode:
-                            print(f"\n[KS CHECK] ✅ BYPASS: {name} está nos atacando (blacksquare={creature.blacksquare})")
-                        # skip_ks permanece False - é nosso alvo legítimo
-                    else:
-                        # KS check normal via engagement detector
-                        # Log pré-KS check
-                        if debug_mode:
-                            print(f"\n[KS CHECK] Avaliando {name} (ID:{c_id})")
-                            print(f"[KS CHECK]   Posição: ({cx}, {cy}) | Rel: ({rel_x}, {rel_y})")
-                            print(f"[KS CHECK]   HP: {hp}%")
-                            print(f"[KS CHECK]   Blacksquare: {creature.blacksquare}")
-                            print(f"[KS CHECK]   Meu Target Atual: {current_target_id}")
-                            print(f"[KS CHECK]   Entidades Visíveis: {len(all_visible_entities)}")
+                # KS check: só executa se KS habilitado E criatura NÃO está nos atacando
+                # (is_attacking_me já foi calculado antes do A* check)
+                if ks_enabled and not is_attacking_me:
+                    # KS check normal via engagement detector
+                    # Log pré-KS check
+                    if debug_mode:
+                        print(f"\n[KS CHECK] Avaliando {name} (ID:{c_id})")
+                        print(f"[KS CHECK]   Posição: ({cx}, {cy}) | Rel: ({rel_x}, {rel_y})")
+                        print(f"[KS CHECK]   HP: {hp}%")
+                        print(f"[KS CHECK]   Blacksquare: {creature.blacksquare}")
+                        print(f"[KS CHECK]   Meu Target Atual: {current_target_id}")
+                        print(f"[KS CHECK]   Entidades Visíveis: {len(all_visible_entities)}")
 
-                            if len(all_visible_entities) > 0:
-                                print(f"[KS CHECK]   Lista de Entidades:")
-                                for idx, ent in enumerate(all_visible_entities):
-                                    ent_dist = max(abs(ent['abs_x'] - my_x), abs(ent['abs_y'] - my_y))
-                                    is_player_guess = not any(t in ent['name'] for t in targets_list)
-                                    entity_type = "PLAYER?" if is_player_guess else "CREATURE"
-                                    print(f"    [{idx:2d}] {ent['name']:25s} | "
-                                          f"ID:{ent['id']:6d} | "
-                                          f"Pos:({ent['abs_x']:5d},{ent['abs_y']:5d}) | "
-                                          f"Dist:{ent_dist:2d} SQM | "
-                                          f"HP:{ent['hp']:3d}% | "
-                                          f"Type:{entity_type}")
+                        if len(all_visible_entities) > 0:
+                            print(f"[KS CHECK]   Lista de Entidades:")
+                            for idx, ent in enumerate(all_visible_entities):
+                                ent_dist = max(abs(ent['abs_x'] - my_x), abs(ent['abs_y'] - my_y))
+                                is_player_guess = not any(t in ent['name'] for t in targets_list)
+                                entity_type = "PLAYER?" if is_player_guess else "CREATURE"
+                                print(f"    [{idx:2d}] {ent['name']:25s} | "
+                                      f"ID:{ent['id']:6d} | "
+                                      f"Pos:({ent['abs_x']:5d},{ent['abs_y']:5d}) | "
+                                      f"Dist:{ent_dist:2d} SQM | "
+                                      f"HP:{ent['hp']:3d}% | "
+                                      f"Type:{entity_type}")
 
-                        is_engaged, ks_reason = engagement_detector.is_engaged_with_other(
-                            creature_to_entity_dict(creature),
-                            current_name,
-                            (my_x, my_y),
-                            all_visible_entities,
-                            current_target_id,
-                            targets_list,
-                            walker=walker,
-                            attack_range=MELEE_RANGE,
-                            debug=debug_mode,
-                            log_func=print
-                        )
+                    is_engaged, ks_reason = engagement_detector.is_engaged_with_other(
+                        creature_to_entity_dict(creature),
+                        current_name,
+                        (my_x, my_y),
+                        all_visible_entities,
+                        current_target_id,
+                        targets_list,
+                        walker=walker,
+                        attack_range=MELEE_RANGE,
+                        debug=debug_mode,
+                        log_func=print
+                    )
 
-                        # Log pós-KS check
-                        if debug_mode:
-                            if is_engaged:
-                                print(f"[KS CHECK]   Resultado: ❌ SKIP - {ks_reason}\n")
-                            else:
-                                print(f"[KS CHECK]   Resultado: ✅ PASS - Sem engagement detectado\n")
-
+                    # Log pós-KS check
+                    if debug_mode:
                         if is_engaged:
-                            skip_ks = True
+                            print(f"[KS CHECK]   Resultado: ❌ SKIP - {ks_reason}\n")
+                        else:
+                            print(f"[KS CHECK]   Resultado: ✅ PASS - Sem engagement detectado\n")
+
+                    if is_engaged:
+                        skip_ks = True
+                elif is_attacking_me and debug_mode:
+                    print(f"\n[KS CHECK] ✅ BYPASS: {name} está nos atacando - ignorando KS check")
 
                 if not skip_ks:
                     if debug_mode:
@@ -962,6 +996,33 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                                 if debug_mode:
                                     log(f"✅ Target {target_data['name']} está acessível novamente")
                                 became_unreachable_time = None
+
+                    # === TRANSIÇÃO FOLLOW → ATTACK ===
+                    # Quando seguindo criatura e ela chega a distância <= 1, troca para attack
+                    if is_currently_following and current_target_id == follow_target_id:
+                        rel_x = target_data["abs_x"] - my_x
+                        rel_y = target_data["abs_y"] - my_y
+                        dist_now = max(abs(rel_x), abs(rel_y))
+
+                        if debug_mode:
+                            print(f"[FOLLOW-DEBUG] Monitorando follow: {target_data['name']}")
+                            print(f"[FOLLOW-DEBUG]   Distância atual: {dist_now} tiles (rel_x={rel_x}, rel_y={rel_y})")
+                            print(f"[FOLLOW-DEBUG]   Transição para attack em: dist <= 1")
+
+                        if dist_now <= 1:
+                            log(f"⚔️ TRANSIÇÃO: Follow → Attack ({target_data['name']})")
+                            set_status(f"atacando {target_data['name']}")
+                            packet.attack(current_target_id)
+
+                            # Para estado de follow
+                            state.stop_follow()
+                            is_currently_following = False
+                            follow_target_id = 0
+
+                            if debug_mode:
+                                print(f"[FOLLOW-DEBUG] ✓ TRANSIÇÃO COMPLETA: Follow → Attack")
+                                print(f"[FOLLOW-DEBUG]   Pacote ATTACK enviado (0xA1)")
+                                print(f"[FOLLOW-DEBUG]   state.is_following={state.is_following}")
 
                     # === LÓGICA EXISTENTE DE ATUALIZAÇÃO DO MONITOR ===
                     next_attack_time = 0
@@ -1125,10 +1186,20 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                         # hp=0 but still visible - enter DYING state, wait for despawn
                         log(f"☠️ {last_target_data['name']} morto mas visível (hp=0, vis=1) - aguardando despawn")
 
+                        # Para follow se estava seguindo (criatura morreu)
+                        if is_currently_following:
+                            state.stop_follow()
+                            is_currently_following = False
+                            follow_target_id = 0
+                            if debug_mode:
+                                print(f"[FOLLOW-DEBUG] ✓ Follow parado - criatura morreu ({last_target_data['name']})")
+                                print(f"[FOLLOW-DEBUG]   state.is_following={state.is_following}")
+
                         # ===== MARCA INÍCIO DO CICLO DE LOOT (APENAS SE AUTO_LOOT HABILITADO) =====
                         # Pausa spear picker IMEDIATAMENTE quando criatura morre (se auto_loot ativo)
                         if loot_enabled:
                             state.start_loot_cycle()
+                            print("DEBUG: Iniciando ciclo de loot (DYING phase).")
                         # ================================================================================
 
                         death_state = DeathState.DYING
@@ -1148,7 +1219,10 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                         if last_target_data and loot_enabled:
                             print("DEBUG: Tentando abrir corpo...")
                             # ===== MARCA INÍCIO DO CICLO DE LOOT =====
-                            state.start_loot_cycle()
+                            # Guard: só inicia se não estiver ativo (pode já ter sido iniciado em DYING)
+                            if not state.is_processing_loot:
+                                state.start_loot_cycle()
+                                print("DEBUG: Iniciando ciclo de loot (CORPSE_READY phase).")
                             # ==========================================
 
                             monster_name = last_target_data["name"]
@@ -1157,9 +1231,16 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                             if should_skip_loot:
                                 if debug_mode:
                                     log(f"⏭️ Pulando loot de {monster_name} (sem loot)")
-                                # ===== SEM LOOT - LIBERA SPEAR PICKER =====
+                                # ===== SEM LOOT - ATIVA SPEAR PICKUP E LIBERA =====
+                                if spear_picker_enabled:
+                                    state.set_spear_pickup_pending(True)
+                                    log("🔄 Spear pickup pendente (sem loot)")
+                                    if debug_mode:
+                                        print(f"[FOLLOW-DEBUG] ✓ Spear pickup ativado (sem loot)")
+                                        print(f"[FOLLOW-DEBUG]   state.is_spear_pickup_pending={state.is_spear_pickup_pending}")
                                 state.end_loot_cycle()
-                                # ==========================================
+                                print("DEBUG: Pulando loot - sem loot definido para essa criatura.")
+                                # ==================================================
                             else:
                                 # Corpse ready - wait and open
                                 gauss_wait(0.4, 25)  # 300-500ms humanized delay
@@ -1168,7 +1249,7 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                                     log(f"📂 Corpo aberto (Packet).")
 
                                     # NOVO: Polling ativo - aguarda container abrir ou timeout
-                                    timeout = 2.0  # 2 segundos máximo
+                                    timeout = 4.0  # 4 segundos (permite latência de rede)
                                     poll_interval = 0.1  # Verifica a cada 100ms
                                     elapsed = 0.0
 
@@ -1187,18 +1268,40 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                                     else:
                                         # Timeout atingido sem detectar container
                                         log(f"⚠️ Timeout ({timeout}s): Container de loot não abriu - finalizando ciclo")
+                                        # Ativa spear pickup antes de finalizar ciclo
+                                        if spear_picker_enabled:
+                                            state.set_spear_pickup_pending(True)
+                                            log("🔄 Spear pickup pendente (timeout loot)")
+                                            if debug_mode:
+                                                print(f"[FOLLOW-DEBUG] ✓ Spear pickup ativado (timeout loot)")
+                                                print(f"[FOLLOW-DEBUG]   state.is_spear_pickup_pending={state.is_spear_pickup_pending}")
                                         state.end_loot_cycle()
+                                        print("⚠️ Falha ao abrir corpo - ciclo de loot finalizado.")
                                 else:
-                                    # ===== FALHA AO ABRIR - LIBERA SPEAR PICKER =====
+                                    # ===== FALHA AO ABRIR - ATIVA SPEAR PICKUP E LIBERA =====
                                     print("DEBUG: Falha ao abrir corpo.")
+                                    if spear_picker_enabled:
+                                        state.set_spear_pickup_pending(True)
+                                        log("🔄 Spear pickup pendente (falha loot)")
+                                        if debug_mode:
+                                            print(f"[FOLLOW-DEBUG] ✓ Spear pickup ativado (falha abrir corpo)")
+                                            print(f"[FOLLOW-DEBUG]   state.is_spear_pickup_pending={state.is_spear_pickup_pending}")
                                     state.end_loot_cycle()
-                                    # ================================================
+                                    print("⚠️ Falha ao abrir corpo via packet - ciclo de loot finalizado.")
+                                    # ========================================================
 
                         elif last_target_data and not loot_enabled:
                             if debug_mode: log("ℹ️ Auto Loot desligado.")
-                            # ===== GARANTE QUE LOOT CYCLE NÃO FICA ATIVO =====
+                            # ===== ATIVA SPEAR PICKUP E GARANTE CLEANUP =====
+                            if spear_picker_enabled:
+                                state.set_spear_pickup_pending(True)
+                                log("🔄 Spear pickup pendente (loot desabilitado)")
+                                if debug_mode:
+                                    print(f"[FOLLOW-DEBUG] ✓ Spear pickup ativado (loot desabilitado)")
+                                    print(f"[FOLLOW-DEBUG]   state.is_spear_pickup_pending={state.is_spear_pickup_pending}")
                             # Se start_loot_cycle foi chamado no DYING, garante cleanup
                             state.end_loot_cycle()
+                            print("DEBUG: Auto Loot desligado - garantindo fim do ciclo de loot.")
                             # ================================================
 
                         # ===== RESET APÓS PROCESSAR LOOT =====
@@ -1271,9 +1374,45 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                             break
 
                         if best and best["id"] != current_target_id:
-                            log(f"⚔️ ATACANDO: {best['name']}")
-                            set_status(f"atacando {best['name']}")
-                            packet.attack(best["id"])
+                            # Calcula distância Chebyshev para o alvo
+                            dist_to_target = max(abs(best["dist_x"]), abs(best["dist_y"]))
+
+                            # DEBUG: Log da decisão follow/attack
+                            if debug_mode:
+                                print(f"[FOLLOW-DEBUG] Novo alvo: {best['name']} (id={best['id']})")
+                                print(f"[FOLLOW-DEBUG]   Distância: {dist_to_target} tiles")
+                                print(f"[FOLLOW-DEBUG]   follow_before_attack={follow_before_attack}")
+                                print(f"[FOLLOW-DEBUG]   Decisão: {'FOLLOW' if follow_before_attack and dist_to_target > 1 else 'ATTACK'}")
+
+                            # FOLLOW BEFORE ATTACK: Quando spear_picker + range > 1
+                            if follow_before_attack and dist_to_target > 1:
+                                # Usa FOLLOW em vez de attack
+                                log(f"🏃 SEGUINDO: {best['name']} (dist={dist_to_target})")
+                                set_status(f"seguindo {best['name']}")
+                                packet.follow(best["id"])
+
+                                # Atualiza estado de follow
+                                state.start_follow(best["id"])
+                                is_currently_following = True
+                                follow_target_id = best["id"]
+
+                                if debug_mode:
+                                    print(f"[FOLLOW-DEBUG] ✓ Pacote FOLLOW enviado (0xA2) para creature_id={best['id']}")
+                                    print(f"[FOLLOW-DEBUG]   state.is_following={state.is_following}")
+                                    print(f"[FOLLOW-DEBUG]   state.is_in_combat={state.is_in_combat}")
+                            else:
+                                # Attack normal (distância <= 1 ou follow desabilitado)
+                                log(f"⚔️ ATACANDO: {best['name']}")
+                                set_status(f"atacando {best['name']}")
+                                packet.attack(best["id"])
+
+                                # Para follow se estava seguindo
+                                if is_currently_following:
+                                    state.stop_follow()
+                                    if debug_mode:
+                                        print(f"[FOLLOW-DEBUG] ✓ Follow parado - trocou para ATTACK")
+                                    is_currently_following = False
+                                    follow_target_id = 0
 
                             current_target_id = best["id"]
                             current_monitored_id = best["id"]

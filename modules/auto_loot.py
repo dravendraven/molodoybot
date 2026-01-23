@@ -206,10 +206,7 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
         # Se não há loot para coletar, marca state como sem loot
         if not loot_containers:
             state.set_loot_state(False)
-            # ===== SE NÃO HÁ LOOT, GARANTE QUE CICLO TERMINA =====
-            # Caso trainer tenha setado start_loot_cycle() mas não há loot
-            state.end_loot_cycle()
-            # ======================================================
+            # NOTA: end_loot_cycle() é chamado pelo main.py quando loop finaliza
             return None
 
         # NOVO: Marca que há loot sendo processado
@@ -332,9 +329,9 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
     except Exception as e:
         print(f"[ERRO AUTO_LOOT] {e}")
     finally:
-        # ===== SEMPRE RESETA FLAGS, MESMO EM EXCEÇÃO =====
+        # ===== SEMPRE RESETA has_open_loot =====
+        # NOTA: end_loot_cycle() é chamado pelo main.py quando loop finaliza
         state.set_loot_state(False)
-        state.end_loot_cycle()  # ← Libera spear picker
-        # =================================================
+        # =======================================
 
     return None

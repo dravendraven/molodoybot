@@ -22,11 +22,15 @@ MY_PLAYER_NAME = "It is Molodoy"
 TELEGRAM_TOKEN = "7238077578:AAELH9lr8dLGJqOE5mZlXmYkpH4fIHDAGAM"
 TELEGRAM_CHAT_ID = ""  # Vazio por padrão - configurar no bot para receber alertas
 
+# Configuração do Sniffer de Pacotes
+SNIFFER_ENABLED = True         # Ativa captura de pacotes (requer Npcap + Admin)
+SNIFFER_SERVER_IP = "135.148.27.135"  # IP do servidor OT
+
 # ==============================================================================
 # GUI SETTINGS
 # ==============================================================================
 RELOAD_BUTTON = True  # Exibe botão de reload na interface (desabilitar para release)
-DEBUG_MODE = True    # Modo debug geral - ativa logs extras em diversos módulos
+DEBUG_MODE = False    # Modo debug geral - ativa logs extras em diversos módulos
 
 TARGET_MONSTERS = ["Rotworm", "Minotaur"]
 SAFE_CREATURES = ["Minotaur", "Rotworm", "Troll", "Wolf", "Deer", "Rabbit", "Spider", "Poison Spider", "Bug", "Rat", "Bear", "Wasp", "Orc"]
@@ -318,9 +322,9 @@ XRAY_TRAINER_DEBUG = False    # True = mostra overlay de debug do trainer
 # ==============================================================================
 # BOT STATE DEBUGGER HUD CONFIG
 # ==============================================================================
-# Exibe HUD com status do BotState no canto superior esquerdo da tela
-DEBUG_BOT_STATE = True                      # Master toggle - mostra/esconde HUD
-DEBUG_BOT_STATE_INTERVAL = 0.05              # Intervalo de atualização (segundos)
+# Exibe HUD com status do BotState no canto superior direito da tela
+DEBUG_BOT_STATE = False                      # Master toggle - mostra/esconde HUD
+DEBUG_BOT_STATE_INTERVAL = 0.1              # Intervalo de atualização (segundos) - 100ms = 10 FPS
 DEBUG_BOT_STATE_AUTO_DISABLE_ON_ALARM = False # Desabilitar HUD automaticamente com alarme
 
 # ==============================================================================

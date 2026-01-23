@@ -126,6 +126,14 @@ class ChatHandler:
         if message.sender.lower() == self.my_name.lower():
             return self._is_paused()
 
+        # Ignora mensagens de canais (trade, help, etc.) - só responde say/yell/whisper
+        # Mensagens de canal não são interações diretas com o player
+        valid_types = ("say", "yell", "whisper")
+        if message.msg_type not in valid_types:
+            # Log apenas em debug para não poluir
+            # print(f"[ChatHandler] Ignorando canal: {message.sender} ({message.msg_type})")
+            return self._is_paused()
+
         # Processa a mensagem
         self._process_message(message)
 
@@ -145,7 +153,8 @@ class ChatHandler:
         intent = self.analyzer.analyze(message, my_pos)
 
         # Log para debug
-        print(f"[ChatHandler] 💬 {message.sender}: \"{message.text}\"")
+        gm_indicator = " ⚠️ [GM]" if message.is_gm else ""
+        print(f"[ChatHandler] 💬{gm_indicator} {message.sender}: \"{message.text}\"")
         print(f"[ChatHandler]    → {intent.reasoning}")
 
         # Callback de mensagem recebida

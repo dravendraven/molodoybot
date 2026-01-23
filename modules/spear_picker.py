@@ -49,8 +49,16 @@ from utils.timing import gauss_wait
 SPEAR_ID = 3277          # ID da spear
 SPEAR_WEIGHT = 20.0      # Peso de cada spear em oz
 
+# Debug - ativa/desativa prints do modulo
+DEBUG_SPEAR = False
+
+def _log(msg):
+    """Log condicional baseado em DEBUG_SPEAR."""
+    if DEBUG_SPEAR:
+        print(msg)
+
 # Decremento de probabilidade por spear na mao (15% por spear)
-PICK_CHANCE_DECREMENT = 0.15
+PICK_CHANCE_DECREMENT = 0.25
 
 # Tiles a escanear (proprio tile + adjacentes incluindo diagonais)
 ADJACENT_TILES = [
@@ -64,7 +72,7 @@ ADJACENT_TILES = [
 CREATURE_ID = 99
 
 # Chance de dropar no tile do player (50%)
-DROP_ON_PLAYER_CHANCE = 0.5
+DROP_ON_PLAYER_CHANCE = 0.8
 
 # ========== DELAYS DE SCAN (RÁPIDOS, SEM HUMANIZAÇÃO) ==========
 # Estes delays controlam a velocidade dos loops de monitoramento
@@ -76,6 +84,15 @@ SCAN_TILES_DELAY = 0.5         # Delay entre scans de tiles ao redor (procurando
 REACTION_DELAY_MIN = 0.25      # Delay minimo de reacao ao detectar spear no chao (250ms base)
 MOVE_ITEM_DELAY_MIN = 0.50     # Delay minimo global apos QUALQUER move_item (250ms base)
 # Nota: Variacao gaussiana de ~30% sera aplicada sobre estes valores base
+
+# ========== CONSOLIDAÇÃO DE SPEARS (HUMANIZAÇÃO) ==========
+# Delay entre moves de consolidação (juntar spears em um tile)
+CONSOLIDATE_MOVE_DELAY_MIN = 0.25  # 250ms base + variação 30%
+# Chance de consolidar vs pegar uma por uma (humanização adicional)
+CONSOLIDATE_CHANCE = 0.85  # 85% das vezes consolida, 15% pega uma por uma
+# Maximo de spears a consolidar antes de puxar para a mao
+# Ex: se tem 4 spears no chao e MAX=2, consolida 2 e puxa, depois repete
+MAX_SPEARS_TO_CONSOLIDATE = 2
 
 
 class SpearPickerState:
@@ -234,6 +251,217 @@ def find_spear_on_adjacent_tiles(mapper, my_x, my_y, my_z):
     return None
 
 
+def find_all_spears_on_adjacent_tiles(mapper, my_x, my_y, my_z):
+    """
+    Procura TODAS as spears em tiles adjacentes ao player.
+
+    Diferente de find_spear_on_adjacent_tiles() que retorna apenas a primeira,
+    esta funcao retorna uma lista com todas as spears encontradas.
+
+    Returns:
+        Lista de dicts com informacoes de cada spear encontrada:
+        [{'abs_x', 'abs_y', 'z', 'rel_x', 'rel_y', 'stack_count', 'tile'}, ...]
+    """
+    spears = []
+    for rel_x, rel_y in ADJACENT_TILES:
+        tile = mapper.get_tile_visible(rel_x, rel_y)
+        if tile is None:
+            continue
+
+        # Procura spear no tile (do topo para baixo)
+        for i in range(len(tile.items) - 1, -1, -1):
+            if tile.items[i] == SPEAR_ID:
+                stack_count = get_stack_count(tile, i)
+                spears.append({
+                    'abs_x': my_x + rel_x,
+                    'abs_y': my_y + rel_y,
+                    'z': my_z,
+                    'rel_x': rel_x,
+                    'rel_y': rel_y,
+                    'stack_count': stack_count,
+                    'tile': tile
+                })
+                break  # So uma spear por tile (elas stackam)
+
+    return spears
+
+
+def consolidate_spears(mapper, analyzer, packet, pm, base_addr, player_id,
+                       spears_list, target_spear, my_x, my_y, my_z):
+    """
+    Consolida spears de multiplos tiles para o tile da target_spear.
+
+    Esta funcao implementa comportamento humanizado: um jogador real juntaria
+    as spears em um tile antes de pega-las, ao inves de pegar uma por uma.
+
+    IMPORTANTE: Antes de mover cada spear, verifica se ha itens bloqueando
+    (acima da spear no stack) e os move primeiro. Isso e necessario porque
+    spears so podem ser consolidadas quando estao no topo do stack.
+
+    Args:
+        mapper: MemoryMap instance
+        analyzer: MapAnalyzer instance
+        packet: PacketManager instance
+        pm: Pymem instance
+        base_addr: Endereco base do processo
+        player_id: ID do player
+        spears_list: Lista de spears encontradas (de find_all_spears_on_adjacent_tiles)
+        target_spear: Spear que sera o destino (as outras serao movidas para la)
+        my_x, my_y, my_z: Posicao absoluta do player
+
+    Returns:
+        int: Total de spears consolidadas no tile destino (0 se falhou/abortou)
+    """
+    target_x = target_spear['abs_x']
+    target_y = target_spear['abs_y']
+    target_z = target_spear['z']
+    target_rel_x = target_spear['rel_x']
+    target_rel_y = target_spear['rel_y']
+
+    total_consolidated = target_spear['stack_count']  # Ja conta as do tile destino
+
+    _log(f"[Spear Consolidate] Iniciando consolidacao para tile ({target_x},{target_y})")
+    _log(f"[Spear Consolidate] Spears iniciais no destino: {total_consolidated}, limite: {MAX_SPEARS_TO_CONSOLIDATE}")
+
+    for spear in spears_list:
+        # ===== VERIFICACAO DE LIMITE DE CONSOLIDACAO =====
+        # Nao consolida mais do que MAX_SPEARS_TO_CONSOLIDATE
+        if total_consolidated >= MAX_SPEARS_TO_CONSOLIDATE:
+            _log(f"[Spear Consolidate] Limite atingido ({total_consolidated}/{MAX_SPEARS_TO_CONSOLIDATE}) - parando consolidacao")
+            break
+        # ==================================================
+
+        # Pula o tile destino (nao move para si mesmo)
+        if spear['abs_x'] == target_x and spear['abs_y'] == target_y:
+            continue
+
+        # ===== VERIFICACAO CRITICA: Loot pode ter sido aberto =====
+        if state.is_processing_loot or state.has_open_loot:
+            _log("[Spear Consolidate] Loot foi aberto - abortando consolidacao")
+            return 0
+        # ===========================================================
+
+        # ===== VERIFICACAO: Player pode ter se movido =====
+        current_x, current_y, current_z = get_player_pos(pm, base_addr)
+        if current_x != my_x or current_y != my_y or current_z != my_z:
+            _log("[Spear Consolidate] Player se moveu - abortando consolidacao")
+            return 0
+        # ===================================================
+
+        # Re-le mapa para ter dados atualizados
+        if not mapper.read_full_map(player_id):
+            _log("[Spear Consolidate] Falha ao ler mapa - abortando")
+            return 0
+
+        # Verifica se spear ainda existe no tile de origem
+        source_tile = mapper.get_tile_visible(spear['rel_x'], spear['rel_y'])
+        if source_tile is None:
+            _log(f"[Spear Consolidate] Tile origem ({spear['rel_x']},{spear['rel_y']}) nao visivel - pulando")
+            continue
+
+        # Procura indice da spear no tile de origem
+        spear_list_index = -1
+        for i in range(len(source_tile.items) - 1, -1, -1):
+            if source_tile.items[i] == SPEAR_ID:
+                spear_list_index = i
+                break
+
+        if spear_list_index < 0:
+            _log(f"[Spear Consolidate] Spear sumiu do tile ({spear['abs_x']},{spear['abs_y']}) - pulando")
+            continue
+
+        # ========== MOVER BLOQUEADORES ACIMA DA SPEAR ==========
+        # Spears precisam estar no topo do stack para serem consolidadas
+        items_above = get_items_above_spear(source_tile, spear_list_index)
+
+        if items_above:
+            _log(f"[Spear Consolidate] {len(items_above)} bloqueadores acima da spear em ({spear['abs_x']},{spear['abs_y']})")
+
+            # Encontra tile para dropar bloqueadores (evitando tiles com spears)
+            drop_tile = find_drop_tile_avoiding_spears(
+                mapper, spear['rel_x'], spear['rel_y'], my_x, my_y, my_z, spears_list
+            )
+            if drop_tile is None:
+                _log(f"[Spear Consolidate] Nao encontrou tile para mover bloqueadores - pulando spear")
+                continue
+
+            drop_x, drop_y, drop_z = drop_tile
+            _log(f"[Spear Consolidate] Dropando bloqueadores em ({drop_x},{drop_y}) - evitando tiles com spears")
+
+            # Move cada bloqueador
+            for idx_move, (item_id, list_idx) in enumerate(items_above):
+                # Verificacao de loot antes de cada move
+                if state.is_processing_loot or state.has_open_loot:
+                    _log("[Spear Consolidate] Loot aberto durante move de bloqueador - abortando")
+                    return 0
+
+                # Calcula stack_pos atual do bloqueador
+                blocker_stack_pos = analyzer.get_item_stackpos(spear['rel_x'], spear['rel_y'], item_id)
+                if blocker_stack_pos < 0:
+                    _log(f"[Spear Consolidate] Bloqueador ID={item_id} nao encontrado - pulando")
+                    continue
+
+                from_pos = get_ground_pos(spear['abs_x'], spear['abs_y'], spear['z'])
+                to_pos = get_ground_pos(drop_x, drop_y, drop_z)
+
+                _log(f"[Spear Consolidate] Movendo bloqueador ID={item_id} para ({drop_x},{drop_y})")
+
+                with PacketMutex("spear_consolidate"):
+                    packet.move_item(from_pos, to_pos, item_id, 1, blocker_stack_pos, apply_delay=True)
+
+                # Re-le mapa apos mover bloqueador
+                mapper.read_full_map(player_id)
+
+                # Delay entre moves de bloqueadores
+                if idx_move < len(items_above) - 1:
+                    gauss_wait(CONSOLIDATE_MOVE_DELAY_MIN, 30)
+
+            # Delay apos mover todos os bloqueadores antes de mover a spear
+            gauss_wait(CONSOLIDATE_MOVE_DELAY_MIN, 30)
+
+            # Re-le mapa e verifica se spear ainda existe
+            if not mapper.read_full_map(player_id):
+                _log("[Spear Consolidate] Falha ao ler mapa apos mover bloqueadores")
+                continue
+
+            source_tile = mapper.get_tile_visible(spear['rel_x'], spear['rel_y'])
+            if source_tile is None:
+                continue
+
+        # ========== MOVER SPEAR PARA TILE DESTINO ==========
+        # Calcula stack_pos atual da spear (pode ter mudado apos mover bloqueadores)
+        spear_stack_pos = analyzer.get_item_stackpos(spear['rel_x'], spear['rel_y'], SPEAR_ID)
+        if spear_stack_pos < 0:
+            _log(f"[Spear Consolidate] Nao encontrou stack_pos da spear apos mover bloqueadores - pulando")
+            continue
+
+        # Obtem count atual (pode ter mudado)
+        current_count = get_stack_count(source_tile, spear_stack_pos)
+
+        # Limita count para nao ultrapassar MAX_SPEARS_TO_CONSOLIDATE
+        space_left = MAX_SPEARS_TO_CONSOLIDATE - total_consolidated
+        if current_count > space_left:
+            current_count = space_left
+            _log(f"[Spear Consolidate] Limitando para {current_count} spear(s) (limite de consolidacao)")
+
+        # Move spear para tile destino
+        from_pos = get_ground_pos(spear['abs_x'], spear['abs_y'], spear['z'])
+        to_pos = get_ground_pos(target_x, target_y, target_z)
+
+        _log(f"[Spear Consolidate] Movendo {current_count} spear(s) de ({spear['abs_x']},{spear['abs_y']}) -> ({target_x},{target_y})")
+
+        with PacketMutex("spear_consolidate"):
+            packet.move_item(from_pos, to_pos, SPEAR_ID, current_count, spear_stack_pos, apply_delay=True)
+
+        total_consolidated += current_count
+
+        # Delay humanizado entre moves de consolidacao
+        gauss_wait(CONSOLIDATE_MOVE_DELAY_MIN, 30)
+
+    _log(f"[Spear Consolidate] Consolidacao completa. Total no tile destino: {total_consolidated}")
+    return total_consolidated
+
+
 def find_drop_tile(mapper, spear_rel_x, spear_rel_y, my_x, my_y, my_z):
     """
     Encontra um tile WALKABLE para mover itens que estao acima da spear.
@@ -297,6 +525,80 @@ def find_drop_tile(mapper, spear_rel_x, spear_rel_y, my_x, my_y, my_z):
         return (my_x + check_rel_x, my_y + check_rel_y, my_z)
 
     # Fallback: tile do player
+    return (my_x, my_y, my_z)
+
+
+def find_drop_tile_avoiding_spears(mapper, spear_rel_x, spear_rel_y, my_x, my_y, my_z, spears_list):
+    """
+    Encontra tile para dropar bloqueadores durante consolidacao de spears.
+
+    IMPORTANTE: Esta funcao e especifica para consolidacao.
+    - Preferencia ABSOLUTA pelo tile do player (sempre primeiro)
+    - NUNCA retorna um tile que contenha spear (para nao atrapalhar consolidacao)
+
+    Args:
+        mapper: MemoryMap instance
+        spear_rel_x, spear_rel_y: Posicao relativa do tile com a spear
+        my_x, my_y, my_z: Posicao absoluta do player
+        spears_list: Lista de spears sendo consolidadas (para evitar esses tiles)
+
+    Returns:
+        Tuple (abs_x, abs_y, z) ou None se nao encontrar
+    """
+    analyzer = MapAnalyzer(mapper)
+
+    # Cria set de tiles com spears para lookup rapido
+    spear_tiles = set()
+    for s in spears_list:
+        spear_tiles.add((s['abs_x'], s['abs_y']))
+
+    # PREFERENCIA 1: Tile do player (se nao tiver spear)
+    if (my_x, my_y) not in spear_tiles:
+        return (my_x, my_y, my_z)
+
+    # PREFERENCIA 2: Tiles adjacentes ao player que NAO tenham spear
+    adjacent_options = list(ADJACENT_TILES)
+    random.shuffle(adjacent_options)
+
+    for dx, dy in adjacent_options:
+        check_rel_x = spear_rel_x + dx
+        check_rel_y = spear_rel_y + dy
+
+        # Pula o tile da spear de origem
+        if dx == 0 and dy == 0:
+            continue
+
+        # Verifica se esta no range visivel
+        if abs(check_rel_x) > 7 or abs(check_rel_y) > 7:
+            continue
+
+        # Verifica se tile e adjacente ao player (distancia <= 1)
+        player_dist = max(abs(check_rel_x), abs(check_rel_y))
+        if player_dist > 1:
+            continue
+
+        # Calcula posicao absoluta do tile candidato
+        candidate_x = my_x + check_rel_x
+        candidate_y = my_y + check_rel_y
+
+        # CRITICO: Nao dropar em tile que tem spear
+        if (candidate_x, candidate_y) in spear_tiles:
+            continue
+
+        # Verifica se tile existe
+        tile = mapper.get_tile_visible(check_rel_x, check_rel_y)
+        if tile is None or len(tile.items) == 0:
+            continue
+
+        # Verifica se tile e walkable
+        props = analyzer.get_tile_properties(check_rel_x, check_rel_y)
+        if not props['walkable']:
+            continue
+
+        return (candidate_x, candidate_y, my_z)
+
+    # Fallback: tile do player mesmo que tenha spear (ultimo recurso)
+    # Isso so acontece se TODOS os tiles adjacentes tiverem spear
     return (my_x, my_y, my_z)
 
 
@@ -403,11 +705,11 @@ def monitor_hand_loop(pm, base_addr, check_running, get_enabled, get_max_spears,
         get_max_spears: Funcao que retorna o maximo de spears configurado
         shared_state: Instancia de SpearPickerState (estado compartilhado)
     """
-    print("[Spear Monitor] Thread iniciada")
+    _log("[Spear Monitor] Thread iniciada")
 
     while True:
         if check_running and not check_running():
-            print("[Spear Monitor] Thread encerrada")
+            _log("[Spear Monitor] Thread encerrada")
             return
 
         if not get_enabled():
@@ -427,13 +729,13 @@ def monitor_hand_loop(pm, base_addr, check_running, get_enabled, get_max_spears,
             attack_detected = shared_state.update_from_hand_scan(current_spears, max_spears)
 
             if attack_detected:
-                print(f"[Spear Monitor] Ataque detectado! Spears: {current_spears}")
+                _log(f"[Spear Monitor] Ataque detectado! Spears: {current_spears}")
 
             # Delay fixo de scan (sem humanização)
             time.sleep(SCAN_HAND_DELAY)
 
         except Exception as e:
-            print(f"[Spear Monitor] Erro: {e}")
+            _log(f"[Spear Monitor] Erro: {e}")
             time.sleep(1)
 
 
@@ -454,15 +756,19 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
         get_enabled: Funcao que retorna True/False se modulo esta ativo
         shared_state: Instancia de SpearPickerState (estado compartilhado)
     """
-    print("[Spear Action] Thread iniciada")
+    _log("[Spear Action] Thread iniciada")
 
     mapper = MemoryMap(pm, base_addr)
     packet = PacketManager(pm, base_addr)
     analyzer = MapAnalyzer(mapper)  # Para usar get_item_stackpos() e get_top_movable_stackpos()
 
+    # Timeout para ciclo prioritário (evita cavebot pausado indefinidamente)
+    PRIORITY_PICKUP_TIMEOUT = 5.0  # 5 segundos
+    priority_pickup_start_time = None
+
     while True:
         if check_running and not check_running():
-            print("[Spear Action] Thread encerrada")
+            _log("[Spear Action] Thread encerrada")
             return
 
         if not get_enabled():
@@ -481,19 +787,41 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
                 time.sleep(SCAN_TILES_DELAY)
                 continue
 
-            # ===== VERIFICAÇÃO DE LOOT PRIORITY =====
-            # Pausa spear picker durante ciclo de loot (CORPSE_READY → fim)
-            # Previne conflitos durante abertura do corpo e processamento de loot
-            if state.is_processing_loot:
-                time.sleep(SCAN_TILES_DELAY)  # 200ms
-                continue
+            # ===== VERIFICAÇÃO DE LOOT PRIORITY / PICKUP PENDENTE =====
+            # Permite pickup quando is_spear_pickup_pending (ciclo pós-loot)
+            is_priority_pickup = state.is_spear_pickup_pending
 
-            # NOVO: Verificação adicional - previne race condition
-            # Se container está aberto, aguarda mesmo que is_processing_loot seja False
-            if state.has_open_loot:
-                time.sleep(SCAN_TILES_DELAY)
-                continue
-            # ==========================================
+            # Timeout para ciclo prioritário - evita cavebot pausado indefinidamente
+            if is_priority_pickup:
+                if priority_pickup_start_time is None:
+                    priority_pickup_start_time = time.time()
+                    _log(f"[Spear Action] PRIORITY PICKUP iniciado - timeout em {PRIORITY_PICKUP_TIMEOUT}s")
+                else:
+                    elapsed = time.time() - priority_pickup_start_time
+                    if elapsed > PRIORITY_PICKUP_TIMEOUT:
+                        _log(f"[Spear Action] Timeout do ciclo prioritário ({PRIORITY_PICKUP_TIMEOUT}s) - liberando cavebot")
+                        _log(f"[Spear Action]   state.is_spear_pickup_pending será setado para False")
+                        state.set_spear_pickup_pending(False)
+                        priority_pickup_start_time = None
+                        continue
+            else:
+                priority_pickup_start_time = None  # Reset quando não está em modo prioritário
+
+            if not is_priority_pickup:
+                # Pausa spear picker durante ciclo de loot (CORPSE_READY → fim)
+                # Previne conflitos durante abertura do corpo e processamento de loot
+                if state.is_processing_loot:
+                    time.sleep(SCAN_TILES_DELAY)  # 200ms
+                    continue
+
+                # Verificação adicional - previne race condition
+                # Se container está aberto, aguarda mesmo que is_processing_loot seja False
+                if state.has_open_loot:
+                    time.sleep(SCAN_TILES_DELAY)
+                    continue
+            else:
+                _log("[Spear Action] PRIORITY PICKUP: Executando ciclo pós-loot")
+            # ============================================================
 
             # === PRÉ-CONDIÇÕES ===
             my_x, my_y, my_z = get_player_pos(pm, base_addr)
@@ -513,13 +841,19 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
             max_spears = state_data['max_spears']
 
             pick_chance = calculate_pick_probability(current_spears, max_spears)
+
+            # OVERRIDE: Fora de combate, sempre pega spear (100% chance)
+            if not state.is_in_combat:
+                pick_chance = 1.0
+                #print(f"[Spear Action] Fora de combate - forçando pick_chance=100%")
+
             roll = random.random()
             if roll > pick_chance:
-                print(f"[Spear Action] Nao vai pegar (prob={pick_chance:.1%}, roll={roll:.1%})")
+                #print(f"[Spear Action] Nao vai pegar (prob={pick_chance:.1%}, roll={roll:.1%})")
                 time.sleep(SCAN_TILES_DELAY)
                 continue
 
-            print(f"[Spear Action] Vai pegar spear (prob={pick_chance:.1%}, roll={roll:.1%}) - spears={current_spears}/{max_spears}")
+            #print(f"[Spear Action] Vai pegar spear (prob={pick_chance:.1%}, roll={roll:.1%}) - spears={current_spears}/{max_spears}")
 
             # === BUSCA SPEAR NO CHÃO ===
             player_id = pm.read_int(base_addr + OFFSET_PLAYER_ID)
@@ -527,6 +861,62 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
                 time.sleep(0.5)
                 continue
 
+            # ========== NOVA LOGICA: BUSCA TODAS AS SPEARS ==========
+            # Usa find_all para decidir se deve consolidar
+            all_spears = find_all_spears_on_adjacent_tiles(mapper, my_x, my_y, my_z)
+
+            if not all_spears:
+                time.sleep(SCAN_TILES_DELAY)
+                continue
+
+            total_on_ground = sum(s['stack_count'] for s in all_spears)
+            spears_needed = max_spears - current_spears
+
+            # ========== DECISAO: CONSOLIDAR OU PEGAR DIRETO? ==========
+            # Condições para consolidar:
+            # 1. Múltiplas spears em tiles diferentes (len > 1)
+            # 2. Precisa de mais de 1 spear
+            # 3. Há mais de 1 spear no total no chão
+            # 4. Chance de consolidar (85% humanizado)
+            should_consolidate = (
+                len(all_spears) > 1 and
+                spears_needed > 1 and
+                total_on_ground > 1 and
+                random.random() < CONSOLIDATE_CHANCE
+            )
+
+            if should_consolidate:
+                _log(f"[Spear Action] CONSOLIDANDO: {len(all_spears)} tiles com spears, total={total_on_ground}, precisa={spears_needed}")
+
+                # Escolhe tile destino (prefere tile do player se houver spear la)
+                target_spear = None
+                for s in all_spears:
+                    if s['rel_x'] == 0 and s['rel_y'] == 0:  # Tile do player
+                        target_spear = s
+                        break
+                if target_spear is None:
+                    target_spear = all_spears[0]  # Primeiro encontrado
+
+                # Executa consolidação
+                consolidated = consolidate_spears(
+                    mapper, analyzer, packet, pm, base_addr, player_id,
+                    all_spears, target_spear, my_x, my_y, my_z
+                )
+
+                if consolidated == 0:
+                    _log("[Spear Action] Consolidacao falhou/abortou")
+                    time.sleep(SCAN_TILES_DELAY)
+                    continue
+
+                # Re-le mapa apos consolidacao
+                if not mapper.read_full_map(player_id):
+                    time.sleep(0.3)
+                    continue
+
+                # Atualiza posicao (pode ter se movido)
+                my_x, my_y, my_z = get_player_pos(pm, base_addr)
+
+            # Busca spear (agora deve estar consolidada se foi o caso)
             spear_location = find_spear_on_adjacent_tiles(mapper, my_x, my_y, my_z)
 
             if spear_location is None:
@@ -534,7 +924,7 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
                 continue
 
             pre_abs_x, pre_abs_y, _, _, pre_rel_x, pre_rel_y, _ = spear_location
-            print(f"[Spear Action] Detectou spear em tile ({pre_abs_x},{pre_abs_y}) rel=({pre_rel_x},{pre_rel_y})")
+            #print(f"[Spear Action] Detectou spear em tile ({pre_abs_x},{pre_abs_y}) rel=({pre_rel_x},{pre_rel_y})")
 
             # ========== DELAY DE REAÇÃO HUMANIZADO ==========
             # Simula tempo para "perceber" que tem spear no chão (min 250ms + variacao)
@@ -542,7 +932,7 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
 
             # ===== VERIFICAÇÃO CRÍTICA: Loot pode ter sido aberto durante delay =====
             if state.is_processing_loot:
-                print("[Spear Action] Loot foi aberto durante delay de reação - abortando")
+                _log("[Spear Action] Loot foi aberto durante delay de reação - abortando")
                 continue
             # ========================================================================
 
@@ -554,7 +944,7 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
             max_spears = state_data['max_spears']
 
             if current_spears >= max_spears:
-                print("[Spear Action] Ficou cheio durante delay de reacao")
+                _log("[Spear Action] Ficou cheio durante delay de reacao")
                 continue
 
             # Rele mapa
@@ -564,13 +954,13 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
 
             spear_location = find_spear_on_adjacent_tiles(mapper, my_x, my_y, my_z)
             if spear_location is None:
-                print("[Spear Action] Spear sumiu durante delay de reacao")
+                _log("[Spear Action] Spear sumiu durante delay de reacao")
                 continue
 
             abs_x, abs_y, z, spear_list_index, rel_x, rel_y, tile = spear_location
 
             # === DEBUG: Mostra todos os items no tile ===
-            print(f"[Spear Action] Tile ({abs_x}, {abs_y}, {z}) rel=({rel_x}, {rel_y}) - {len(tile.items)} items:")
+            #print(f"[Spear Action] Tile ({abs_x}, {abs_y}, {z}) rel=({rel_x}, {rel_y}) - {len(tile.items)} items:")
             first_movable = -1
             for idx, item_id in enumerate(tile.items):
                 data1 = 0
@@ -590,40 +980,40 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
                 elif item_id == CREATURE_ID:
                     marker = " (CREATURE)"
 
-                print(f"  [idx={idx}] ID={item_id} | {item_type} data1={data1} data2={data2} movable={can_move}{marker}")
+                #print(f"  [idx={idx}] ID={item_id} | {item_type} data1={data1} data2={data2} movable={can_move}{marker}")
 
-            print(f"[Spear Action] Spear em idx={spear_list_index}, primeiro_movable={first_movable}")
+            #print(f"[Spear Action] Spear em idx={spear_list_index}, primeiro_movable={first_movable}")
 
             # === VERIFICAR ITEMS ACIMA DA SPEAR ===
             items_above = get_items_above_spear(tile, spear_list_index)
             if items_above:
-                print(f"[Spear Action] {len(items_above)} items MOVEIS acima da spear:")
+                #print(f"[Spear Action] {len(items_above)} items MOVEIS acima da spear:")
                 for item_id, list_idx in items_above:
-                    print(f"  - ID={item_id} em idx={list_idx}")
+                    _log(f"  - ID={item_id} em idx={list_idx}")
             else:
-                print(f"[Spear Action] Nenhum item movel acima da spear (idx < {spear_list_index})")
+                _log(f"[Spear Action] Nenhum item movel acima da spear (idx < {spear_list_index})")
 
             # === MOVER BLOQUEADORES (se necessário) ===
             if items_above:
                 # ===== VERIFICAÇÃO DEFENSIVA: Loot pode ter sido aberto antes de find_drop_tile =====
                 if state.is_processing_loot:
-                    print("[Spear Action] Loot foi aberto antes de mover bloqueadores - abortando")
+                    _log("[Spear Action] Loot foi aberto antes de mover bloqueadores - abortando")
                     continue
                 # =====================================================================================
 
                 drop_tile = find_drop_tile(mapper, rel_x, rel_y, my_x, my_y, my_z)
 
                 if drop_tile is None:
-                    print("[Spear Action] Nao encontrou tile valido para mover items bloqueadores")
+                    _log("[Spear Action] Nao encontrou tile valido para mover items bloqueadores")
                     continue
 
                 drop_x, drop_y, drop_z = drop_tile
-                print(f"[Spear Action] Movendo {len(items_above)} items bloqueadores para tile drop=({drop_x}, {drop_y}, {drop_z})")
+                #print(f"[Spear Action] Movendo {len(items_above)} items bloqueadores para tile drop=({drop_x}, {drop_y}, {drop_z})")
 
                 for idx_move, (item_id, list_idx) in enumerate(items_above):
                     # ===== VERIFICAÇÃO CRÍTICA: Loot pode abrir durante delays entre moves =====
                     if state.is_processing_loot:
-                        print(f"[Spear Action] Loot foi aberto durante move #{idx_move} de bloqueadores - abortando")
+                        _log(f"[Spear Action] Loot foi aberto durante move #{idx_move} de bloqueadores - abortando")
                         continue
                     # ============================================================================
 
@@ -631,7 +1021,7 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
                     # (items_above contém itens com índice < spear = visualmente acima da spear)
                     blocker_stack_pos = analyzer.get_item_stackpos(rel_x, rel_y, item_id)
                     if blocker_stack_pos < 0:
-                        print(f"[Spear Action] Bloqueador ID={item_id} não encontrado - pulando")
+                        _log(f"[Spear Action] Bloqueador ID={item_id} não encontrado - pulando")
                         continue
 
                     from_pos = get_ground_pos(abs_x, abs_y, z)
@@ -640,7 +1030,7 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
                     with PacketMutex("spear_picker"):
                         packet.move_item(from_pos, to_pos, item_id, 1, blocker_stack_pos, apply_delay=True)
 
-                    print(f"[Spear Action] Moveu bloqueador ID={item_id} (stack_pos={blocker_stack_pos}) de ({abs_x},{abs_y},{z}) -> ({drop_x},{drop_y},{drop_z})")
+                    #print(f"[Spear Action] Moveu bloqueador ID={item_id} (stack_pos={blocker_stack_pos}) de ({abs_x},{abs_y},{z}) -> ({drop_x},{drop_y},{drop_z})")
 
                     # Re-lê o mapa para atualizar o estado do tile
                     mapper.read_full_map(player_id)
@@ -648,7 +1038,7 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
                     # ========== DELAY GLOBAL ENTRE MOVE_ITEMS ==========
                     if idx_move < len(items_above) - 1:
                         gauss_wait(MOVE_ITEM_DELAY_MIN, 30)
-                        print(f"[Spear Action] Delay global entre move_items: {MOVE_ITEM_DELAY_MIN}s base")
+                        _log(f"[Spear Action] Delay global entre move_items: {MOVE_ITEM_DELAY_MIN}s base")
 
                 # Rele mapa após mover bloqueadores
                 if not mapper.read_full_map(player_id):
@@ -657,20 +1047,20 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
 
                 # ========== DELAY GLOBAL APÓS MOVER BLOQUEADORES ==========
                 gauss_wait(MOVE_ITEM_DELAY_MIN, 30)
-                print(f"[Spear Action] Delay global após move_items antes de pegar spear")
+                _log(f"[Spear Action] Delay global após move_items antes de pegar spear")
 
                 # ===== VERIFICAÇÃO CRÍTICA: Loot pode ter sido aberto durante moves dos bloqueadores =====
                 if state.is_processing_loot:
-                    print("[Spear Action] Loot foi aberto durante move dos bloqueadores - abortando")
+                    _log("[Spear Action] Loot foi aberto durante move dos bloqueadores - abortando")
                     continue
                 # ================================================================================================
 
             # === CALCULA STACK_POS (usando nova função utilitária) ===
             spear_stack_pos = analyzer.get_item_stackpos(rel_x, rel_y, SPEAR_ID)
             if spear_stack_pos < 0:
-                print(f"[Spear Action] Spear não encontrada no tile após mover bloqueadores")
+                _log(f"[Spear Action] Spear não encontrada no tile após mover bloqueadores")
                 continue
-            print(f"[Spear Action] Stack_pos da spear: {spear_stack_pos}")
+            _log(f"[Spear Action] Stack_pos da spear: {spear_stack_pos}")
 
             # === CALCULA QUANTIDADE A PEGAR ===
             # Obtém tile atualizado para ler o count corretamente
@@ -682,14 +1072,14 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
             count_to_pick = min(spears_on_tile, cap_allows, space_left)
             count_to_pick = max(1, count_to_pick)
 
-            print(f"[Spear Action] Estado: cap={current_cap:.1f}oz, spears_na_mao={current_spears}/{max_spears}, spears_no_tile={spears_on_tile}")
-            print(f"[Spear Action] Limites: tile={spears_on_tile}, cap_permite={cap_allows}, falta_para_max={space_left}")
-            print(f"[Spear Action] Pegando count={count_to_pick} spear(s) com stack_pos={spear_stack_pos}")
+            #print(f"[Spear Action] Estado: cap={current_cap:.1f}oz, spears_na_mao={current_spears}/{max_spears}, spears_no_tile={spears_on_tile}")
+            #print(f"[Spear Action] Limites: tile={spears_on_tile}, cap_permite={cap_allows}, falta_para_max={space_left}")
+            #print(f"[Spear Action] Pegando count={count_to_pick} spear(s) com stack_pos={spear_stack_pos}")
 
             # === MOVE SPEAR PARA MÃO ===
             # ===== VERIFICAÇÃO FINAL: Loot pode ter sido aberto durante moves de bloqueadores =====
             if state.is_processing_loot:
-                print("[Spear Action] Loot foi aberto - abortando antes de pegar spear")
+                _log("[Spear Action] Loot foi aberto - abortando antes de pegar spear")
                 continue
             # =======================================================================================
 
@@ -697,7 +1087,7 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
             to_pos = get_inventory_pos(target_hand)
             hand_name = "direita" if target_hand == SLOT_RIGHT else "esquerda"
 
-            print(f"[Spear Action] move_item: from=({abs_x},{abs_y},{z}) to=hand_{target_hand}({hand_name}) id={SPEAR_ID} count={count_to_pick} stack_pos={spear_stack_pos}")
+            _log(f"[Spear Action] move_item: from=({abs_x},{abs_y},{z}) to=hand_{target_hand}({hand_name}) id={SPEAR_ID} count={count_to_pick} stack_pos={spear_stack_pos}")
 
             with PacketMutex("spear_picker"):
                 packet.move_item(from_pos, to_pos, SPEAR_ID, count_to_pick, spear_stack_pos, apply_delay=True)
@@ -705,14 +1095,25 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
             # Atualiza estado compartilhado (thread-safe)
             shared_state.update_after_pickup(count_to_pick)
 
-            print(f"[Spear Action] ✓ Pegou {count_to_pick} spear(s) do chao ({abs_x},{abs_y},{z}) -> mao {hand_name}")
+            _log(f"[Spear Action] ✓ Pegou {count_to_pick} spear(s) do chao ({abs_x},{abs_y},{z}) -> mao {hand_name}")
 
             # ========== DELAY GLOBAL APÓS PEGAR SPEAR ==========
             gauss_wait(MOVE_ITEM_DELAY_MIN, 30)
-            print(f"[Spear Action] Delay global após pegar spear na mão")
+            _log(f"[Spear Action] Delay global após pegar spear na mão")
+
+            # ===== LIMPA PENDING FLAG SE CICLO PRIORITÁRIO COMPLETO =====
+            if state.is_spear_pickup_pending:
+                new_state = shared_state.get_action_state()
+                _log(f"[Spear Action] Priority check: needs_spears={new_state['needs_spears']}, current={new_state['current_spears']}, max={new_state['max_spears']}")
+                if not new_state['needs_spears']:
+                    state.set_spear_pickup_pending(False)
+                    priority_pickup_start_time = None  # Reset timeout
+                    _log("[Spear Action] ✓ Ciclo prioritário COMPLETO - cavebot liberado")
+                    _log(f"[Spear Action]   state.is_spear_pickup_pending={state.is_spear_pickup_pending}")
+            # ============================================================
 
         except Exception as e:
-            print(f"[Spear Action] Erro: {e}")
+            _log(f"[Spear Action] Erro: {e}")
             time.sleep(1)
 
 
@@ -746,7 +1147,7 @@ def spear_picker_loop(pm, base_addr, check_running, get_enabled, get_max_spears=
         get_max_spears: Funcao que retorna o maximo de spears configurado
         log_func: Funcao de log (default: print)
     """
-    print("[SpearPicker] Iniciando sistema com 2 threads independentes")
+    _log("[SpearPicker] Iniciando sistema com 2 threads independentes")
 
     # Estado compartilhado entre threads (thread-safe)
     shared_state = SpearPickerState()
@@ -770,11 +1171,11 @@ def spear_picker_loop(pm, base_addr, check_running, get_enabled, get_max_spears=
     monitor_thread.start()
     action_thread.start()
 
-    print("[SpearPicker] Threads iniciadas: Monitor + Action")
+    _log("[SpearPicker] Threads iniciadas: Monitor + Action")
 
     # Aguarda threads finalizarem
     try:
         monitor_thread.join()
         action_thread.join()
     except KeyboardInterrupt:
-        print("[SpearPicker] Interrompido pelo usuário")
+        _log("[SpearPicker] Interrompido pelo usuário")

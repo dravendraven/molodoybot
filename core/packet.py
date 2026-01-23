@@ -28,6 +28,7 @@ FUNC_ADD_U16       = 0x4CB660
 # Opcodes de Ação
 OP_SAY    = 0x96
 OP_ATTACK = 0xA1
+OP_FOLLOW = 0xA2
 OP_MOVE   = 0x78
 OP_USE    = 0x82
 OP_USE_ON = 0x83
@@ -229,6 +230,28 @@ class PacketManager:
             self.pm.write_int(self.base_addr + target_ptr_offset, creature_id)
         except Exception as e:
             print(f"Erro ao definir Target visual: {e}")
+
+    def follow(self, creature_id):
+        """
+        Envia pacote de follow (0xA2) para seguir uma criatura.
+        Similar ao attack mas com opcode diferente e apenas 1 ID.
+
+        Args:
+            creature_id: ID da criatura a seguir
+        """
+        pb = PacketBuilder()
+        pb.add_call(FUNC_CREATE_PACKET, OP_FOLLOW)
+        pb.add_u32(creature_id)
+        pb.add_call(FUNC_SEND_PACKET, 1)
+
+        self.send_packet(pb.get_code(), PacketType.MOUSE)
+
+        # Atualiza o target visual no cliente (mesmo comportamento do attack)
+        try:
+            target_ptr_offset = 0x1C681C
+            self.pm.write_int(self.base_addr + target_ptr_offset, creature_id)
+        except Exception as e:
+            print(f"Erro ao definir Target visual (follow): {e}")
 
     def walk(self, direction_code):
         """

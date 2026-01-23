@@ -1,8 +1,9 @@
 import time
 import winsound
+import threading
 from config import *
 from core.map_core import get_player_pos
-from core.player_core import get_connected_char_name
+from core.player_core import get_connected_char_name, get_player_id
 from core.bot_state import state
 from core.config_utils import make_config_getter
 from modules.trainer import parse_creature_from_bytes
@@ -13,6 +14,44 @@ TELEGRAM_INTERVAL_GM = 10
 
 # Offset do ponteiro do console (Baseado no seu input: 0x71DD18 - 0x400000)
 OFFSET_CONSOLE_PTR = 0x31DD18
+
+# Fila de eventos de chat do sniffer (thread-safe)
+_chat_event_queue = []
+_chat_event_lock = threading.Lock()
+_event_listener_setup = False
+
+
+def _setup_chat_event_listener():
+    """Configura listener para eventos de chat do sniffer."""
+    global _event_listener_setup
+    if _event_listener_setup:
+        return
+
+    try:
+        from core.event_bus import EventBus, EVENT_CHAT
+
+        event_bus = EventBus.get_instance()
+
+        def on_chat_event(event):
+            """Callback quando sniffer detecta chat."""
+            with _chat_event_lock:
+                _chat_event_queue.append(event)
+                # Limita tamanho da fila
+                while len(_chat_event_queue) > 100:
+                    _chat_event_queue.pop(0)
+
+        event_bus.subscribe(EVENT_CHAT, on_chat_event)
+        _event_listener_setup = True
+    except ImportError:
+        pass  # Sniffer não disponível
+
+
+def _get_pending_chat_events():
+    """Retorna e limpa eventos de chat pendentes."""
+    with _chat_event_lock:
+        events = _chat_event_queue.copy()
+        _chat_event_queue.clear()
+        return events
 
 
 def get_my_name(pm, base_addr):
@@ -25,6 +64,13 @@ def get_my_name(pm, base_addr):
         name = get_connected_char_name(pm, base_addr)
         if name:
             state.char_name = name
+            # Também setar o char_id
+            try:
+                player_id = get_player_id(pm, base_addr)
+                if player_id and player_id > 0:
+                    state.char_id = player_id
+            except:
+                pass
     return state.char_name
 
 def get_last_chat_entry(pm, base_addr):
@@ -57,9 +103,9 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
     get_cfg = make_config_getter(config)
 
     # Recupera callbacks
-    set_safe_state = callbacks.get('set_safe', lambda x: None)
-    set_gm_state = callbacks.get('set_gm', lambda x: None)
-    send_telegram = callbacks.get('telegram', lambda x: None)
+    set_safe_state = callbacks.get('set_safe', lambda _: None)
+    set_gm_state = callbacks.get('set_gm', lambda _: None)
+    send_telegram = callbacks.get('telegram', lambda _: None)
     log_msg = callbacks.get('log', print)
     logout_callback = callbacks.get('logout', lambda: None)
 
@@ -73,11 +119,14 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
                 pass
 
     last_telegram_time = 0
-    last_hp_alert = 0 
-    
+    last_hp_alert = 0
+
     last_seen_msg = ""
     last_seen_author = ""
-    
+
+    # Configura listener de eventos do sniffer
+    _setup_chat_event_listener()
+
     log_msg("🔔 Módulo de Alarme Iniciado.")
 
     while True:
@@ -142,47 +191,83 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
                 except: pass
 
             # =================================================================
-            # B. VERIFICAÇÃO DE CHAT (DEFAULT)
+            # B. VERIFICAÇÃO DE CHAT (EVENTOS DO SNIFFER + MEMÓRIA)
             # =================================================================
             chat_danger = False
-            
+
             if chat_enabled or chat_gm_enabled:
-                author, msg = get_last_chat_entry(pm, base_addr)
-                
-                # DEBUG: Mostra no terminal o que o bot está lendo
-                if debug_mode and (author or msg):
-                    print(f"[DEBUG CHAT] Author: '{author}' | Msg: '{msg}'")
+                # 1. Primeiro verifica eventos do sniffer (tempo real, mais confiável)
+                chat_events = _get_pending_chat_events()
 
-                # Se mensagem é nova
-                if author and msg and (msg != last_seen_msg or author != last_seen_author):
-                    last_seen_msg = msg
-                    last_seen_author = author
-                    
+                for event in chat_events:
                     # Ignora a mim mesmo
-                    if not (current_name and current_name in author):
-                        is_gm_talk = any(prefix in author for prefix in GM_PREFIXES)
-                        
-                        # 1. Alarme GM no Chat
-                        if chat_gm_enabled and is_gm_talk:
-                            log_msg(f"👮 GM NO CHAT: {author} {msg}")
-                            chat_danger = True
-                            set_status(f"👮 GM no chat: {author}")
+                    if current_name and current_name in event.speaker:
+                        continue
 
-                            # Ações Imediatas
-                            set_gm_state(True)
-                            set_safe_state(False)
-                            winsound.Beep(2000, 1000)
-                            
-                            if (time.time() - last_telegram_time) > TELEGRAM_INTERVAL_GM:
-                                send_telegram(f"GM FALOU NO CHAT: {author} {msg}")
-                                last_telegram_time = time.time()
+                    # DEBUG
+                    if debug_mode:
+                        print(f"[DEBUG CHAT/SNIFFER] Speaker: '{event.speaker}' | Msg: '{event.message}' | GM: {event.is_gm}")
 
-                        # 2. Alarme Chat Comum
-                        elif chat_enabled:
-                            if "says:" in author or "whispers:" in author or "yells:" in author:
-                                log_msg(f"💬 Chat: {author} {msg}")
-                                set_status(f"💬 {author}")
-                                winsound.Beep(800, 300)
+                    # GM detectado via sniffer (verifica prefixo OU tipo de canal)
+                    if chat_gm_enabled and event.is_gm:
+                        log_msg(f"👮 GM NO CHAT (SNIFFER): {event.speaker}: {event.message}")
+                        chat_danger = True
+                        set_status(f"👮 GM detectado: {event.speaker}")
+
+                        # Ações Imediatas
+                        set_gm_state(True)
+                        set_safe_state(False)
+                        winsound.Beep(2500, 1000)
+
+                        if (time.time() - last_telegram_time) > TELEGRAM_INTERVAL_GM:
+                            send_telegram(f"👮 GM DETECTADO (SNIFFER): {event.speaker}: {event.message}")
+                            last_telegram_time = time.time()
+                        break  # Já detectou GM, não precisa continuar
+
+                    # Alarme Chat Comum
+                    elif chat_enabled and event.speak_type in (0x01, 0x02, 0x03):  # say, whisper, yell
+                        log_msg(f"💬 Chat: {event.speaker}: {event.message}")
+                        set_status(f"💬 {event.speaker}")
+                        winsound.Beep(800, 300)
+
+                # 2. Fallback: leitura de memória (para garantir compatibilidade)
+                if not chat_events:
+                    author, msg = get_last_chat_entry(pm, base_addr)
+
+                    # DEBUG: Mostra no terminal o que o bot está lendo
+                    if debug_mode and (author or msg):
+                        print(f"[DEBUG CHAT/MEM] Author: '{author}' | Msg: '{msg}'")
+
+                    # Se mensagem é nova
+                    if author and msg and (msg != last_seen_msg or author != last_seen_author):
+                        last_seen_msg = msg
+                        last_seen_author = author
+
+                        # Ignora a mim mesmo
+                        if not (current_name and current_name in author):
+                            is_gm_talk = any(prefix in author for prefix in GM_PREFIXES)
+
+                            # 1. Alarme GM no Chat
+                            if chat_gm_enabled and is_gm_talk:
+                                log_msg(f"👮 GM NO CHAT: {author} {msg}")
+                                chat_danger = True
+                                set_status(f"👮 GM no chat: {author}")
+
+                                # Ações Imediatas
+                                set_gm_state(True)
+                                set_safe_state(False)
+                                winsound.Beep(2000, 1000)
+
+                                if (time.time() - last_telegram_time) > TELEGRAM_INTERVAL_GM:
+                                    send_telegram(f"GM FALOU NO CHAT: {author} {msg}")
+                                    last_telegram_time = time.time()
+
+                            # 2. Alarme Chat Comum
+                            elif chat_enabled:
+                                if "says:" in author or "whispers:" in author or "yells:" in author:
+                                    log_msg(f"💬 Chat: {author} {msg}")
+                                    set_status(f"💬 {author}")
+                                    winsound.Beep(800, 300)
 
             # =================================================================
             # C. VERIFICAÇÃO VISUAL (CRIATURAS)

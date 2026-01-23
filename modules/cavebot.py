@@ -299,6 +299,15 @@ class Cavebot:
             self.last_action_time = time.time()
             return
 
+        # NOVO: Pausa durante coleta de spears pós-loot
+        if state.is_spear_pickup_pending:
+            self.current_state = self.STATE_PAUSED
+            self.state_message = "⏸️ Pausado (Spear pickup)"
+            if DEBUG_PATHFINDING:
+                print(f"[Cavebot] ⏸️ PAUSA: Spear pickup em progresso")
+            self.last_action_time = time.time()
+            return
+
         # Controle de Cooldown
         if time.time() - self.last_action_time < self.walk_delay:
             return

@@ -61,6 +61,11 @@ class BotState:
         self._is_runemaking: bool = False
         self._is_chat_paused: bool = False  # Pausado por conversa de chat
         self._chat_pause_until: float = 0.0  # Timestamp até quando pausar por chat
+
+        # ===== Follow State (Spear Picker Integration) =====
+        self._is_following: bool = False           # True quando seguindo criatura (antes de atacar)
+        self._follow_target_id: int = 0            # ID da criatura sendo seguida
+        self._is_spear_pickup_pending: bool = False  # True quando spear pickup deve rodar após loot
     
     # =========================================================================
     # CONEXÃO
@@ -378,6 +383,61 @@ class BotState:
             return max(0.0, remaining)
 
     # =========================================================================
+    # FOLLOW STATE (Spear Picker Integration)
+    # =========================================================================
+
+    @property
+    def is_following(self) -> bool:
+        """Retorna True se está seguindo uma criatura (antes de atacar)."""
+        with self._lock:
+            return self._is_following
+
+    @property
+    def follow_target_id(self) -> int:
+        """Retorna o ID da criatura sendo seguida."""
+        with self._lock:
+            return self._follow_target_id
+
+    def start_follow(self, creature_id: int):
+        """
+        Inicia estado de follow.
+        Também seta is_in_combat=True para pausar cavebot automaticamente.
+
+        Args:
+            creature_id: ID da criatura a seguir
+        """
+        with self._lock:
+            self._is_following = True
+            self._follow_target_id = creature_id
+            self._is_in_combat = True  # Follow = combat para fins de pausa
+
+    def stop_follow(self):
+        """
+        Para estado de follow.
+        Chamado quando: criatura morre, troca para attack, ou target muda.
+        Nota: is_in_combat é gerenciado separadamente pelo trainer.
+        """
+        with self._lock:
+            self._is_following = False
+            self._follow_target_id = 0
+
+    @property
+    def is_spear_pickup_pending(self) -> bool:
+        """Retorna True se spear pickup deve rodar após loot."""
+        with self._lock:
+            return self._is_spear_pickup_pending
+
+    def set_spear_pickup_pending(self, pending: bool):
+        """
+        Marca se spear pickup deve rodar após loot cycle.
+
+        Args:
+            pending: True para ativar ciclo prioritário, False para desativar
+        """
+        with self._lock:
+            self._is_spear_pickup_pending = pending
+
+    # =========================================================================
     # MÉTODOS DE CONVENIÊNCIA
     # =========================================================================
     
@@ -426,6 +486,9 @@ class BotState:
                 'is_runemaking': self._is_runemaking,
                 'is_chat_paused': self._is_chat_paused,
                 'chat_pause_until': self._chat_pause_until,
+                'is_following': self._is_following,
+                'follow_target_id': self._follow_target_id,
+                'is_spear_pickup_pending': self._is_spear_pickup_pending,
             }
     
     def reset(self):
@@ -448,6 +511,9 @@ class BotState:
             self._is_runemaking = False
             self._is_chat_paused = False
             self._chat_pause_until = 0.0
+            self._is_following = False
+            self._follow_target_id = 0
+            self._is_spear_pickup_pending = False
             # NÃO reseta _bot_running
 
 
