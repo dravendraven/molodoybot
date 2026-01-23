@@ -238,7 +238,7 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
                 bag_pos = get_container_pos(cont.index, bag_item_ref.slot_index)
 
                 packet.use_item(bag_pos, bag_item_ref.id, index=cont.index)
-                gauss_wait(0.6, 15)
+                gauss_wait(*LOOT_DELAY_OPEN_BAG)
                 return "BAG"
 
             # VARRER ITENS DO CORPO
@@ -254,7 +254,7 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
 
                     # Tenta comer
                     packet.use_item(food_pos, item.id)
-                    gauss_wait(0.25, 20)
+                    gauss_wait(*LOOT_DELAY_EAT_FOOD)
 
                     # Verifica se está full e a config de drop
                     if is_player_full(pm, base_addr):
@@ -298,7 +298,7 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
                     pos_to = get_container_pos(dest_idx, dest_slot)
 
                     packet.move_item(pos_from, pos_to, item.id, item.count)
-                    gauss_wait(0.6, 30)
+                    gauss_wait(*LOOT_DELAY_MOVE_ITEM)
 
                     # Stack imediatamente após lotar
                     # Import lazy para evitar circular import
@@ -318,13 +318,13 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
                     pos_ground = get_ground_pos(px, py, pz)
 
                     packet.move_item(pos_from, pos_ground, item.id, item.count)
-                    gauss_wait(0.3, 20)
+                    gauss_wait(*LOOT_DELAY_DROP_ITEM)
                     return "DROP"
 
         # Fecha todos os containers de loot processados
         for cont in loot_containers:
             packet.close_container(cont.index)
-            gauss_wait(0.75, 30)
+            gauss_wait(*LOOT_DELAY_CLOSE_CONTAINER)
 
     except Exception as e:
         print(f"[ERRO AUTO_LOOT] {e}")

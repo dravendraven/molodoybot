@@ -88,6 +88,7 @@ class Cavebot:
 
         # --- CONFIGURAÇÃO DE FLUIDEZ (NOVO) ---
         self.walk_delay = 0.4 # Valor base, será sobrescrito dinamicamente
+        self.next_walk_time = 0  # Timestamp mínimo para próximo passo (corrige bug de steps duplicados)
         self.local_path_cache = [] # Armazena a lista de passos [(dx,dy), ...]
         self.local_path_index = 0  # Qual passo estamos executando
         self.cached_speed = 250    # Cache de velocidade para não ler battle list todo frame
@@ -104,6 +105,8 @@ class Cavebot:
             min_advancement_ratio=ADVANCEMENT_MIN_RATIO
         )
         self.no_progress_response_time = 0  # Timestamp da última resposta a bloqueio
+        self.last_global_path_time = 0  # Timestamp da última geração de rota global
+        self._was_paused = False  # Para detectar transição pausa → navegação
 
     def load_waypoints(self, waypoints_list):
         """
@@ -213,6 +216,8 @@ class Cavebot:
 
                     # 4. Atualiza índice e limpa caches para forçar recálculo
                     self._current_index = closest_idx
+                    if self.current_global_path:
+                        print(f"[DEBUG] Path limpo em: start() (tinha {len(self.current_global_path)} nós)")
                     self.current_global_path = []
                     self.local_path_cache = []
                     self.global_recalc_counter = 0
@@ -273,15 +278,19 @@ class Cavebot:
             return
 
         # NOVO: Pausa para atividades de maior prioridade
-        # Aguarda combate terminar E auto-loot finalizar completamente
-        if state.is_in_combat or state.has_open_loot:
+        # Aguarda combate terminar E ciclo de loot finalizar completamente
+        # is_processing_loot garante que spear_picker tenha tempo de detectar/pegar spears
+        if state.is_in_combat or state.has_open_loot or state.is_processing_loot:
             self.last_action_time = time.time()
+            self._was_paused = True  # Marcar que estávamos pausados
             # Atualiza status para exibição na GUI
             reasons = []
             if state.is_in_combat:
                 reasons.append("Combate")
             if state.has_open_loot:
                 reasons.append("Loot")
+            if state.is_processing_loot:
+                reasons.append("Proc.Loot")
             self.current_state = self.STATE_PAUSED
             self.state_message = f"⏸️ Pausado ({', '.join(reasons)})"
             if DEBUG_PATHFINDING:
@@ -292,6 +301,7 @@ class Cavebot:
         # Evita race condition: matar criatura → delay 1s → abrir loot → próximo combate
         if time.time() - state.last_combat_time < COOLDOWN_AFTER_COMBAT:
             remaining = COOLDOWN_AFTER_COMBAT - (time.time() - state.last_combat_time)
+            self._was_paused = True  # Marcar que estávamos pausados
             self.current_state = self.STATE_COMBAT_COOLDOWN
             self.state_message = f"⏰ Cooldown pós-combate ({remaining:.1f}s)"
             if DEBUG_PATHFINDING:
@@ -301,6 +311,7 @@ class Cavebot:
 
         # NOVO: Pausa durante coleta de spears pós-loot
         if state.is_spear_pickup_pending:
+            self._was_paused = True  # Marcar que estávamos pausados
             self.current_state = self.STATE_PAUSED
             self.state_message = "⏸️ Pausado (Spear pickup)"
             if DEBUG_PATHFINDING:
@@ -308,8 +319,12 @@ class Cavebot:
             self.last_action_time = time.time()
             return
 
-        # Controle de Cooldown
-        if time.time() - self.last_action_time < self.walk_delay:
+        # Controle de Cooldown - Verifica se já pode dar o próximo passo
+        # Usa next_walk_time (timestamp futuro) ao invés de last_action_time - walk_delay
+        now = time.time()
+        if now < self.next_walk_time:
+            if DEBUG_PATHFINDING:
+                print(f"[DEBUG] Blocked: now={now:.3f}, next_walk={self.next_walk_time:.3f}, diff={self.next_walk_time - now:.3f}s")
             return
 
         # NOVO: Cooldown após mudança de andar (floor change)
@@ -362,16 +377,32 @@ class Cavebot:
             print(f"[Cavebot] ✅ Chegou no WP {current_index}: ({wp['x']}, {wp['y']}, {wp['z']})")
             with self._waypoints_lock:
                 self._advance_waypoint()
+                if self.current_global_path:
+                    print(f"[DEBUG] Path limpo em: waypoint_reached (tinha {len(self.current_global_path)} nós)")
                 self.current_global_path = []
                 self.last_lookahead_idx = -1
             # Limpa tracker ao mudar de waypoint
             self.advancement_tracker.reset()
             return
 
+        # DETECÇÃO DE TRANSIÇÃO: Pausa → Navegação
+        # Se chegamos aqui, NÃO estamos mais pausados (todos os returns de pausa já passaram)
+        # Se _was_paused é True, acabamos de sair de uma pausa - resetar tracker
+        if self._was_paused:
+            self.advancement_tracker.reset()
+            self.last_global_path_time = time.time()
+            self._was_paused = False
+            if DEBUG_PATHFINDING:
+                print("[Cavebot] ✓ Saiu de pausa, resetando tracker de progresso")
+
         # HUMANIZAÇÃO: Verificar se estamos avançando (apenas fora de combate/loot)
+        # NOVO: Não verificar imediatamente após gerar rota global (dar tempo de começar a andar)
         if ADVANCEMENT_TRACKING_ENABLED and wp['z'] == pz:
             if not state.is_in_combat and not state.has_open_loot:
-                if not self.advancement_tracker.is_advancing(ADVANCEMENT_EXPECTED_SPEED):
+                # Cooldown de 5s após gerar rota global antes de verificar progresso
+                if time.time() - self.last_global_path_time < 5.0:
+                    pass  # Pula verificação de progresso
+                elif not self.advancement_tracker.is_advancing(ADVANCEMENT_EXPECTED_SPEED):
                     self._handle_no_progress(px, py, pz, wp)
                     return
 
@@ -462,6 +493,8 @@ class Cavebot:
                         print(f"[Cavebot] ⚠️ Limite atingido. Pulando para próximo waypoint.")
                         with self._waypoints_lock:
                             self._advance_waypoint()
+                            if self.current_global_path:
+                                print(f"[DEBUG] Path limpo em: escada_stuck (tinha {len(self.current_global_path)} nós)")
                             self.current_global_path = []
                         self.global_recalc_counter = 0
             
@@ -517,6 +550,8 @@ class Cavebot:
                 self.current_global_path = path
                 self.global_recalc_counter = 0 # Sucesso, reseta contador
                 self.last_lookahead_idx = -1
+                self.advancement_tracker.reset()  # Reseta tracker para dar tempo de começar a andar
+                self.last_global_path_time = time.time()  # Marca quando gerou rota para cooldown
                 print(f"[Nav] 🛤️ Rota Global Gerada: {len(path)} nós.")
             else:
                 print(f"[Nav] ⚠️ GlobalMap não achou rota (nem com fallback). Tentando direto.")
@@ -559,8 +594,17 @@ class Cavebot:
             else:
                 # Perdemos a rota, limpa para recalcular
                 print("[Nav] ⚠️ Perdido da rota global. Resetando.")
+                if self.current_global_path:
+                    print(f"[DEBUG] Path limpo em: perdido_da_rota (tinha {len(self.current_global_path)} nós)")
                 self.current_global_path = []
-        
+
+        # DEBUG: Log do sub-destino definido
+        if DEBUG_PATHFINDING:
+            has_global = len(self.current_global_path) > 0
+            source = "Global[lookahead]" if has_global else "WP direto"
+            sub_dist = math.sqrt((target_local_x - my_x)**2 + (target_local_y - my_y)**2)
+            print(f"[Nav] 🎯 Sub-destino: ({target_local_x}, {target_local_y}) | Fonte: {source} | Dist: {sub_dist:.1f} sqm")
+
         # ============================================================
         # 3. LÓGICA DE PATHING (CACHE vs REAL-TIME)
         # ============================================================
@@ -589,10 +633,18 @@ class Cavebot:
             # Calcula o próximo passo baseado no estado ATUAL do mapa
             # Mais preciso, evita obstáculos fantasmas e diagonais erráticas
 
+            # DEBUG: Log antes de chamar A* local
+            if DEBUG_PATHFINDING:
+                print(f"[Nav] 🔍 A* Local: buscando passo para rel({rel_x}, {rel_y})")
+
             step = self.walker.get_next_step(rel_x, rel_y)
 
             if step:
                 dx, dy = step
+
+                # DEBUG: Log do resultado do A* local (sucesso)
+                if DEBUG_PATHFINDING:
+                    print(f"[Nav] ✅ A* Local encontrou: passo ({dx}, {dy})")
 
                 # OBSTACLE CLEARING: Tenta mover mesa/cadeira se estiver no caminho
                 if OBSTACLE_CLEARING_ENABLED:
@@ -638,6 +690,10 @@ class Cavebot:
                     print(f"[Nav] ✓ Movimento com sucesso. Resetando stuck.")
                     self.global_recalc_counter = 0
             else:
+                # DEBUG: Log do resultado do A* local (falha)
+                if DEBUG_PATHFINDING:
+                    print(f"[Nav] ❌ A* Local não encontrou caminho para rel({rel_x}, {rel_y})")
+
                 # ===== NOVO: Tentar limpar obstáculo quando A* não encontra caminho =====
                 # Quando A* não encontra step, pode ser que um MOVE/STACK bloqueie a única rota
                 obstacle_cleared = False
@@ -830,7 +886,7 @@ class Cavebot:
 
         # 9. Buffer de Pre-Move (Antecipação)
         # Enviamos o próximo comando X ms antes de terminar o passo atual
-        pre_move_buffer = 90  # ms (90ms é seguro para ping médio)
+        pre_move_buffer = 150  # ms (90ms é seguro para ping médio)
 
         wait_time = (total_ms / 1000.0) - (pre_move_buffer / 1000.0)
 
@@ -846,7 +902,12 @@ class Cavebot:
         #print(f"[Cavebot] 🚶 Andando ({dx},{dy}) - Próximo em {wait_time:.2f}s")
 
         # 11. Define o tempo em que o bot vai "acordar" para o próximo passo
-        self.last_action_time = time.time() + wait_time
+        # last_action_time = quando a ação foi executada (para outros usos)
+        # next_walk_time = quando pode executar o próximo passo (corrige bug de steps duplicados)
+        self.last_action_time = time.time()
+        self.next_walk_time = time.time() + wait_time
+        if DEBUG_PATHFINDING:
+            print(f"[DEBUG] Set next_walk_time={self.next_walk_time:.3f} (now + {wait_time:.3f}s)")
 
     def _handle_hard_stuck(self, dest_x, dest_y, dest_z, my_x, my_y):
         """Marca bloqueio no mapa global e força nova rota (Desvio)."""
@@ -880,6 +941,8 @@ class Cavebot:
         
         # Limpa rota para forçar recálculo imediato na próxima volta
         print("[Nav] 🔄 Forçando recálculo de rota global...")
+        if self.current_global_path:
+            print(f"[DEBUG] Path limpo em: hard_stuck (tinha {len(self.current_global_path)} nós)")
         self.current_global_path = []
         self.global_recalc_counter = 0
 
@@ -932,6 +995,7 @@ class Cavebot:
             # O personagem é TELETRANSPORTADO para o novo andar assim que o servidor processa.
             if rel_x != 0 or rel_y != 0:
                 self._move_step(rel_x, rel_y)
+                self.next_walk_time = time.time() + 1.0  # Previne steps duplicados durante floor change
                 # CRÍTICO: Aguarda o servidor processar a mudança de andar
                 # Sem isso, o próximo ciclo pode enviar comandos baseados na posição antiga
                 time.sleep(1)  # Tempo para o servidor processar teleport
@@ -992,6 +1056,7 @@ class Cavebot:
                     props = self.analyzer.get_tile_properties(adj_dx, adj_dy)
                     if props['walkable']:
                         self._move_step(adj_dx, adj_dy)
+                        self.next_walk_time = time.time() + 0.5  # Previne steps duplicados
                         print(f"[Cavebot] Movendo para ({adj_dx}, {adj_dy}) para usar rope.")
                         moved = True
                         break
@@ -1150,10 +1215,12 @@ class Cavebot:
             # X é maior: move em X para chegar perto
             print(f"[Cavebot] {label.capitalize()} longe (Chebyshev={chebyshev}), movendo no eixo X...")
             self._move_step(1 if rel_x > 0 else -1, 0)
+            self.next_walk_time = time.time() + 0.5  # Previne steps duplicados
         else:
             # Y é maior ou igual: move em Y
             print(f"[Cavebot] {label.capitalize()} longe (Chebyshev={chebyshev}), movendo no eixo Y...")
             self._move_step(0, 1 if rel_y > 0 else -1)
+            self.next_walk_time = time.time() + 0.5  # Previne steps duplicados
 
         return False
 
@@ -1503,6 +1570,8 @@ class Cavebot:
                     if len(self._waypoints) > 1:
                         print(f"[Cavebot] Pulando para próximo waypoint...")
                         self._advance_waypoint()
+                        if self.current_global_path:
+                            print(f"[DEBUG] Path limpo em: check_stuck (tinha {len(self.current_global_path)} nós)")
                         self.current_global_path = []
 
                 self.stuck_counter = 0
@@ -1590,6 +1659,8 @@ class Cavebot:
             self._set_player_avoidance(player.position.x, player.position.y, px, py)
             # Limpar cache para forçar recálculo de rota
             self.local_path_cache = []
+            if self.current_global_path:
+                print(f"[DEBUG] Path limpo em: player_avoid (tinha {len(self.current_global_path)} nós)")
             self.current_global_path = []
             print(f"[Cavebot] 🔄 Tentando desviar de '{player.name}' (peso 2x nos tiles adjacentes)")
 
@@ -1598,6 +1669,8 @@ class Cavebot:
             print(f"[Cavebot] ⏭️ Pulando WP #{self._current_index} devido a bloqueio por '{player.name}'")
             with self._waypoints_lock:
                 self._advance_waypoint()
+                if self.current_global_path:
+                    print(f"[DEBUG] Path limpo em: player_skip (tinha {len(self.current_global_path)} nós)")
                 self.current_global_path = []
             self.advancement_tracker.reset()
 
@@ -1617,6 +1690,8 @@ class Cavebot:
         self.analyzer.clear_player_avoidance()
 
         # Forçar recálculo de rota global
+        if self.current_global_path:
+            print(f"[DEBUG] Path limpo em: general_stuck (tinha {len(self.current_global_path)} nós)")
         self.current_global_path = []
         self.local_path_cache = []
         self.global_recalc_counter += 1

@@ -30,7 +30,7 @@ SNIFFER_SERVER_IP = "135.148.27.135"  # IP do servidor OT
 # GUI SETTINGS
 # ==============================================================================
 RELOAD_BUTTON = True  # Exibe botão de reload na interface (desabilitar para release)
-DEBUG_MODE = False    # Modo debug geral - ativa logs extras em diversos módulos
+DEBUG_MODE = True    # Modo debug geral - ativa logs extras em diversos módulos
 
 TARGET_MONSTERS = ["Rotworm", "Minotaur"]
 SAFE_CREATURES = ["Minotaur", "Rotworm", "Troll", "Wolf", "Deer", "Rabbit", "Spider", "Poison Spider", "Bug", "Rat", "Bear", "Wasp", "Orc"]
@@ -184,7 +184,20 @@ MY_CONTAINERS_COUNT = 2
 
 # # Índice do Container de Destino (Para onde vai o loot?)
 # # 0 = Primeira Backpack aberta
-DEST_CONTAINER_INDEX = 0 
+DEST_CONTAINER_INDEX = 0
+
+# ==============================================================================
+# AUTO LOOT DELAYS (em segundos)
+# ==============================================================================
+# Ajuste estes valores para controlar a velocidade do loot.
+# Valores menores = mais rápido, maior risco de detecção.
+# Formato: (tempo_base, variacao_percentual)
+
+LOOT_DELAY_OPEN_BAG = (0.25, 15)          # Após abrir bag dentro do corpo
+LOOT_DELAY_EAT_FOOD = (0.25, 20)         # Após comer comida
+LOOT_DELAY_MOVE_ITEM = (0.25, 30)         # Após mover item para backpack
+LOOT_DELAY_DROP_ITEM = (0.3, 20)         # Após dropar item no chão
+LOOT_DELAY_CLOSE_CONTAINER = (0.5, 30)  # Após fechar container de loot
 
 # ==============================================================================
 # FEATURE FLAGS
@@ -524,3 +537,10 @@ CHAT_PAUSE_DURATION = 10.0          # Segundos de pausa após última mensagem
 
 # Debug
 DEBUG_CHAT_HANDLER = True           # Logs detalhados do sistema de chat
+
+# ==============================================================================
+# FOLLOW-THEN-ATTACK CONFIG (TRAINER)
+# ==============================================================================
+# Modo de combate: seguir criatura até dist<=1, depois atacar
+# Independente do spear_picker - útil para testes e combate melee
+FOLLOW_THEN_ATTACK = True  # True = segue antes de atacar

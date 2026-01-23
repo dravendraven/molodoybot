@@ -382,7 +382,13 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
                 # Se visual está limpo E chat está limpo -> Seguro
                 set_safe_state(True)
                 set_gm_state(False)
-                set_status("🛡️ Seguro - Monitorando...")
+
+                # Verifica se há cooldown de retomada ativo
+                cooldown = state.cooldown_remaining
+                if cooldown > 0:
+                    set_status(f"⏳ Retomando em {int(cooldown)}s...")
+                else:
+                    set_status("🛡️ Seguro - Monitorando...")
 
             time.sleep(0.5)
 

@@ -106,6 +106,7 @@ BOT_SETTINGS = {
     "lookid_enabled": False,  # Exibir ID dos items ao dar look
     "spear_picker_enabled": False,  # Pegar spears do chao automaticamente (Paladin)
     "spear_max_count": 3,  # Maximo de spears para manter na mao
+    "follow_before_attack_enabled": False,  # Follow antes de atacar (para spear users com range > 1)
 
     #trainer
     "ignore_first": False,
@@ -1424,7 +1425,8 @@ def _handle_container_open(event):
     global _loot_container_was_opened_event
 
     # DEBUG: Mostra TODOS os containers abertos (para diagnóstico)
-    print(f"[CONTAINER EVENT] Opened: {event.name} (id:{event.container_id}, items:{event.item_count})")
+    if BOT_SETTINGS.get('debug_mode', False):
+        print(f"[CONTAINER EVENT] Opened: {event.name} (id:{event.container_id}, items:{event.item_count})")
 
     is_loot = _is_loot_container_name(event.name)
 
@@ -1434,21 +1436,25 @@ def _handle_container_open(event):
             _open_loot_containers.add(event.container_id)
             _loot_container_was_opened_event = True
             state.set_loot_state(True)
-            print(f"[CONTAINER] Loot opened: {event.name} (id:{event.container_id}, items:{event.item_count})")
+            if BOT_SETTINGS.get('debug_mode', False):
+                print(f"[CONTAINER] Loot opened: {event.name} (id:{event.container_id}, items:{event.item_count})")
         elif event.container_id in _open_loot_containers:
             # Bag aberta DENTRO do corpo - substitui mesmo slot, continua rastreando
-            print(f"[CONTAINER] Bag in loot slot: {event.name} (id:{event.container_id})")
+            if BOT_SETTINGS.get('debug_mode', False):
+                print(f"[CONTAINER] Bag in loot slot: {event.name} (id:{event.container_id})")
 
 
 def _handle_container_close(event):
     """Processa evento de container fechado do sniffer."""
     # DEBUG: Mostra TODOS os containers fechados (para diagnóstico)
-    print(f"[CONTAINER EVENT] Closed: id:{event.container_id}")
+    if BOT_SETTINGS.get('debug_mode', False):
+        print(f"[CONTAINER EVENT] Closed: id:{event.container_id}")
 
     with _loot_containers_lock:
         if event.container_id in _open_loot_containers:
             _open_loot_containers.discard(event.container_id)
-            print(f"[CONTAINER] Loot closed: id:{event.container_id}")
+            if BOT_SETTINGS.get('debug_mode', False):
+                print(f"[CONTAINER] Loot closed: id:{event.container_id}")
 
             if len(_open_loot_containers) == 0:
                 state.set_loot_state(False)
@@ -1467,9 +1473,11 @@ def _setup_container_event_listener():
         event_bus.subscribe(EVENT_CONTAINER_OPEN, _handle_container_open)
         event_bus.subscribe(EVENT_CONTAINER_CLOSE, _handle_container_close)
         _container_listener_setup = True
-        print("[LOOT] Container event listener configured (EventBus)")
+        if BOT_SETTINGS.get('debug_mode', False):
+            print("[LOOT] Container event listener configured (EventBus)")
     except ImportError:
-        print("[LOOT] EventBus not available - using memory detection")
+        if BOT_SETTINGS.get('debug_mode', False):
+            print("[LOOT] EventBus not available - using memory detection")
 
 
 def has_open_loot_containers() -> bool:
@@ -1567,12 +1575,12 @@ def auto_loot_thread():
             # Verifica se já passou tempo suficiente
             elapsed = time.time() - stuck_loot_cycle_start
             if elapsed >= STUCK_LOOT_TIMEOUT:
-                # Ativa spear pickup pendente antes de finalizar
+                # Handoff para spear_picker antes de liberar cavebot
                 if BOT_SETTINGS.get('spear_picker_enabled', False):
                     state.set_spear_pickup_pending(True)
-                    print("[LOOT SAFETY] Spear pickup pendente após timeout")
                 state.end_loot_cycle()
-                print(f"[LOOT SAFETY] Ciclo de loot finalizado após {elapsed:.1f}s travado (sem containers)")
+                if BOT_SETTINGS.get('debug_mode', False):
+                    print(f"[LOOT SAFETY] Ciclo de loot finalizado após {elapsed:.1f}s travado (sem containers)")
                 stuck_loot_cycle_start = None  # Reset
         else:
             # Condição normalizada, reseta timer
@@ -1660,23 +1668,23 @@ def auto_loot_thread():
                 # EVENT-BASED: Container foi aberto E todos estão fechados agora
                 if _loot_container_was_opened_event and not has_open_loot_containers():
                     if state.is_processing_loot:
-                        # Ativa spear pickup pendente antes de finalizar loot
+                        # Handoff para spear_picker antes de liberar cavebot
                         if BOT_SETTINGS.get('spear_picker_enabled', False):
                             state.set_spear_pickup_pending(True)
-                            print("[LOOT] Spear pickup pendente após loot")
                         state.end_loot_cycle()
-                        print("[LOOT] Ciclo finalizado (EventBus - containers fechados)")
+                        if BOT_SETTINGS.get('debug_mode', False):
+                            print("[LOOT] Ciclo finalizado (EventBus - containers fechados)")
                     reset_loot_cycle_flags()
             else:
                 # FALLBACK: Detecção via memória (quando sniffer indisponível)
                 if loot_container_was_opened_memory and not state.has_open_loot:
                     if state.is_processing_loot:
-                        # Ativa spear pickup pendente antes de finalizar loot
+                        # Handoff para spear_picker antes de liberar cavebot
                         if BOT_SETTINGS.get('spear_picker_enabled', False):
                             state.set_spear_pickup_pending(True)
-                            print("[LOOT] Spear pickup pendente após loot")
                         state.end_loot_cycle()
-                        print("[LOOT] Ciclo finalizado (memory scan)")
+                        if BOT_SETTINGS.get('debug_mode', False):
+                            print("[LOOT] Ciclo finalizado (memory scan)")
                     loot_container_was_opened_memory = False
             # ============================================================
 

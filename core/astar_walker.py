@@ -159,17 +159,21 @@ class AStarWalker:
         tenta dar um passo na direção mais próxima do destino.
 
         IMPORTANTE: Prioritiza passos que reduzem a distância ao target (não andam para trás).
+        NOTA: Diagonais são penalizadas pois custam 3x mais tempo no Tibia.
         """
         neighbors = [
-            (0, -1), (0, 1), (-1, 0), (1, 0),
-            (-1, -1), (-1, 1), (1, -1), (1, 1)
+            (0, -1), (0, 1), (-1, 0), (1, 0),      # Cardinals primeiro
+            (-1, -1), (-1, 1), (1, -1), (1, 1)     # Diagonais depois
         ]
+
+        # Penalidade para diagonais (custam 3x mais tempo que cardeais no Tibia)
+        DIAGONAL_PENALTY = 1.5
 
         # Distância atual até o target usando Manhattan distance (grid-based)
         current_distance = abs(target_rel_x) + abs(target_rel_y)
 
         best_step = None
-        best_distance = float('inf')
+        best_score = float('inf')
 
         for dx, dy in neighbors:
             # Verifica se o tile é walkable
@@ -179,17 +183,19 @@ class AStarWalker:
 
             # Calcula distância até o destino SE der este passo usando Manhattan distance
             # (dx, dy) é a posição após o passo
-            new_x = dx
-            new_y = dy
-            new_distance = abs(new_x - target_rel_x) + abs(new_y - target_rel_y)
+            new_distance = abs(dx - target_rel_x) + abs(dy - target_rel_y)
 
             # CRÍTICO: SÓ considera passos que reduzem a distância
             # (evita andar para trás ou ficar no mesmo lugar)
             if new_distance >= current_distance:
                 continue
 
-            if new_distance < best_distance:
-                best_distance = new_distance
+            # Aplica penalidade para diagonais (dx != 0 AND dy != 0)
+            is_diagonal = (dx != 0 and dy != 0)
+            score = new_distance * DIAGONAL_PENALTY if is_diagonal else new_distance
+
+            if score < best_score:
+                best_score = score
                 best_step = (dx, dy)
 
         # Fallback silencioso - log apenas se falhar completamente

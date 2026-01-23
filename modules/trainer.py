@@ -622,9 +622,16 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
         ignore_first = get_cfg('ignore_first', False)
         ks_enabled = get_cfg('ks_prevention_enabled', KS_PREVENTION_ENABLED)
 
-        # Spear Picker Integration - Follow before attack quando range > 1
+        # Spear Picker Integration - Follow before attack (DESABILITADO por padrão)
+        # Requer: follow_before_attack_enabled=True E spear_picker_enabled=True E range > 1
         spear_picker_enabled = get_cfg('spear_picker_enabled', False)
-        follow_before_attack = spear_picker_enabled and trigger_range > 1
+        follow_before_attack_enabled = get_cfg('follow_before_attack_enabled', False)
+
+        # FOLLOW_THEN_ATTACK: config independente para seguir antes de atacar
+        follow_then_attack_standalone = get_cfg('follow_then_attack', FOLLOW_THEN_ATTACK)
+
+        # Ativa se: standalone config OU (spear picker combo)
+        follow_before_attack = follow_then_attack_standalone or (follow_before_attack_enabled and spear_picker_enabled and trigger_range > 1)
 
         # Log de configuração anti-KS (apenas primeira iteração)
         if debug_mode and mapper is None:
@@ -642,11 +649,14 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
             log("="*70)
             log("[TRAINER] Configuração Follow-Before-Attack (Spear Picker)")
             log("="*70)
+            log(f"  Follow Before Attack Flag: {follow_before_attack_enabled}")
             log(f"  Spear Picker Enabled: {spear_picker_enabled}")
             log(f"  Trigger Range: {trigger_range}")
-            log(f"  Follow Before Attack: {follow_before_attack}")
+            log(f"  Follow Before Attack ATIVO: {follow_before_attack}")
             if follow_before_attack:
                 log(f"  Modo: FOLLOW quando dist > 1, ATTACK quando dist <= 1")
+            else:
+                log(f"  Modo: ATTACK direto (comportamento normal)")
             log("="*70)
 
         # Inicializa componentes de pathfinding na primeira iteração com debug_mode
@@ -758,6 +768,15 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                 if not creature.is_targetable(my_z):
                     continue
 
+                # Ignora players (só ataca monstros)
+                if creature.is_player:
+                    if debug_mode:
+                        print(f"   🚫 SKIP PLAYER: {creature.name}")
+                    continue
+
+                # ===== CALCULA is_attacking_me CEDO para bypass de filtros =====
+                is_attacking_me = creature.is_attacking_player(BLACKSQUARE_THRESHOLD_MS)
+
                 # Extrai dados
                 c_id = creature.id
                 name = creature.name
@@ -767,10 +786,26 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
 
                 dist_x = abs(my_x - cx)
                 dist_y = abs(my_y - cy)
+                dist_tiles = max(dist_x, dist_y)  # Distância em tiles (adjacente = 1)
                 is_in_range = (dist_x <= trigger_range and dist_y <= trigger_range)
 
                 if debug_mode:
-                    print(f"Slot {creature.slot_index}: {name} (Vis:1 Z:{my_z} HP:{hp} Dist:({dist_x},{dist_y}))")
+                    print(f"Slot {creature.slot_index}: {name} (Vis:1 Z:{my_z} HP:{hp} Dist:({dist_x},{dist_y}) Attacking:{is_attacking_me})")
+
+                # ===== REGRA ABSOLUTA: Criatura atacando a 1 tile = candidato imediato =====
+                # Bypass total de range, accessibility e KS checks
+                if is_attacking_me and dist_tiles <= 1 and hp > 0:
+                    # Ainda precisa estar na lista de alvos
+                    if any(t in name for t in targets_list):
+                        if debug_mode:
+                            print(f"   ⚔️ PRIORIDADE: {name} está atacando e adjacente - bypass total")
+                        # Conta linha visual antes de adicionar
+                        current_line = visual_line_count
+                        visual_line_count += 1
+                        valid_candidates.append(
+                            creature_to_candidate_dict(creature, my_x, my_y, trigger_range, current_line)
+                        )
+                        continue  # Já adicionado, pula para próxima criatura
 
                 # Conta linha visual
                 current_line = visual_line_count
@@ -779,9 +814,12 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                 if debug_mode:
                     print(f"   [LINHA {current_line}] -> {name} (ID: {c_id})")
 
-                # Verifica se é alvo desejado
+                # Verifica se é alvo desejado (bypass se atacando)
                 if not any(t in name for t in targets_list):
-                    continue
+                    if not is_attacking_me:
+                        continue
+                    elif debug_mode:
+                        print(f"   ⚠️ {name} não está na lista mas está atacando - permitido")
 
                 # Verifica range e HP
                 if not (is_in_range and hp > 0):
@@ -796,11 +834,6 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                 rel_x = cx - my_x
                 rel_y = cy - my_y
                 dist_sqm = max(abs(rel_x), abs(rel_y))
-
-                # ===== BLACKSQUARE EXCEPTION (criatura atacando player) =====
-                # Criaturas que estão nos atacando SEMPRE são candidatos válidos,
-                # independente de acessibilidade ou KS prevention.
-                is_attacking_me = creature.is_attacking_player(BLACKSQUARE_THRESHOLD_MS)
 
                 # DEBUG: Log antes de verificar acessibilidade
                 if debug_mode:
@@ -884,9 +917,12 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                 elif is_attacking_me and debug_mode:
                     print(f"\n[KS CHECK] ✅ BYPASS: {name} está nos atacando - ignorando KS check")
 
-                if not skip_ks:
+                # REGRA ABSOLUTA: Criatura atacando player SEMPRE é candidato válido
+                # Mesmo que anti-KS a descartasse, se is_attacking_me=True, é válida
+                if is_attacking_me or not skip_ks:
                     if debug_mode:
-                        print(f"      → CANDIDATO: HP:{hp} Dist:({dist_x},{dist_y})")
+                        reason = "ATACANDO PLAYER" if is_attacking_me else "KS PASS"
+                        print(f"      → CANDIDATO ({reason}): HP:{hp} Dist:({dist_x},{dist_y})")
                     valid_candidates.append(
                         creature_to_candidate_dict(creature, my_x, my_y, trigger_range, current_line)
                     )
@@ -966,10 +1002,22 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
 
                                 if nearest:
                                     cost = get_distance_cost(walker, nearest['abs_x'] - my_x, nearest['abs_y'] - my_y, MELEE_RANGE)
-                                    log(f"⚔️ RETARGET: {nearest['name']} (custo: {cost})")
+                                    dist_to_nearest = max(abs(nearest['dist_x']), abs(nearest['dist_y']))
 
-                                    # Ataca novo alvo
-                                    packet.attack(nearest["id"])
+                                    # Usa mesma lógica de follow_before_attack
+                                    if follow_before_attack and dist_to_nearest > 1:
+                                        log(f"🏃 RETARGET (follow): {nearest['name']} (dist={dist_to_nearest})")
+                                        packet.follow(nearest["id"])
+                                        state.start_follow(nearest["id"])
+                                        is_currently_following = True
+                                        follow_target_id = nearest["id"]
+                                    else:
+                                        log(f"⚔️ RETARGET: {nearest['name']} (custo: {cost})")
+                                        packet.attack(nearest["id"])
+                                        if is_currently_following:
+                                            state.stop_follow()
+                                            is_currently_following = False
+                                            follow_target_id = 0
 
                                     # Atualiza variáveis de estado
                                     current_target_id = nearest["id"]
@@ -1111,8 +1159,23 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
 
                                         if nearest:
                                             cost = get_distance_cost(walker, nearest['abs_x'] - my_x, nearest['abs_y'] - my_y, MELEE_RANGE)
-                                            log(f"⚔️ RETARGET: {nearest['name']} (custo: {cost})")
-                                            packet.attack(nearest["id"])
+                                            dist_to_nearest = max(abs(nearest['dist_x']), abs(nearest['dist_y']))
+
+                                            # Usa mesma lógica de follow_before_attack
+                                            if follow_before_attack and dist_to_nearest > 1:
+                                                log(f"🏃 RETARGET (follow): {nearest['name']} (dist={dist_to_nearest})")
+                                                packet.follow(nearest["id"])
+                                                state.start_follow(nearest["id"])
+                                                is_currently_following = True
+                                                follow_target_id = nearest["id"]
+                                            else:
+                                                log(f"⚔️ RETARGET: {nearest['name']} (custo: {cost})")
+                                                packet.attack(nearest["id"])
+                                                if is_currently_following:
+                                                    state.stop_follow()
+                                                    is_currently_following = False
+                                                    follow_target_id = 0
+
                                             current_target_id = nearest["id"]
                                             current_monitored_id = nearest["id"]
                                             last_target_data = nearest.copy()
@@ -1182,7 +1245,8 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                     # Check death phase to decide action
 
                     if death_phase == DeathState.DYING:
-                        print("DEBUG: DYING phase") 
+                        if debug_mode:
+                            print("DEBUG: DYING phase")
                         # hp=0 but still visible - enter DYING state, wait for despawn
                         log(f"☠️ {last_target_data['name']} morto mas visível (hp=0, vis=1) - aguardando despawn")
 
@@ -1199,7 +1263,8 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                         # Pausa spear picker IMEDIATAMENTE quando criatura morre (se auto_loot ativo)
                         if loot_enabled:
                             state.start_loot_cycle()
-                            print("DEBUG: Iniciando ciclo de loot (DYING phase).")
+                            if debug_mode:
+                                print("DEBUG: Iniciando ciclo de loot (DYING phase).")
                         # ================================================================================
 
                         death_state = DeathState.DYING
@@ -1212,17 +1277,20 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                         # DON'T set should_attack_new - will be set after corpse opened
 
                     elif death_phase == DeathState.CORPSE_READY or death_phase is None:
-                        print("DEBUG: CORPSE_READY or None")
+                        if debug_mode:
+                            print("DEBUG: CORPSE_READY or None")
                         # hp=0 and NOT visible - corpse ready OR creature despawned
                         log("💀 Alvo eliminado (verificação dupla confirmada).")
 
                         if last_target_data and loot_enabled:
-                            print("DEBUG: Tentando abrir corpo...")
+                            if debug_mode:
+                                print("DEBUG: Tentando abrir corpo...")
                             # ===== MARCA INÍCIO DO CICLO DE LOOT =====
                             # Guard: só inicia se não estiver ativo (pode já ter sido iniciado em DYING)
                             if not state.is_processing_loot:
                                 state.start_loot_cycle()
-                                print("DEBUG: Iniciando ciclo de loot (CORPSE_READY phase).")
+                                if debug_mode:
+                                    print("DEBUG: Iniciando ciclo de loot (CORPSE_READY phase).")
                             # ==========================================
 
                             monster_name = last_target_data["name"]
@@ -1231,16 +1299,9 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                             if should_skip_loot:
                                 if debug_mode:
                                     log(f"⏭️ Pulando loot de {monster_name} (sem loot)")
-                                # ===== SEM LOOT - ATIVA SPEAR PICKUP E LIBERA =====
-                                if spear_picker_enabled:
-                                    state.set_spear_pickup_pending(True)
-                                    log("🔄 Spear pickup pendente (sem loot)")
-                                    if debug_mode:
-                                        print(f"[FOLLOW-DEBUG] ✓ Spear pickup ativado (sem loot)")
-                                        print(f"[FOLLOW-DEBUG]   state.is_spear_pickup_pending={state.is_spear_pickup_pending}")
                                 state.end_loot_cycle()
-                                print("DEBUG: Pulando loot - sem loot definido para essa criatura.")
-                                # ==================================================
+                                if debug_mode:
+                                    print("DEBUG: Pulando loot - sem loot definido para essa criatura.")
                             else:
                                 # Corpse ready - wait and open
                                 gauss_wait(0.4, 25)  # 300-500ms humanized delay
@@ -1268,41 +1329,22 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                                     else:
                                         # Timeout atingido sem detectar container
                                         log(f"⚠️ Timeout ({timeout}s): Container de loot não abriu - finalizando ciclo")
-                                        # Ativa spear pickup antes de finalizar ciclo
-                                        if spear_picker_enabled:
-                                            state.set_spear_pickup_pending(True)
-                                            log("🔄 Spear pickup pendente (timeout loot)")
-                                            if debug_mode:
-                                                print(f"[FOLLOW-DEBUG] ✓ Spear pickup ativado (timeout loot)")
-                                                print(f"[FOLLOW-DEBUG]   state.is_spear_pickup_pending={state.is_spear_pickup_pending}")
                                         state.end_loot_cycle()
-                                        print("⚠️ Falha ao abrir corpo - ciclo de loot finalizado.")
-                                else:
-                                    # ===== FALHA AO ABRIR - ATIVA SPEAR PICKUP E LIBERA =====
-                                    print("DEBUG: Falha ao abrir corpo.")
-                                    if spear_picker_enabled:
-                                        state.set_spear_pickup_pending(True)
-                                        log("🔄 Spear pickup pendente (falha loot)")
                                         if debug_mode:
-                                            print(f"[FOLLOW-DEBUG] ✓ Spear pickup ativado (falha abrir corpo)")
-                                            print(f"[FOLLOW-DEBUG]   state.is_spear_pickup_pending={state.is_spear_pickup_pending}")
+                                            print("⚠️ Falha ao abrir corpo - ciclo de loot finalizado.")
+                                else:
+                                    if debug_mode:
+                                        print("DEBUG: Falha ao abrir corpo.")
                                     state.end_loot_cycle()
-                                    print("⚠️ Falha ao abrir corpo via packet - ciclo de loot finalizado.")
-                                    # ========================================================
+                                    if debug_mode:
+                                        print("⚠️ Falha ao abrir corpo via packet - ciclo de loot finalizado.")
 
                         elif last_target_data and not loot_enabled:
                             if debug_mode: log("ℹ️ Auto Loot desligado.")
-                            # ===== ATIVA SPEAR PICKUP E GARANTE CLEANUP =====
-                            if spear_picker_enabled:
-                                state.set_spear_pickup_pending(True)
-                                log("🔄 Spear pickup pendente (loot desabilitado)")
-                                if debug_mode:
-                                    print(f"[FOLLOW-DEBUG] ✓ Spear pickup ativado (loot desabilitado)")
-                                    print(f"[FOLLOW-DEBUG]   state.is_spear_pickup_pending={state.is_spear_pickup_pending}")
                             # Se start_loot_cycle foi chamado no DYING, garante cleanup
                             state.end_loot_cycle()
-                            print("DEBUG: Auto Loot desligado - garantindo fim do ciclo de loot.")
-                            # ================================================
+                            if debug_mode:
+                                print("DEBUG: Auto Loot desligado - garantindo fim do ciclo de loot.")
 
                         # ===== RESET APÓS PROCESSAR LOOT =====
                         # Reseta death_state aqui (não mais no polling)

@@ -35,6 +35,7 @@ from config import (
     SLOT_LEFT,
 )
 from database.movable_items_db import is_movable
+from database.tiles_config import FLOOR_CHANGE
 from core.map_core import get_player_pos
 from core.memory_map import MemoryMap
 from core.map_analyzer import MapAnalyzer
@@ -50,7 +51,7 @@ SPEAR_ID = 3277          # ID da spear
 SPEAR_WEIGHT = 20.0      # Peso de cada spear em oz
 
 # Debug - ativa/desativa prints do modulo
-DEBUG_SPEAR = False
+DEBUG_SPEAR = True
 
 def _log(msg):
     """Log condicional baseado em DEBUG_SPEAR."""
@@ -58,7 +59,7 @@ def _log(msg):
         print(msg)
 
 # Decremento de probabilidade por spear na mao (15% por spear)
-PICK_CHANCE_DECREMENT = 0.25
+PICK_CHANCE_DECREMENT = 0.10
 
 # Tiles a escanear (proprio tile + adjacentes incluindo diagonais)
 ADJACENT_TILES = [
@@ -71,8 +72,8 @@ ADJACENT_TILES = [
 # IDs de criaturas/players (item ID 99 na memoria do mapa)
 CREATURE_ID = 99
 
-# Chance de dropar no tile do player (50%)
-DROP_ON_PLAYER_CHANCE = 0.8
+# IDs de rope spots (não dropar items aqui)
+ROPE_SPOT_IDS = FLOOR_CHANGE.get('ROPE', set())
 
 # ========== DELAYS DE SCAN (RÁPIDOS, SEM HUMANIZAÇÃO) ==========
 # Estes delays controlam a velocidade dos loops de monitoramento
@@ -81,11 +82,12 @@ SCAN_TILES_DELAY = 0.5         # Delay entre scans de tiles ao redor (procurando
 
 # ========== DELAYS HUMANIZADOS (APLICADOS APENAS EM AÇÕES) ==========
 # Estes delays simulam tempo de reação humana e são aplicados APENAS em move_item
-REACTION_DELAY_MIN = 0.25      # Delay minimo de reacao ao detectar spear no chao (250ms base)
-MOVE_ITEM_DELAY_MIN = 0.50     # Delay minimo global apos QUALQUER move_item (250ms base)
+REACTION_DELAY_MIN = 0.20      # Delay minimo de reacao ao detectar spear no chao (250ms base)
+MOVE_ITEM_DELAY_MIN = 0.5     # Delay minimo global apos QUALQUER move_item (250ms base)
 # Nota: Variacao gaussiana de ~30% sera aplicada sobre estes valores base
 
 # ========== CONSOLIDAÇÃO DE SPEARS (HUMANIZAÇÃO) ==========
+ENABLE_CONSOLIDATION = False  # Desativado por enquanto
 # Delay entre moves de consolidação (juntar spears em um tile)
 CONSOLIDATE_MOVE_DELAY_MIN = 0.25  # 250ms base + variação 30%
 # Chance de consolidar vs pegar uma por uma (humanização adicional)
@@ -224,7 +226,7 @@ def calculate_pick_probability(current_count, max_count):
     chance = 1.0 - (PICK_CHANCE_DECREMENT * current_count)
 
     # Garante que nao fique negativo
-    return max(0.0, chance)
+    return max(0.5, chance)
 
 
 def find_spear_on_adjacent_tiles(mapper, my_x, my_y, my_z):
@@ -462,72 +464,6 @@ def consolidate_spears(mapper, analyzer, packet, pm, base_addr, player_id,
     return total_consolidated
 
 
-def find_drop_tile(mapper, spear_rel_x, spear_rel_y, my_x, my_y, my_z):
-    """
-    Encontra um tile WALKABLE para mover itens que estao acima da spear.
-
-    Requisitos:
-    - Tile deve ser walkable (sem paredes, arvores, etc.)
-    - Tile deve ser adjacente ao player (distancia <= 1)
-    - Tile deve ser adjacente ao tile da spear (distancia <= 1)
-
-    Logica randomizada:
-    - 50% das vezes: tile do proprio player
-    - 50% das vezes: tile adjacente ao tile da spear (se walkable)
-
-    Args:
-        mapper: MemoryMap instance
-        spear_rel_x, spear_rel_y: Posicao relativa do tile com a spear
-        my_x, my_y, my_z: Posicao absoluta do player
-
-    Returns:
-        Tuple (abs_x, abs_y, z) ou None se nao encontrar
-    """
-    # Cria MapAnalyzer para verificar walkability
-    analyzer = MapAnalyzer(mapper)
-
-    # 50% chance de dropar no tile do player (sempre walkable)
-    if random.random() < DROP_ON_PLAYER_CHANCE:
-        return (my_x, my_y, my_z)
-
-    # Tenta tiles adjacentes ao tile da spear (ordem randomizada)
-    adjacent_options = list(ADJACENT_TILES)
-    random.shuffle(adjacent_options)
-
-    for dx, dy in adjacent_options:
-        check_rel_x = spear_rel_x + dx
-        check_rel_y = spear_rel_y + dy
-
-        # Pula o tile da spear (nao faz sentido mover para o mesmo tile)
-        if dx == 0 and dy == 0:
-            continue
-
-        # Verifica se esta no range visivel
-        if abs(check_rel_x) > 7 or abs(check_rel_y) > 7:
-            continue
-
-        # Verifica se tile é adjacente ao player (distancia <= 1)
-        player_dist = max(abs(check_rel_x), abs(check_rel_y))
-        if player_dist > 1:
-            continue
-
-        # Verifica se tile existe
-        tile = mapper.get_tile_visible(check_rel_x, check_rel_y)
-        if tile is None or len(tile.items) == 0:
-            continue
-
-        # CRITICAL: Verifica se tile é WALKABLE (sem paredes, arvores, etc.)
-        props = analyzer.get_tile_properties(check_rel_x, check_rel_y)
-        if not props['walkable']:
-            continue
-
-        # Tile valido: walkable e adjacente ao player e spear
-        return (my_x + check_rel_x, my_y + check_rel_y, my_z)
-
-    # Fallback: tile do player
-    return (my_x, my_y, my_z)
-
-
 def find_drop_tile_avoiding_spears(mapper, spear_rel_x, spear_rel_y, my_x, my_y, my_z, spears_list):
     """
     Encontra tile para dropar bloqueadores durante consolidacao de spears.
@@ -552,9 +488,11 @@ def find_drop_tile_avoiding_spears(mapper, spear_rel_x, spear_rel_y, my_x, my_y,
     for s in spears_list:
         spear_tiles.add((s['abs_x'], s['abs_y']))
 
-    # PREFERENCIA 1: Tile do player (se nao tiver spear)
+    # PREFERENCIA 1: Tile do player (se nao tiver spear E nao tiver rope spot)
     if (my_x, my_y) not in spear_tiles:
-        return (my_x, my_y, my_z)
+        player_tile = mapper.get_tile(0, 0)
+        if not tile_has_rope_spot(player_tile):
+            return (my_x, my_y, my_z)
 
     # PREFERENCIA 2: Tiles adjacentes ao player que NAO tenham spear
     adjacent_options = list(ADJACENT_TILES)
@@ -595,11 +533,65 @@ def find_drop_tile_avoiding_spears(mapper, spear_rel_x, spear_rel_y, my_x, my_y,
         if not props['walkable']:
             continue
 
+        # Verifica se tile tem rope spot (não dropar items em rope spots)
+        if tile_has_rope_spot(tile):
+            continue
+
         return (candidate_x, candidate_y, my_z)
 
-    # Fallback: tile do player mesmo que tenha spear (ultimo recurso)
-    # Isso so acontece se TODOS os tiles adjacentes tiverem spear
-    return (my_x, my_y, my_z)
+    # Fallback: tile do player (ultimo recurso)
+    # Retorna None se player estiver em rope spot
+    player_tile = mapper.get_tile(0, 0)
+    if not tile_has_rope_spot(player_tile):
+        return (my_x, my_y, my_z)
+
+    return None
+
+
+def find_drop_tile_for_blocker(mapper, my_x, my_y, my_z):
+    """
+    Encontra tile para dropar bloqueadores ao pegar spear.
+
+    Diferente de find_drop_tile_avoiding_spears(), esta funcao:
+    - NAO evita tiles com spears (bloqueadores podem cair em qualquer tile)
+    - Apenas evita rope spots
+    - Prioridade: tile do player > tiles adjacentes walkable
+
+    Args:
+        mapper: MemoryMap instance
+        my_x, my_y, my_z: Posicao absoluta do player
+
+    Returns:
+        Tuple (abs_x, abs_y, z) ou None se nao encontrar
+    """
+    analyzer = MapAnalyzer(mapper)
+
+    # PREFERENCIA 1: Tile do player (se nao tiver rope spot)
+    player_tile = mapper.get_tile(0, 0)
+    if player_tile and not tile_has_rope_spot(player_tile):
+        return (my_x, my_y, my_z)
+
+    # PREFERENCIA 2: Qualquer tile adjacente walkable sem rope spot
+    for dx, dy in ADJACENT_TILES:
+        if dx == 0 and dy == 0:
+            continue  # Ja verificamos o tile do player
+
+        tile = mapper.get_tile_visible(dx, dy)
+        if tile is None:
+            continue
+
+        # Verifica se walkable
+        props = analyzer.get_tile_properties(dx, dy)
+        if not props['walkable']:
+            continue
+
+        # Verifica rope spot
+        if tile_has_rope_spot(tile):
+            continue
+
+        return (my_x + dx, my_y + dy, my_z)
+
+    return None
 
 
 def is_movable_item(item_id):
@@ -628,6 +620,27 @@ def is_movable_item(item_id):
         return False
 
     return result
+
+
+def tile_has_rope_spot(tile):
+    """
+    Verifica se um tile contém um rope spot.
+
+    Rope spots não devem receber items dropados pois podem
+    interferir na mecânica de mudança de andar.
+
+    Args:
+        tile: MemoryTile
+
+    Returns:
+        True se o tile contém um rope spot (ID 386)
+    """
+    if tile is None:
+        return False
+    for item_id in tile.items:
+        if item_id in ROPE_SPOT_IDS:
+            return True
+    return False
 
 
 def get_stack_count(tile, item_index):
@@ -766,6 +779,10 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
     PRIORITY_PICKUP_TIMEOUT = 5.0  # 5 segundos
     priority_pickup_start_time = None
 
+    # Timeout defensivo para is_processing_loot travado
+    LOOT_STUCK_TIMEOUT = 5.0  # 10 segundos
+    loot_processing_start_time = None
+
     while True:
         if check_running and not check_running():
             _log("[Spear Action] Thread encerrada")
@@ -784,6 +801,11 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
             state_data = shared_state.get_action_state()
 
             if not state_data['needs_spears']:
+                # Cleanup: se não precisa de spears mas flag está True, libera cavebot
+                if state.is_spear_pickup_pending:
+                    state.set_spear_pickup_pending(False)
+                    priority_pickup_start_time = None
+                    _log("[Spear Action] needs_spears=False - cavebot liberado")
                 time.sleep(SCAN_TILES_DELAY)
                 continue
 
@@ -802,6 +824,7 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
                         _log(f"[Spear Action] Timeout do ciclo prioritário ({PRIORITY_PICKUP_TIMEOUT}s) - liberando cavebot")
                         _log(f"[Spear Action]   state.is_spear_pickup_pending será setado para False")
                         state.set_spear_pickup_pending(False)
+                        state.end_loot_cycle()  # CRÍTICO: Reseta is_processing_loot para evitar bloqueio permanente
                         priority_pickup_start_time = None
                         continue
             else:
@@ -811,8 +834,19 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
                 # Pausa spear picker durante ciclo de loot (CORPSE_READY → fim)
                 # Previne conflitos durante abertura do corpo e processamento de loot
                 if state.is_processing_loot:
-                    time.sleep(SCAN_TILES_DELAY)  # 200ms
-                    continue
+                    # ===== TIMEOUT DEFENSIVO: Detecta is_processing_loot travado =====
+                    if loot_processing_start_time is None:
+                        loot_processing_start_time = time.time()
+                    elif time.time() - loot_processing_start_time > LOOT_STUCK_TIMEOUT:
+                        _log(f"[Spear Action] AVISO: is_processing_loot travado por {LOOT_STUCK_TIMEOUT}s - forçando reset")
+                        state.end_loot_cycle()
+                        loot_processing_start_time = None
+                        # Continua para tentar pegar spear
+                    else:
+                        time.sleep(SCAN_TILES_DELAY)  # 500ms
+                        continue
+                else:
+                    loot_processing_start_time = None  # Reset quando não está bloqueando
 
                 # Verificação adicional - previne race condition
                 # Se container está aberto, aguarda mesmo que is_processing_loot seja False
@@ -826,14 +860,26 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
             # === PRÉ-CONDIÇÕES ===
             my_x, my_y, my_z = get_player_pos(pm, base_addr)
             if my_z == 0:
+                if is_priority_pickup:
+                    _log("[Spear Action] Priority pickup: my_z=0 - liberando cavebot")
+                    state.set_spear_pickup_pending(False)
+                    priority_pickup_start_time = None
                 continue
 
             current_cap = get_player_cap(pm, base_addr)
             if current_cap < SPEAR_WEIGHT:
+                if is_priority_pickup:
+                    _log("[Spear Action] Priority pickup: cap insuficiente - liberando cavebot")
+                    state.set_spear_pickup_pending(False)
+                    priority_pickup_start_time = None
                 continue
 
             target_hand = find_target_hand(pm, base_addr)
             if target_hand is None:
+                if is_priority_pickup:
+                    _log("[Spear Action] Priority pickup: mãos cheias - liberando cavebot")
+                    state.set_spear_pickup_pending(False)
+                    priority_pickup_start_time = None
                 continue
 
             # === PROBABILIDADE ===
@@ -841,6 +887,7 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
             max_spears = state_data['max_spears']
 
             pick_chance = calculate_pick_probability(current_spears, max_spears)
+            #pick_chance = 0.5  # 80% de chance em combate (era 50%)
 
             # OVERRIDE: Fora de combate, sempre pega spear (100% chance)
             if not state.is_in_combat:
@@ -866,6 +913,10 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
             all_spears = find_all_spears_on_adjacent_tiles(mapper, my_x, my_y, my_z)
 
             if not all_spears:
+                # Cleanup: se estava em priority pickup e não há spears, libera cavebot
+                if state.is_spear_pickup_pending:
+                    state.set_spear_pickup_pending(False)
+                    _log("[Spear Action] Sem spears no chão - cavebot liberado")
                 time.sleep(SCAN_TILES_DELAY)
                 continue
 
@@ -879,6 +930,7 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
             # 3. Há mais de 1 spear no total no chão
             # 4. Chance de consolidar (85% humanizado)
             should_consolidate = (
+                ENABLE_CONSOLIDATION and
                 len(all_spears) > 1 and
                 spears_needed > 1 and
                 total_on_ground > 1 and
@@ -920,11 +972,21 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
             spear_location = find_spear_on_adjacent_tiles(mapper, my_x, my_y, my_z)
 
             if spear_location is None:
+                # Cleanup: se estava em priority pickup e spear sumiu, libera cavebot
+                if state.is_spear_pickup_pending:
+                    state.set_spear_pickup_pending(False)
+                    _log("[Spear Action] Spear não encontrada - cavebot liberado")
                 time.sleep(SCAN_TILES_DELAY)
                 continue
 
             pre_abs_x, pre_abs_y, _, _, pre_rel_x, pre_rel_y, _ = spear_location
             #print(f"[Spear Action] Detectou spear em tile ({pre_abs_x},{pre_abs_y}) rel=({pre_rel_x},{pre_rel_y})")
+
+            # ========== ATIVA FLAG: PICKUP ATIVO ==========
+            # Encontrou spear e vai pegar - pausa cavebot durante o processo
+            if not state.is_spear_pickup_pending:
+                state.set_spear_pickup_pending(True)
+                _log("[Spear Action] PICKUP ATIVO - cavebot pausado")
 
             # ========== DELAY DE REAÇÃO HUMANIZADO ==========
             # Simula tempo para "perceber" que tem spear no chão (min 250ms + variacao)
@@ -933,6 +995,7 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
             # ===== VERIFICAÇÃO CRÍTICA: Loot pode ter sido aberto durante delay =====
             if state.is_processing_loot:
                 _log("[Spear Action] Loot foi aberto durante delay de reação - abortando")
+                state.set_spear_pickup_pending(False)  # Cleanup: libera cavebot
                 continue
             # ========================================================================
 
@@ -945,16 +1008,19 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
 
             if current_spears >= max_spears:
                 _log("[Spear Action] Ficou cheio durante delay de reacao")
+                state.set_spear_pickup_pending(False)  # Cleanup: libera cavebot
                 continue
 
             # Rele mapa
             if not mapper.read_full_map(player_id):
                 time.sleep(0.3)
+                state.set_spear_pickup_pending(False)  # Cleanup: libera cavebot
                 continue
 
             spear_location = find_spear_on_adjacent_tiles(mapper, my_x, my_y, my_z)
             if spear_location is None:
                 _log("[Spear Action] Spear sumiu durante delay de reacao")
+                state.set_spear_pickup_pending(False)  # Cleanup: libera cavebot
                 continue
 
             abs_x, abs_y, z, spear_list_index, rel_x, rel_y, tile = spear_location
@@ -998,13 +1064,15 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
                 # ===== VERIFICAÇÃO DEFENSIVA: Loot pode ter sido aberto antes de find_drop_tile =====
                 if state.is_processing_loot:
                     _log("[Spear Action] Loot foi aberto antes de mover bloqueadores - abortando")
+                    state.set_spear_pickup_pending(False)  # Cleanup: libera cavebot
                     continue
                 # =====================================================================================
 
-                drop_tile = find_drop_tile(mapper, rel_x, rel_y, my_x, my_y, my_z)
+                drop_tile = find_drop_tile_for_blocker(mapper, my_x, my_y, my_z)
 
                 if drop_tile is None:
                     _log("[Spear Action] Nao encontrou tile valido para mover items bloqueadores")
+                    state.set_spear_pickup_pending(False)  # Cleanup: libera cavebot
                     continue
 
                 drop_x, drop_y, drop_z = drop_tile
@@ -1043,6 +1111,7 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
                 # Rele mapa após mover bloqueadores
                 if not mapper.read_full_map(player_id):
                     time.sleep(0.3)
+                    state.set_spear_pickup_pending(False)  # Cleanup: libera cavebot
                     continue
 
                 # ========== DELAY GLOBAL APÓS MOVER BLOQUEADORES ==========
@@ -1052,6 +1121,7 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
                 # ===== VERIFICAÇÃO CRÍTICA: Loot pode ter sido aberto durante moves dos bloqueadores =====
                 if state.is_processing_loot:
                     _log("[Spear Action] Loot foi aberto durante move dos bloqueadores - abortando")
+                    state.set_spear_pickup_pending(False)  # Cleanup: libera cavebot
                     continue
                 # ================================================================================================
 
@@ -1059,6 +1129,7 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
             spear_stack_pos = analyzer.get_item_stackpos(rel_x, rel_y, SPEAR_ID)
             if spear_stack_pos < 0:
                 _log(f"[Spear Action] Spear não encontrada no tile após mover bloqueadores")
+                state.set_spear_pickup_pending(False)  # Cleanup: libera cavebot
                 continue
             _log(f"[Spear Action] Stack_pos da spear: {spear_stack_pos}")
 
@@ -1080,6 +1151,7 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
             # ===== VERIFICAÇÃO FINAL: Loot pode ter sido aberto durante moves de bloqueadores =====
             if state.is_processing_loot:
                 _log("[Spear Action] Loot foi aberto - abortando antes de pegar spear")
+                state.set_spear_pickup_pending(False)  # Cleanup: libera cavebot
                 continue
             # =======================================================================================
 
@@ -1107,6 +1179,7 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
                 _log(f"[Spear Action] Priority check: needs_spears={new_state['needs_spears']}, current={new_state['current_spears']}, max={new_state['max_spears']}")
                 if not new_state['needs_spears']:
                     state.set_spear_pickup_pending(False)
+                    state.end_loot_cycle()  # CRÍTICO: Reseta is_processing_loot para evitar bloqueio permanente
                     priority_pickup_start_time = None  # Reset timeout
                     _log("[Spear Action] ✓ Ciclo prioritário COMPLETO - cavebot liberado")
                     _log(f"[Spear Action]   state.is_spear_pickup_pending={state.is_spear_pickup_pending}")

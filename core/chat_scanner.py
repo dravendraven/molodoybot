@@ -123,7 +123,8 @@ class ChatScanner:
         raw_author = f"{event.speaker} {msg_type}s:" if msg_type in ("say", "yell", "whisper") else event.speaker
 
         # Verifica hash ANTES de retornar para evitar duplicatas
-        current_hash = self._compute_hash(raw_author, event.message)
+        # Usa sender + texto (normalizado) para garantir consistência entre sniffer e memória
+        current_hash = self._compute_hash(event.speaker, event.message)
 
         # Mesma mensagem já processada (duplicata)
         if current_hash == self.last_received_hash:
@@ -172,9 +173,9 @@ class ChatScanner:
         except Exception:
             return None, None
 
-    def _compute_hash(self, author: str, text: str) -> str:
-        """Gera hash único para a mensagem."""
-        content = f"{author}|{text}"
+    def _compute_hash(self, sender: str, text: str) -> str:
+        """Gera hash único para a mensagem baseado em sender + texto (normalizado)."""
+        content = f"{sender.lower()}|{text}"
         return hashlib.md5(content.encode('utf-8', errors='ignore')).hexdigest()
 
     def _parse_author(self, author_str: str) -> tuple[str, str]:
@@ -254,8 +255,11 @@ class ChatScanner:
         if not self._is_valid_chat_author(author_str):
             return None
 
-        # Calcula hash para detectar se é nova
-        current_hash = self._compute_hash(author_str, msg_str)
+        # Extrai nome e tipo ANTES de calcular hash (consistência com sniffer)
+        sender_name, msg_type = self._parse_author(author_str)
+
+        # Calcula hash usando sender + texto (consistente com eventos do sniffer)
+        current_hash = self._compute_hash(sender_name, msg_str)
 
         # Mesma mensagem recebida de antes (evita duplicatas)
         if current_hash == self.last_received_hash:
@@ -270,9 +274,6 @@ class ChatScanner:
         self.last_received_hash = current_hash
         self.last_author = author_str
         self.last_text = msg_str
-
-        # Extrai nome e tipo
-        sender_name, msg_type = self._parse_author(author_str)
 
         return ChatMessage(
             sender=sender_name,
@@ -318,7 +319,5 @@ class ChatScanner:
             my_name: Nome do bot/player
             text: Texto da mensagem enviada
         """
-        # Formato esperado no jogo: "NomeDoPlayer says:"
-        expected_author = f"{my_name} says:"
-        # Apenas marca o hash da mensagem enviada (não sobrescreve last_received)
-        self.last_sent_hash = self._compute_hash(expected_author, text)
+        # Usa sender + texto diretamente (consistente com _compute_hash normalizado)
+        self.last_sent_hash = self._compute_hash(my_name, text)
