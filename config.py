@@ -6,7 +6,7 @@ from database import foods_db
 # ==============================================================================
 DEBUG_MODE = False    # Modo debug geral - ativa logs extras em diversos módulos
 HIT_LOG_ENABLED = False  # Controls writing hits to hits_monitor.txt
-XRAY_TRAINER_DEBUG = True    # True = mostra overlay de debug do trainer
+XRAY_TRAINER_DEBUG = False    # True = mostra overlay de debug do trainer
 
 # Bot State Debugger HUD
 DEBUG_BOT_STATE = False                      # Master toggle - mostra/esconde HUD
@@ -23,7 +23,7 @@ DEBUG_OBSTACLE_CLEARING = False   # Ativa logs detalhados do obstacle clearing
 DEBUG_STACK_CLEARING = False      # Ativa logs detalhados do stack clearing
 
 # Advancement & Chat
-DEBUG_ADVANCEMENT = True             # Logs detalhados de detecção de progresso
+DEBUG_ADVANCEMENT = False             # Logs detalhados de detecção de progresso
 DEBUG_CHAT_HANDLER = True           # Logs detalhados do sistema de chat
 
 # Trainer
