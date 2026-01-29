@@ -55,8 +55,12 @@ from modules.spear_picker import spear_picker_loop
 from modules.debug_monitor import init_debug_monitor, show_debug_monitor
 from core.player_core import get_connected_char_name
 from core.bot_state import state
+from core.action_scheduler import init_scheduler, get_scheduler, stop_scheduler
+from core.game_state import game_state, init_game_state, shutdown_game_state
 from core.overlay_renderer import renderer as overlay_renderer
 from core.chat_handler import ChatHandler
+from gui.settings_window import SettingsWindow, SettingsCallbacks
+from gui.main_window import MainWindow, MainWindowCallbacks
 #import corpses
 
 # Sniffer de pacotes (opcional - requer Npcap e execução como Admin)
@@ -92,7 +96,9 @@ except Exception:
 # 2. VARIÁVEIS GLOBAIS E CONFIGURAÇÃO
 # ==============================================================================
 
-toplevel_settings = None
+toplevel_settings = None  # DEPRECATED - usar settings_window
+settings_window = None  # Nova instância da janela de settings (SettingsWindow)
+main_window = None  # Nova instância da janela principal (MainWindow)
 CONFIG_FILE = "bot_config.json"
 
 # Estado Global do Bot
@@ -141,12 +147,13 @@ BOT_SETTINGS = {
     "fisher_check_cap": True,   # Ativa/Desativa checagem
     "fisher_min_cap": 6.0,     # Valor da Cap mínima
     "fisher_fatigue": False,
-    
+    "fisher_auto_eat": False,  # Auto-comer durante pesca
+
     # Runemaker
     "rune_mana": 100,
     "rune_hotkey": "F3",
     "rune_blank_id": 3147,
-    "rune_hand": "RIGHT",
+    "rune_hand": "DIREITA",
     "rune_work_pos": (0,0,0),
     "rune_safe_pos": (0,0,0),
     "rune_return_delay": 300,
@@ -161,7 +168,12 @@ BOT_SETTINGS = {
     "ks_prevention_enabled": True,
 
     # Console Log
-    "console_log_visible": False  # Default: Status Panel visível, Console Log escondido
+    "console_log_visible": False,  # Default: Status Panel visível, Console Log escondido
+
+    # AFK Humanization (Cavebot)
+    "afk_pause_enabled": False,     # Pausar AFK aleatórias durante rota
+    "afk_pause_duration": 30,       # Duração total do AFK (segundos) - mínimo 5s
+    "afk_pause_interval": 10        # Intervalo máximo entre pausas (minutos) - mínimo 5min
 }
 
 _cached_player_name = ""
@@ -217,7 +229,10 @@ if os.path.exists("bot_config.json"):
         with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
             data = json.load(f)
             BOT_SETTINGS.update(data)
-            
+
+            # DEBUG_MODE do config.py tem prioridade sobre o JSON
+            BOT_SETTINGS["debug_mode"] = config.DEBUG_MODE
+
             # Correção específica para Tuplas (JSON salva como lista)
             if "rune_work_pos" in BOT_SETTINGS:
                 BOT_SETTINGS["rune_work_pos"] = tuple(BOT_SETTINGS["rune_work_pos"])
@@ -969,10 +984,46 @@ def connection_watchdog():
                     pm = pymem.Pymem(PROCESS_NAME)
                     base_addr = pymem.process.module_from_name(pm.process_handle, PROCESS_NAME).lpBaseOfDll
                     log("✅ Processo do Tibia detectado.")
+
+                    # Initialize game state (Eyes - memory scanner at 20Hz)
+                    try:
+                        init_game_state(pm, base_addr)
+                        log("✅ Game State inicializado (20Hz polling).")
+                    except Exception as e:
+                        print(f"Aviso: Falha ao inicializar Game State: {e}")
+
+                    # Initialize action scheduler
+                    try:
+                        scheduler = init_scheduler(pm, base_addr)
+                        scheduler.set_state_checker(
+                            can_send_mouse=game_state.can_send_mouse_action,
+                            can_send_keyboard=game_state.can_send_keyboard_action
+                        )
+                        log("✅ Action Scheduler inicializado.")
+
+                        # Initialize eater module (Phase 2 - new implementation)
+                        from modules.eater import init_eater_module
+                        eater_mod = init_eater_module(pm, base_addr, log_callback=log)
+                        eater_mod.enable()
+                        log("✅ Eater Module inicializado.")
+
+                        # Initialize stacker module (Phase 3 - new implementation)
+                        from modules.stacker import init_stacker_module
+                        stacker_mod = init_stacker_module(
+                            pm, base_addr,
+                            config_getter=lambda k, d=None: BOT_SETTINGS.get(k, d),
+                            log_callback=log
+                        )
+                        stacker_mod.enable()
+                        log("✅ Stacker Module inicializado.")
+                    except Exception as e:
+                        print(f"Aviso: Falha ao inicializar Action Scheduler: {e}")
                 except:
+                    # Depois:
+                
                     if was_connected_once:
                         print("Tibia fechou. Encerrando bot...")
-                        clear_player_name_cache() 
+                        clear_player_name_cache()
                         os._exit(0) # Mata o bot
                     state.is_connected = False
                     lbl_connection.configure(text="Cliente Fechado ❌", text_color="#FF5555")
@@ -987,8 +1038,13 @@ def connection_watchdog():
                     if not state.is_connected:
                         log("🟢 Conectado ao mundo!")
                         if full_light_enabled:
-                            time.sleep(1) 
+                            time.sleep(1)
                             apply_full_light(True)
+
+                        # Atualiza GUI baseado na vocação configurada
+                        if main_window:
+                            app.after(0, main_window.update_stats_visibility)
+
                     state.is_connected = True
                     was_connected_once = True
                     lbl_connection.configure(text="Conectado 🟢", text_color="#00FF00")
@@ -1003,7 +1059,7 @@ def connection_watchdog():
                 if was_connected_once:
                     os._exit(0)
                 lbl_connection.configure(text="Cliente Fechado ❌", text_color="#FF5555")
-                clear_player_name_cache() 
+                clear_player_name_cache()
 
         except Exception as e:
             print(f"Erro Watchdog: {e}")
@@ -1022,7 +1078,17 @@ def start_cavebot_thread():
                 print("Inicializando instância do Cavebot...")
                 # Usa client_path configurado na GUI, ou fallback para MAPS_DIRECTORY do config.py
                 maps_dir = BOT_SETTINGS.get('client_path') or None
-                cavebot_instance = Cavebot(pm, base_addr, maps_directory=maps_dir)
+                cavebot_instance = Cavebot(
+                    pm,
+                    base_addr,
+                    maps_directory=maps_dir,
+                    spear_picker_enabled_callback=lambda: BOT_SETTINGS.get('spear_picker_enabled', False),
+                    afk_settings_callback=lambda: {
+                        'enabled': BOT_SETTINGS.get('afk_pause_enabled', False),
+                        'duration': BOT_SETTINGS.get('afk_pause_duration', 30),
+                        'interval': BOT_SETTINGS.get('afk_pause_interval', 10)
+                    }
+                )
                 # Se já tiver waypoints na UI, carrega eles
                 if current_waypoints_ui:
                     cavebot_instance.load_waypoints(current_waypoints_ui)
@@ -1761,7 +1827,8 @@ def auto_fisher_thread():
         'max_attempts': BOT_SETTINGS.get('fisher_max', 6),
         'check_cap': BOT_SETTINGS.get('fisher_check_cap', True),
         'min_cap_val': BOT_SETTINGS.get('fisher_min_cap', 6.0),
-        'fatigue': BOT_SETTINGS.get('fisher_fatigue', True)
+        'fatigue': BOT_SETTINGS.get('fisher_fatigue', True),
+        'auto_eat': BOT_SETTINGS.get('fisher_auto_eat', False)
     }
 
     while state.is_running:
@@ -1790,10 +1857,70 @@ def auto_fisher_thread():
                          status_callback=update_fisher_status)
             
             time.sleep(1)
-            
+
         except Exception as e:
             print(f"Erro Fisher Thread: {e}")
             time.sleep(5)
+
+def auto_eater_thread():
+    """Thread for automatic eating using the new EaterModule (action scheduler)."""
+    from modules.eater import get_eater_module, USE_ACTION_SCHEDULER
+
+    while state.is_running:
+        try:
+            # Only run if action scheduler is enabled for eater
+            if not USE_ACTION_SCHEDULER:
+                time.sleep(1)
+                continue
+
+            if not state.is_connected:
+                time.sleep(1)
+                continue
+
+            eater_mod = get_eater_module()
+            if eater_mod is None:
+                time.sleep(1)
+                continue
+
+            # Run cycle (will submit actions to scheduler)
+            eater_mod.run_cycle()
+
+            # Sleep to avoid excessive CPU usage
+            time.sleep(0.5)
+
+        except Exception as e:
+            print(f"Erro Eater Thread: {e}")
+            time.sleep(2)
+
+def auto_stacker_thread():
+    """Thread for automatic item stacking using the new StackerModule (action scheduler)."""
+    from modules.stacker import get_stacker_module, USE_ACTION_SCHEDULER
+
+    while state.is_running:
+        try:
+            # Only run if action scheduler is enabled for stacker
+            if not USE_ACTION_SCHEDULER:
+                time.sleep(1)
+                continue
+
+            if not state.is_connected:
+                time.sleep(1)
+                continue
+
+            stacker_mod = get_stacker_module()
+            if stacker_mod is None:
+                time.sleep(1)
+                continue
+
+            # Run cycle (will submit actions to scheduler)
+            stacker_mod.run_cycle()
+
+            # Sleep to avoid excessive CPU usage (stacking is low priority)
+            time.sleep(0.3)
+
+        except Exception as e:
+            print(f"Erro Stacker Thread: {e}")
+            time.sleep(2)
 
 def runemaker_thread():
     hwnd = 0
@@ -2114,38 +2241,32 @@ def gui_updater_loop():
 
 def update_stats_visibility():
     """
-    Ajusta a interface baseada na vocação:
-    - Mages: Esconde Sword, Shield e o Gráfico de Melee.
-    - Knights: Mostra tudo.
+    Ajusta a interface baseada na vocação.
+    Delega para main_window se disponível.
     """
+    global main_window
+    if main_window is not None:
+        main_window.update_stats_visibility()
+        return
+
+    # Fallback (não deve ser chamado após a refatoração)
     voc = BOT_SETTINGS['vocation']
     is_mage = any(x in voc for x in ["Elder", "Master", "Druid", "Sorcerer", "Mage", "None"])
-
-    # Precisamos da variável global para saber se o gráfico estava aberto
     global is_graph_visible
 
     if is_mage:
-        # 1. Esconde Stats de Melee
         box_sword.grid_remove()
         frame_sw_det.grid_remove()
         box_shield.grid_remove()
         frame_sh_det.grid_remove()
-
-        # 2. Se o gráfico estiver aberto, fecha ele primeiro para resetar o tamanho da janela
         if is_graph_visible:
             toggle_graph()
-
-        # 3. Esconde o Container do Botão de Gráfico (Remove da tela)
         frame_graphs_container.pack_forget()
-
     else:
-        # 1. Mostra Stats de Melee
         box_sword.grid(row=4, column=0, padx=10, sticky="w")
         frame_sw_det.grid(row=4, column=1, padx=10, sticky="e")
         box_shield.grid(row=5, column=0, padx=10, sticky="w")
         frame_sh_det.grid(row=5, column=1, padx=10, sticky="e")
-
-        # 2. Mostra o Container do Gráfico novamente
         frame_graphs_container.pack(padx=10, pady=(5, 0), fill="x", after=frame_stats)
 
     auto_resize_window()
@@ -2153,38 +2274,43 @@ def update_stats_visibility():
 def auto_resize_window():
     """
     Calcula o tamanho necessário para o conteúdo e ajusta a janela.
-    Mantém a largura fixa em 320.
+    Delega para main_window se disponível.
     """
+    global main_window
+    if main_window is not None:
+        main_window.auto_resize_window()
+        return
+
+    # Fallback
     def do_resize():
-        # Força a interface a processar as mudanças pendentes
         app.update_idletasks()
-        # Pega a altura requisitada pelo Frame Principal
         h = main_frame.winfo_reqheight() + 12
         app.geometry(f"320x{h}")
 
-    # Agendar resize para o próximo ciclo do event loop
-    # Isso garante que todos os widgets foram renderizados
     app.after(10, do_resize)
 
 def toggle_log_visibility():
     """
     Toggle entre Console Log e Status Panel.
-    - Console Log ON: Mostra log tradicional, esconde status panel
-    - Console Log OFF: Mostra status panel, esconde log
+    Delega para main_window se disponível.
     """
-    global log_visible, txt_log, frame_status_panel
+    global main_window, log_visible
+    if main_window is not None:
+        main_window.toggle_log_visibility()
+        log_visible = main_window.log_visible  # Sync global
+        return
 
+    # Fallback
+    global txt_log, frame_status_panel
     log_visible = not log_visible
     BOT_SETTINGS['console_log_visible'] = log_visible
 
     if log_visible:
-        # Console Log ativo - esconder status panel
         if frame_status_panel:
             frame_status_panel.pack_forget()
         txt_log.pack(side="bottom", fill="x", padx=5, pady=5, expand=True)
         log("📝 Console Log ativado")
     else:
-        # Status Panel ativo - esconder console log
         txt_log.pack_forget()
         if frame_status_panel:
             frame_status_panel.pack(side="bottom", fill="x", padx=8, pady=3)
@@ -2195,19 +2321,22 @@ def toggle_log_visibility():
 def update_status_panel():
     """
     Atualiza os labels do Status Panel baseado nos módulos ativos.
-    Chamada periodicamente pelo gui_updater_loop.
+    Delega para main_window se disponível.
     """
+    global main_window
+    if main_window is not None:
+        main_window.update_status_panel()
+        return
+
+    # Fallback
     global frame_status_panel, status_labels, cavebot_instance
 
-    # Se console log está ativo ou status panel não existe, não atualiza
     if log_visible or not frame_status_panel:
         return
 
-    # Atualizar status do cavebot da instância
     if cavebot_instance and hasattr(cavebot_instance, 'state_message'):
         MODULE_STATUS['cavebot'] = cavebot_instance.state_message or ""
 
-    # Verificar quais módulos estão ativos
     active_modules = []
     try:
         if switch_trainer.get():
@@ -2221,26 +2350,22 @@ def update_status_panel():
         if switch_alarm.get():
             active_modules.append('alarm')
     except:
-        pass  # Widgets ainda não criados
+        pass
 
-    # Esconder todos os labels primeiro
     for module, label in status_labels.items():
         label.pack_forget()
 
-    # Mostrar apenas os ativos com status
     shown = False
     for module in active_modules:
         status = MODULE_STATUS.get(module, "")
         if status:
             icon = MODULE_ICONS.get(module, "•")
-            # Truncar status se muito longo
             if len(status) > 45:
                 status = status[:42] + "..."
             status_labels[module].configure(text=f"{icon} {module.capitalize()}: {status}")
             status_labels[module].pack(fill="x", padx=8, pady=1, anchor="w")
             shown = True
 
-    # Se nenhum módulo ativo ou sem status, mostrar mensagem padrão
     if not shown:
         if active_modules:
             status_labels['trainer'].configure(text="⏳ Aguardando atividade...")
@@ -2248,20 +2373,238 @@ def update_status_panel():
             status_labels['trainer'].configure(text="💤 Nenhum módulo ativo")
         status_labels['trainer'].pack(fill="x", padx=8, pady=2, anchor="w")
 
-    # Ajustar altura da janela após mostrar/esconder labels
     auto_resize_window()
 
+# ==============================================================================
+# SETTINGS WINDOW - CALLBACKS E INTEGRAÇÃO
+# ==============================================================================
+
+def create_settings_callbacks() -> SettingsCallbacks:
+    """
+    Cria o objeto de callbacks para a janela de Settings.
+    Todos os callbacks acessam variáveis globais de main.py.
+    """
+    global full_light_enabled, log_visible, txt_log, frame_status_panel, chat_handler
+
+    def on_light_toggle(enabled: bool):
+        global full_light_enabled
+        full_light_enabled = enabled
+        apply_full_light(enabled)
+        log(f"💡 Full Light: {enabled}")
+
+    def on_lookid_toggle(enabled: bool):
+        BOT_SETTINGS['lookid_enabled'] = enabled
+        status = "ativado" if enabled else "desativado"
+        log(f"🔍 Look ID: {status}")
+
+    def on_spear_picker_toggle(enabled: bool):
+        BOT_SETTINGS['spear_picker_enabled'] = enabled
+        status = "ativado" if enabled else "desativado"
+        log(f"🎯 Pegar Spear: {status}")
+
+    def on_ai_chat_toggle(enabled: bool):
+        BOT_SETTINGS['ai_chat_enabled'] = enabled
+        if chat_handler:
+            if enabled:
+                chat_handler.enable()
+            else:
+                chat_handler.disable()
+        status = "ativado" if enabled else "desativado"
+        log(f"🤖 Resposta via IA: {status}")
+
+    def on_console_log_toggle(enabled: bool):
+        global log_visible
+        log_visible = enabled
+        BOT_SETTINGS['console_log_visible'] = enabled
+        if enabled:
+            if frame_status_panel:
+                frame_status_panel.pack_forget()
+            if txt_log:
+                txt_log.pack(side="bottom", fill="x", padx=5, pady=5, expand=True)
+        else:
+            if txt_log:
+                txt_log.pack_forget()
+            if frame_status_panel:
+                frame_status_panel.pack(side="bottom", fill="x", padx=8, pady=3)
+        log(f"📊 Console Log: {'Visível' if enabled else 'Oculto'}")
+
+    def on_ignore_toggle(enabled: bool):
+        BOT_SETTINGS['ignore_first'] = enabled
+        log(f"🛡️ Ignorar 1º: {enabled}")
+
+    def on_ks_toggle(enabled: bool):
+        BOT_SETTINGS['ks_prevention_enabled'] = enabled
+        log(f"🛡️ Anti Kill-Steal: {'Ativado' if enabled else 'Desativado'}")
+
+    def set_rune_pos_callback(type_pos: str):
+        if pm:
+            try:
+                x = pm.read_int(base_addr + OFFSET_PLAYER_X)
+                y = pm.read_int(base_addr + OFFSET_PLAYER_Y)
+                z = pm.read_int(base_addr + OFFSET_PLAYER_Z)
+                key = 'rune_work_pos' if type_pos == "WORK" else 'rune_safe_pos'
+                BOT_SETTINGS[key] = (x, y, z)
+                if settings_window:
+                    settings_window.update_rune_pos_labels_ui()
+                log(f"📍 {type_pos} definido: {x}, {y}, {z}")
+            except:
+                log("❌ Logue no char.")
+
+    def refresh_scripts_callback(selected=None):
+        scripts = list_cavebot_scripts()
+        if settings_window:
+            settings_window.refresh_scripts_combo_ui(scripts, selected)
+        return scripts
+
+    return SettingsCallbacks(
+        # State providers
+        get_bot_settings=lambda: BOT_SETTINGS,
+        get_vocation_options=lambda: list(VOCATION_REGEN.keys()),
+        get_pm=lambda: pm,
+        get_base_addr=lambda: base_addr,
+        get_current_waypoints=lambda: current_waypoints_ui,
+        get_current_waypoints_filename=lambda: current_waypoints_filename,
+        get_full_light_enabled=lambda: full_light_enabled,
+        get_log_visible=lambda: log_visible,
+        get_chat_handler=lambda: chat_handler,
+
+        # Save
+        save_config_file=save_config_file,
+
+        # Tab Geral
+        on_light_toggle=on_light_toggle,
+        on_lookid_toggle=on_lookid_toggle,
+        on_spear_picker_toggle=on_spear_picker_toggle,
+        on_ai_chat_toggle=on_ai_chat_toggle,
+        on_console_log_toggle=on_console_log_toggle,
+        update_stats_visibility=update_stats_visibility,
+
+        # Tab Trainer
+        on_ignore_toggle=on_ignore_toggle,
+        on_ks_toggle=on_ks_toggle,
+
+        # Tab Rune
+        set_rune_pos=set_rune_pos_callback,
+
+        # Tab Cavebot
+        load_waypoints_file=load_waypoints_file,
+        save_waypoints_file=save_waypoints_file,
+        refresh_scripts_combo=refresh_scripts_callback,
+        record_current_pos=record_current_pos,
+        move_waypoint_up=move_waypoint_up,
+        move_waypoint_down=move_waypoint_down,
+        remove_selected_waypoint=remove_selected_waypoint,
+        clear_waypoints=clear_waypoints,
+        update_waypoint_display=update_waypoint_display,
+        open_waypoint_editor=open_waypoint_editor_window,
+
+        # Logging
+        log=log,
+
+        # Feature flags
+        use_configurable_loot=USE_CONFIGURABLE_LOOT_SYSTEM,
+        use_auto_container_detection=USE_AUTO_CONTAINER_DETECTION,
+    )
+
+
 def open_settings():
-    global toplevel_settings, lbl_status, txt_waypoints_settings, entry_waypoint_name, combo_cavebot_scripts, current_waypoints_filename, label_cavebot_status, waypoint_listbox, lbl_wp_header
-    
-    if toplevel_settings is not None and toplevel_settings.winfo_exists():
-        toplevel_settings.lift()
-        toplevel_settings.focus()
+    """Abre a janela de configurações usando a nova classe SettingsWindow."""
+    global settings_window, toplevel_settings, waypoint_listbox, lbl_wp_header
+    global entry_waypoint_name, combo_cavebot_scripts, label_cavebot_status
+
+    # Cria a instância se não existir
+    if settings_window is None:
+        callbacks = create_settings_callbacks()
+        settings_window = SettingsWindow(app, callbacks)
+
+    # Abre a janela
+    settings_window.open()
+
+    # Atualiza referências globais para compatibilidade com código existente
+    toplevel_settings = settings_window.window
+    waypoint_listbox = settings_window.waypoint_listbox
+    lbl_wp_header = settings_window.lbl_wp_header
+    entry_waypoint_name = settings_window.entry_waypoint_name
+    combo_cavebot_scripts = settings_window.combo_cavebot_scripts
+    label_cavebot_status = settings_window.label_cavebot_status
+
+
+# ==============================================================================
+# MAIN WINDOW - CALLBACKS E INTEGRAÇÃO
+# ==============================================================================
+
+def create_main_window_callbacks() -> MainWindowCallbacks:
+    """
+    Cria o objeto de callbacks para a janela principal.
+    Todos os callbacks acessam variáveis globais de main.py.
+    """
+    return MainWindowCallbacks(
+        # State Providers
+        get_bot_settings=lambda: BOT_SETTINGS,
+        get_state=lambda: state,
+        get_pm=lambda: pm,
+        get_base_addr=lambda: base_addr,
+
+        # Module Status
+        get_module_status=lambda: MODULE_STATUS,
+        get_module_icons=lambda: MODULE_ICONS,
+        get_cavebot_instance=lambda: cavebot_instance,
+
+        # Action Callbacks
+        open_settings=open_settings,
+        on_close=on_close,
+        on_reload=on_reload,
+        toggle_xray=toggle_xray,
+        toggle_cavebot=toggle_cavebot_func,
+        on_fisher_toggle=on_fisher_toggle,
+
+        # Trackers
+        get_sword_tracker=lambda: sword_tracker,
+        get_shield_tracker=lambda: shield_tracker,
+        get_magic_tracker=lambda: magic_tracker,
+        get_exp_tracker=lambda: exp_tracker,
+        get_gold_tracker=lambda: gold_tracker,
+        get_regen_tracker=lambda: regen_tracker,
+
+        # Config
+        reload_button_enabled=config.RELOAD_BUTTON,
+        maps_directory=MAPS_DIRECTORY,
+        walkable_colors=WALKABLE_COLORS,
+    )
+
+
+# ==============================================================================
+# FUNÇÃO ANTIGA open_settings() - CÓDIGO REMOVIDO
+# A implementação foi movida para gui/settings_window.py
+# ==============================================================================
+
+def toggle_graph():
+    """Delega para main_window se disponível."""
+    global main_window
+    if main_window is not None:
+        main_window.toggle_graph()
         return
 
-    # ==========================================================================
-    # 🎨 SISTEMA DE ESTILOS (CSS-LIKE)
-    # ==========================================================================
+    # Fallback (não deve ser chamado após a refatoração)
+    global is_graph_visible
+    if is_graph_visible:
+        frame_graph.pack_forget()
+        btn_graph.configure(text="Mostrar Gráfico 📈")
+        is_graph_visible = False
+    else:
+        frame_graph.pack(side="top", fill="both", expand=True, pady=(0, 5))
+        btn_graph.configure(text="Esconder Gráfico 📉")
+        is_graph_visible = True
+    auto_resize_window()
+
+
+# [CÓDIGO ANTIGO REMOVIDO]
+# A função open_settings() (~960 linhas) foi movida para gui/settings_window.py
+# Ver classe SettingsWindow para a implementação completa.
+# [FIM DO CÓDIGO REMOVIDO]
+
+def _legacy_code_marker():
+    """MARCADOR: O código antigo começa aqui e vai até toggle_xray()"""
     UI = {
         # --- TIPOGRAFIA & CORES ---
         'H1': { # Títulos de Seção
@@ -2866,8 +3209,14 @@ def open_settings():
     switch_fatigue = ctk.CTkSwitch(frame_fish_opts, text="Simular Fadiga Humana", command=toggle_dummy, progress_color="#FFA500", **UI['BODY'])
     switch_fatigue.pack(anchor="w", padx=UI['PAD_INDENT'], pady=2)
     if BOT_SETTINGS.get('fisher_fatigue', True): switch_fatigue.select()
-    
+
     ctk.CTkLabel(frame_fish_opts, text="↳ Cria pausas e lentidão progressiva.", **UI['HINT']).pack(anchor="w", padx=45)
+
+    switch_fisher_eat = ctk.CTkSwitch(frame_fish_opts, text="Auto-Comer (Fishing)", command=toggle_dummy, progress_color="#FFA500", **UI['BODY'])
+    switch_fisher_eat.pack(anchor="w", padx=UI['PAD_INDENT'], pady=2)
+    if BOT_SETTINGS.get('fisher_auto_eat', False): switch_fisher_eat.select()
+
+    ctk.CTkLabel(frame_fish_opts, text="↳ Tenta comer a cada 2s até ficar full (60s de pausa).", **UI['HINT']).pack(anchor="w", padx=45)
 
     def save_fish():
         try:
@@ -2876,15 +3225,17 @@ def open_settings():
             cap_val = float(entry_fish_cap_val.get().replace(',', '.'))
             check_cap = bool(switch_fish_cap.get())
             fatigue_enabled = bool(switch_fatigue.get())
-            
+            auto_eat_enabled = bool(switch_fisher_eat.get())
+
             if mn < 1: mn=1
             if mx < mn: mx=mn
-            
+
             BOT_SETTINGS['fisher_min'] = mn
             BOT_SETTINGS['fisher_max'] = mx
             BOT_SETTINGS['fisher_min_cap'] = cap_val
             BOT_SETTINGS['fisher_check_cap'] = check_cap
             BOT_SETTINGS['fisher_fatigue'] = fatigue_enabled
+            BOT_SETTINGS['fisher_auto_eat'] = auto_eat_enabled
             save_config_file()
             config.CHECK_MIN_CAP = check_cap
             config.MIN_CAP_VALUE = cap_val
@@ -2936,8 +3287,8 @@ def open_settings():
     entry_hk.pack(side="left", padx=2)
     entry_hk.insert(0, BOT_SETTINGS['rune_hotkey'])
     
-    ctk.CTkLabel(f_c1, text="Hand:", **UI['BODY']).pack(side="left", padx=5)
-    combo_hand = ctk.CTkComboBox(f_c1, values=["RIGHT", "LEFT", "BOTH"], **UI['COMBO'])
+    ctk.CTkLabel(f_c1, text="Mão:", **UI['BODY']).pack(side="left", padx=5)
+    combo_hand = ctk.CTkComboBox(f_c1, values=["DIREITA", "ESQUERDA", "AMBAS"], **UI['COMBO'])
     combo_hand.configure(width=70)
     combo_hand.pack(side="left", padx=2)
     combo_hand.set(BOT_SETTINGS['rune_hand'])
@@ -2949,18 +3300,18 @@ def open_settings():
     f_h1 = ctk.CTkFrame(frame_human, fg_color="transparent")
     f_h1.pack(fill="x", padx=2, pady=5)
     
-    ctk.CTkLabel(f_h1, text="Wait:", **UI['BODY']).pack(side="left", padx=5)
+    ctk.CTkLabel(f_h1, text="Esperar de:", **UI['BODY']).pack(side="left", padx=5)
     entry_human_min = ctk.CTkEntry(f_h1, **UI['INPUT'])
     entry_human_min.configure(width=35)
     entry_human_min.pack(side="left", padx=2)
     entry_human_min.insert(0, str(BOT_SETTINGS.get('rune_human_min', 5)))
     
-    ctk.CTkLabel(f_h1, text="to", **UI['BODY']).pack(side="left", padx=2)
+    ctk.CTkLabel(f_h1, text="a", **UI['BODY']).pack(side="left", padx=2)
     entry_human_max = ctk.CTkEntry(f_h1, **UI['INPUT'])
     entry_human_max.configure(width=35)
     entry_human_max.pack(side="left", padx=2)
     entry_human_max.insert(0, str(BOT_SETTINGS.get('rune_human_max', 30)))
-    ctk.CTkLabel(f_h1, text="sec (action)", **UI['BODY']).pack(side="left", padx=2)
+    ctk.CTkLabel(f_h1, text="segundos antes de castar", **UI['BODY']).pack(side="left", padx=2)
 
     # Frame Move
     frame_move = ctk.CTkFrame(tab_rune, fg_color="#2b2b2b")
@@ -2990,13 +3341,13 @@ def open_settings():
     # Delays
     f_m2 = ctk.CTkFrame(frame_move, fg_color="transparent")
     f_m2.pack(fill="x", padx=5, pady=5)
-    ctk.CTkLabel(f_m2, text="React:", **UI['BODY']).pack(side="left")
+    ctk.CTkLabel(f_m2, text="Reagir em:", **UI['BODY']).pack(side="left")
     entry_flee = ctk.CTkEntry(f_m2, **UI['INPUT'])
     entry_flee.configure(width=35)
     entry_flee.pack(side="left", padx=2)
     entry_flee.insert(0, str(BOT_SETTINGS.get('rune_flee_delay', 0.5)))
     
-    ctk.CTkLabel(f_m2, text="Ret:", **UI['BODY']).pack(side="left", padx=5)
+    ctk.CTkLabel(f_m2, text="Retornar após:", **UI['BODY']).pack(side="left", padx=5)
     entry_ret_delay = ctk.CTkEntry(f_m2, **UI['INPUT'])
     entry_ret_delay.configure(width=35)
     entry_ret_delay.pack(side="left", padx=2)
@@ -3126,11 +3477,74 @@ def open_settings():
         selectforeground="#ffffff",
         highlightthickness=0,
         borderwidth=0,
-        height=10,
+        height=6,
         yscrollcommand=scrollbar_wp.set
     )
     waypoint_listbox.pack(side="left", fill="both", expand=True)
     scrollbar_wp.config(command=waypoint_listbox.yview)
+
+    # === SEÇÃO: AFK HUMANIZATION ===
+    frame_afk = ctk.CTkFrame(frame_cb_root, fg_color="#3a3a3a")
+    frame_afk.pack(fill="x", pady=(0, 8))
+
+    # Toggle AFK
+    frame_afk_toggle = ctk.CTkFrame(frame_afk, fg_color="transparent")
+    frame_afk_toggle.pack(fill="x", padx=10, pady=5)
+
+    switch_afk_pause_var = ctk.IntVar(value=1 if BOT_SETTINGS.get('afk_pause_enabled', False) else 0)
+    def toggle_afk_pause():
+        BOT_SETTINGS['afk_pause_enabled'] = (switch_afk_pause_var.get() == 1)
+        save_config_file()
+    switch_afk_pause = ctk.CTkSwitch(
+        frame_afk_toggle,
+        text="Pausas AFK aleatórias",
+        variable=switch_afk_pause_var,
+        command=toggle_afk_pause,
+        **UI['BODY']
+    )
+    switch_afk_pause.pack(side="left")
+
+    # Campos AFK
+    frame_afk_fields = ctk.CTkFrame(frame_afk, fg_color="transparent")
+    frame_afk_fields.pack(fill="x", padx=10, pady=(0, 5))
+
+    # Duração do AFK
+    ctk.CTkLabel(frame_afk_fields, text="Duração (s):", width=70, **UI['BODY']).pack(side="left")
+    entry_afk_duration = ctk.CTkEntry(frame_afk_fields, width=50, **UI['BODY'])
+    entry_afk_duration.pack(side="left", padx=(0, 10))
+    entry_afk_duration.insert(0, str(BOT_SETTINGS.get('afk_pause_duration', 30)))
+
+    def save_afk_duration(event=None):
+        try:
+            val = int(entry_afk_duration.get())
+            val = max(5, val)  # Mínimo 5 segundos
+            BOT_SETTINGS['afk_pause_duration'] = val
+            entry_afk_duration.delete(0, "end")
+            entry_afk_duration.insert(0, str(val))
+            save_config_file()
+        except ValueError:
+            pass
+    entry_afk_duration.bind("<FocusOut>", save_afk_duration)
+    entry_afk_duration.bind("<Return>", save_afk_duration)
+
+    # Intervalo máximo
+    ctk.CTkLabel(frame_afk_fields, text="Intervalo (min):", width=85, **UI['BODY']).pack(side="left")
+    entry_afk_interval = ctk.CTkEntry(frame_afk_fields, width=50, **UI['BODY'])
+    entry_afk_interval.pack(side="left")
+    entry_afk_interval.insert(0, str(BOT_SETTINGS.get('afk_pause_interval', 10)))
+
+    def save_afk_interval(event=None):
+        try:
+            val = int(entry_afk_interval.get())
+            val = max(5, val)  # Mínimo 5 minutos
+            BOT_SETTINGS['afk_pause_interval'] = val
+            entry_afk_interval.delete(0, "end")
+            entry_afk_interval.insert(0, str(val))
+            save_config_file()
+        except ValueError:
+            pass
+    entry_afk_interval.bind("<FocusOut>", save_afk_interval)
+    entry_afk_interval.bind("<Return>", save_afk_interval)
 
     # === SEÇÃO: EDITOR (Destaque) ===
     ctk.CTkButton(frame_cb_root, text="🗺️ Editor Visual",
@@ -3141,21 +3555,7 @@ def open_settings():
     # Inicializa lista visual
     update_waypoint_display()
 
-def toggle_graph():
-    global is_graph_visible
-    if is_graph_visible:
-        frame_graph.pack_forget() 
-        # frame_graphs_container.pack_forget() # Se você escondeu o container todo no passo anterior
-        btn_graph.configure(text="Mostrar Gráfico 📈")
-        is_graph_visible = False
-    else:
-        frame_graph.pack(side="top", fill="both", expand=True, pady=(0, 5))
-        # frame_graphs_container.pack(...) # Se necessário restaurar o container
-        btn_graph.configure(text="Esconder Gráfico 📉")
-        is_graph_visible = True
-        
-    # >>> MÁGICA AQUI: Recalcula o tamanho automaticamente <<<
-    auto_resize_window()
+# toggle_graph() foi movido para linha ~2536 (após o novo open_settings)
 
 def toggle_xray():
     global xray_window
@@ -3373,6 +3773,8 @@ def on_reload():
 def on_close():
     print("Encerrando bot e threads...")
     state.stop()
+    shutdown_game_state()  # Para o game state polling
+    stop_scheduler()  # Para o action scheduler
     stop_sniffer()  # Para o sniffer de pacotes
     clear_player_name_cache()
 
@@ -3446,14 +3848,26 @@ def create_minimap_panel():
     )
 
 def show_minimap_panel():
-    """Show minimap panel and resize GUI."""
+    """Show minimap panel and resize GUI. Delega para main_window se disponível."""
+    global main_window
+    if main_window is not None:
+        main_window.show_minimap_panel()
+        return
+
+    # Fallback
     global minimap_container
     if minimap_container and not minimap_container.winfo_ismapped():
         minimap_container.pack(fill="x", padx=10, pady=5)
         app.after(100, auto_resize_window)
 
 def hide_minimap_panel():
-    """Hide minimap panel and resize GUI."""
+    """Hide minimap panel and resize GUI. Delega para main_window se disponível."""
+    global main_window
+    if main_window is not None:
+        main_window.hide_minimap_panel()
+        return
+
+    # Fallback
     global minimap_container
     if minimap_container and minimap_container.winfo_ismapped():
         minimap_container.pack_forget()
@@ -3570,230 +3984,87 @@ def update_minimap_loop():
 # ==============================================================================
 
 if __name__ == "__main__":
-    ctk.set_appearance_mode("Dark")
-    ctk.set_default_color_theme("blue")
-    app = ctk.CTk()
-    app.title("Molodoy Bot Pro")
-    #app.geometry("320x450")
-    app.resizable(True, True)
-    app.configure(fg_color="#202020")
-    try:
-        app.iconbitmap("app.ico")
-    except:
-        pass 
-    
-    # MAIN FRAME
-    main_frame = ctk.CTkFrame(app, fg_color="transparent")
-    main_frame.pack(fill="both", expand=True)
-    
-    # ==============================================================================
-    # GUI CONDICIONAL: COMPACT vs ORIGINAL
-    # ==============================================================================
-    # HEADER
-    frame_header = ctk.CTkFrame(main_frame, fg_color="transparent")
-    frame_header.pack(pady=(10, 5), fill="x", padx=10)
-    
-    btn_xray = ctk.CTkButton(frame_header, text="Raio-X", command=toggle_xray,
-                             width=25, height=25, fg_color="#303030", font=("Verdana", 10))
-    btn_xray.pack(side="right", padx=5)
-    
-    if config.RELOAD_BUTTON:
-        btn_reload = ctk.CTkButton(frame_header, text="🔄", command=on_reload,
-                                   width=35, height=25, fg_color="#303030", hover_color="#505050",
-                                   font=("Verdana", 10))
-        btn_reload.pack(side="right", padx=5)
-    
-    btn_settings = ctk.CTkButton(frame_header, text="⚙️ Config.", command=open_settings,
-                                 width=100, height=30, fg_color="#303030", hover_color="#505050",
-                                 font=("Verdana", 11, "bold"))
-    btn_settings.pack(side="left")
-    
-    lbl_connection = ctk.CTkLabel(frame_header, text="🔌 Procurando...",
-                                  font=("Verdana", 11, "bold"), text_color="#FFA500")
-    lbl_connection.pack(side="right", padx=5)
-    
-    # CONTROLES (TOGGLE)
-    frame_controls = ctk.CTkFrame(main_frame, fg_color="#303030", corner_radius=6)
-    frame_controls.pack(padx=10, pady=5, fill="x")
-    frame_controls.grid_columnconfigure(0, weight=1)
-    frame_controls.grid_columnconfigure(1, weight=1)
-    
-    switch_trainer = ctk.CTkSwitch(frame_controls, text="Trainer",
-                                   progress_color="#00C000", font=("Verdana", 11))
-    switch_trainer.grid(row=0, column=0, sticky="w", padx=(20, 0), pady=5)
-    
-    switch_loot = ctk.CTkSwitch(frame_controls, text="Auto Loot",
-                                progress_color="#00C000", font=("Verdana", 11))
-    switch_loot.grid(row=1, column=0, sticky="w", padx=(20, 0), pady=5)
-    
-    switch_alarm = ctk.CTkSwitch(frame_controls, text="Alarm",
-                                 progress_color="#00C000", font=("Verdana", 11))
-    switch_alarm.grid(row=0, column=1, sticky="w", padx=(10, 0), pady=5)
-    
-    switch_fisher = ctk.CTkSwitch(frame_controls, text="Auto Fisher", command=on_fisher_toggle,
-                                  progress_color="#00C000", font=("Verdana", 11))
-    switch_fisher.grid(row=1, column=1, sticky="w", padx=(10, 0), pady=5)
-    
-    switch_runemaker = ctk.CTkSwitch(frame_controls, text="Runemaker",
-                                     progress_color="#A54EF9", font=("Verdana", 11))
-    switch_runemaker.grid(row=2, column=0, sticky="w", padx=(20, 0), pady=5)
-    
-    switch_cavebot_var = ctk.IntVar(value=0)
-    switch_cavebot = ctk.CTkSwitch(frame_controls, text="Cavebot",
-                                   variable=switch_cavebot_var, command=toggle_cavebot_func,
-                                   progress_color="#2CC985", font=("Verdana", 11))
-    switch_cavebot.grid(row=2, column=1, sticky="w", padx=(10, 0), pady=5)
-    
-    
-    # STATS
-    frame_stats = ctk.CTkFrame(main_frame, fg_color="transparent", border_color="#303030", border_width=1, corner_radius=6)
-    frame_stats.pack(padx=10, pady=5, fill="x")
-    frame_stats.grid_columnconfigure(1, weight=1)
-    
-    # LINHA 2 EXP
-    frame_exp_det = ctk.CTkFrame(frame_stats, fg_color="transparent")
-    frame_exp_det.grid(row=2, column=1, sticky="e", padx=10)
-    lbl_exp_left = ctk.CTkLabel(frame_exp_det, text="--", font=("Verdana", 10), text_color="gray")
-    lbl_exp_left.pack(side="left", padx=5)
-    lbl_exp_rate = ctk.CTkLabel(frame_exp_det, text="-- xp/h", font=("Verdana", 10), text_color="gray")
-    lbl_exp_rate.pack(side="left", padx=5)
-    lbl_exp_eta = ctk.CTkLabel(frame_exp_det, text="--", font=("Verdana", 10), text_color="gray")
-    lbl_exp_eta.pack(side="left")
-    
-    # Divisória
-    frame_div = ctk.CTkFrame(frame_stats, height=1, fg_color="#303030")
-    frame_div.grid(row=1, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 5))
-    
-    # LINHA 2 REGEN
-    lbl_regen = ctk.CTkLabel(frame_stats, text="🍖 --:--", font=("Verdana", 10, "bold"), text_color="gray")
-    lbl_regen.grid(row=2, column=0, padx=10, pady=2, sticky="w")
-    
-    # LINHA 3: RECURSOS (Gold + Regen Stock)
-    frame_resources = ctk.CTkFrame(frame_stats, fg_color="transparent")
-    frame_resources.grid(row=3, column=0, columnspan=2, sticky="ew", padx=10, pady=2)
-    
-    lbl_regen_stock = ctk.CTkLabel(frame_resources, text="🍖 --", font=("Verdana", 10))
-    lbl_regen_stock.pack(side="left", padx=(0, 10))
-    
-    lbl_gold_rate = ctk.CTkLabel(frame_resources, text="0 gp/h", font=("Verdana", 10), text_color="gray")
-    lbl_gold_rate.pack(side="right")
-    
-    lbl_gold_total = ctk.CTkLabel(frame_resources, text="🪙 0 gp", font=("Verdana", 10), text_color="#FFD700")
-    lbl_gold_total.pack(side="right", padx=(10, 10))
-    
-    # LINHA 4: SWORD
-    box_sword = ctk.CTkFrame(frame_stats, fg_color="transparent")
-    box_sword.grid(row=4, column=0, padx=10, sticky="w")
-    ctk.CTkLabel(box_sword, text="Sword:", font=("Verdana", 11)).pack(side="left")
-    lbl_sword_val = ctk.CTkLabel(box_sword, text="--", font=("Verdana", 11, "bold"), text_color="#4EA5F9")
-    lbl_sword_val.pack(side="left", padx=(5, 0))
-    
-    frame_sw_det = ctk.CTkFrame(frame_stats, fg_color="transparent")
-    frame_sw_det.grid(row=4, column=1, padx=10, sticky="e")
-    lbl_sword_rate = ctk.CTkLabel(frame_sw_det, text="--m/%", font=("Verdana", 10), text_color="gray")
-    lbl_sword_rate.pack(side="left", padx=5)
-    lbl_sword_time = ctk.CTkLabel(frame_sw_det, text="ETA: --", font=("Verdana", 10), text_color="gray")
-    lbl_sword_time.pack(side="left")
-    
-    # LINHA 5: SHIELD
-    box_shield = ctk.CTkFrame(frame_stats, fg_color="transparent")
-    box_shield.grid(row=5, column=0, padx=10, sticky="w")
-    ctk.CTkLabel(box_shield, text="Shield:", font=("Verdana", 11)).pack(side="left")
-    lbl_shield_val = ctk.CTkLabel(box_shield, text="--", font=("Verdana", 11, "bold"), text_color="#4EA5F9")
-    lbl_shield_val.pack(side="left", padx=(5, 0))
-    
-    frame_sh_det = ctk.CTkFrame(frame_stats, fg_color="transparent")
-    frame_sh_det.grid(row=5, column=1, padx=10, sticky="e")
-    lbl_shield_rate = ctk.CTkLabel(frame_sh_det, text="--m/%", font=("Verdana", 10), text_color="gray")
-    lbl_shield_rate.pack(side="left", padx=5)
-    lbl_shield_time = ctk.CTkLabel(frame_sh_det, text="ETA: --", font=("Verdana", 10), text_color="gray")
-    lbl_shield_time.pack(side="left")
-    
-    # LINHA 6: MAGIC
-    box_magic = ctk.CTkFrame(frame_stats, fg_color="transparent")
-    box_magic.grid(row=6, column=0, padx=10, sticky="w")
-    ctk.CTkLabel(box_magic, text="ML:", font=("Verdana", 11)).pack(side="left")
-    lbl_magic_val = ctk.CTkLabel(box_magic, text="--", font=("Verdana", 11, "bold"), text_color="#A54EF9")
-    lbl_magic_val.pack(side="left", padx=(5, 0))
-    
-    frame_ml_det = ctk.CTkFrame(frame_stats, fg_color="transparent")
-    frame_ml_det.grid(row=6, column=1, padx=10, sticky="e")
-    lbl_magic_rate = ctk.CTkLabel(frame_ml_det, text="--m/%", font=("Verdana", 10), text_color="gray")
-    lbl_magic_rate.pack(side="left", padx=5)
-    lbl_magic_time = ctk.CTkLabel(frame_ml_det, text="ETA: --", font=("Verdana", 10), text_color="gray")
-    lbl_magic_time.pack(side="left")
-    
-    # GRAPH
-    frame_graphs_container = ctk.CTkFrame(main_frame, fg_color="transparent",
-                                          border_width=0, border_color="#303030",
-                                          corner_radius=0)
-    frame_graphs_container.pack(padx=10, pady=(5, 0), fill="x")
-    btn_graph = ctk.CTkButton(frame_graphs_container, text="Mostrar Gráfico 📈", command=toggle_graph,
-                              fg_color="#202020", hover_color="#303030",
-                              height=25, corner_radius=6, border_width=0)
-    
-    btn_graph.pack(side="top", fill="x", padx=1, pady=0)
-    
-    frame_graph = ctk.CTkFrame(frame_graphs_container, fg_color="transparent", corner_radius=6)
-    
-    # Lazy load matplotlib apenas aqui quando realmente necessário
-    plt, FigureCanvasTkAgg = setup_matplotlib()
-    plt.style.use('dark_background')
-    fig, ax = plt.subplots(figsize=(4, 1.6), dpi=100, facecolor='#2B2B2B')
-    fig.patch.set_facecolor('#202020')
-    ax.set_facecolor('#202020')
-    ax.tick_params(axis='x', colors='gray', labelsize=6, pad=2)
-    ax.tick_params(axis='y', colors='gray', labelsize=6, pad=2)
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.spines['bottom'].set_color('#404040')
-    ax.spines['left'].set_color('#404040')
-    ax.set_title("Eficiencia de Treino (%)", fontsize=8, color="gray")
-    
-    canvas = FigureCanvasTkAgg(fig, master=frame_graph)
-    widget = canvas.get_tk_widget()
-    widget.pack(fill="both", expand=True, padx=1, pady=2)
-    
-    # MINIMAP PANEL
-    create_minimap_panel()
-    
-    # ==============================================================================
-    # STATUS PANEL - Mostra status em tempo real por módulo ativo
-    # ==============================================================================
-    frame_status_panel = ctk.CTkFrame(main_frame, fg_color="#1a1a1a",
-                                       border_color="#303030", border_width=1,
-                                       corner_radius=6)
-    # Criar labels para cada módulo
-    for module in ['trainer', 'runemaker', 'fisher', 'cavebot', 'alarm']:
-        status_labels[module] = ctk.CTkLabel(
-            frame_status_panel,
-            text="",
-            font=("Consolas", 10),
-            text_color="#AAAAAA",
-            anchor="w"
-        )
-        # NÃO pack() - visibilidade controlada por update_status_panel()
-    
-    # LOG / STATUS PANEL
-    # Sincroniza log_visible com BOT_SETTINGS (False = mostra Status Panel, True = mostra Log)
-    log_visible = BOT_SETTINGS.get('console_log_visible', False)
-    
-    txt_log = ctk.CTkTextbox(main_frame, height=120, font=("Consolas", 11),
-                             fg_color="#151515", text_color="#00FF00", border_width=1)
-    
-    if log_visible:
-        txt_log.pack(side="bottom", fill="x", padx=5, pady=5, expand=True)
-    else:
-        # Mostrar Status Panel por padrão
-        frame_status_panel.pack(side="bottom", fill="x", padx=8, pady=3)
-    
+    # Cria a janela principal usando MainWindow
+    # Nota: Atribuições dentro de `if __name__ == "__main__"` são
+    # automaticamente module-level, não precisam de `global`.
+    mw_callbacks = create_main_window_callbacks()
+    main_window = MainWindow(mw_callbacks)
+    app = main_window.create()
+
+    # =========================================================================
+    # COMPATIBILIDADE: Referências globais para código existente
+    # As threads e funções usam essas variáveis globais.
+    # Apontamos para os widgets do main_window para manter tudo funcionando.
+    # =========================================================================
+    main_frame = main_window.main_frame
+
+    # Header
+    btn_xray = main_window.btn_xray
+    lbl_connection = main_window.lbl_connection
+
+    # Switches
+    switch_trainer = main_window.switch_trainer
+    switch_loot = main_window.switch_loot
+    switch_alarm = main_window.switch_alarm
+    switch_fisher = main_window.switch_fisher
+    switch_runemaker = main_window.switch_runemaker
+    switch_cavebot = main_window.switch_cavebot
+    switch_cavebot_var = main_window.switch_cavebot_var
+
+    # Stats Labels
+    lbl_exp_left = main_window.lbl_exp_left
+    lbl_exp_rate = main_window.lbl_exp_rate
+    lbl_exp_eta = main_window.lbl_exp_eta
+    lbl_regen = main_window.lbl_regen
+    lbl_regen_stock = main_window.lbl_regen_stock
+    lbl_gold_total = main_window.lbl_gold_total
+    lbl_gold_rate = main_window.lbl_gold_rate
+    lbl_sword_val = main_window.lbl_sword_val
+    lbl_sword_rate = main_window.lbl_sword_rate
+    lbl_sword_time = main_window.lbl_sword_time
+    lbl_shield_val = main_window.lbl_shield_val
+    lbl_shield_rate = main_window.lbl_shield_rate
+    lbl_shield_time = main_window.lbl_shield_time
+    lbl_magic_val = main_window.lbl_magic_val
+    lbl_magic_rate = main_window.lbl_magic_rate
+    lbl_magic_time = main_window.lbl_magic_time
+
+    # Stats Frames (para update_stats_visibility)
+    box_sword = main_window.box_sword
+    frame_sw_det = main_window.frame_sw_det
+    box_shield = main_window.box_shield
+    frame_sh_det = main_window.frame_sh_det
+    frame_stats = main_window.frame_stats
+
+    # Graph
+    frame_graphs_container = main_window.frame_graphs_container
+    frame_graph = main_window.frame_graph
+    btn_graph = main_window.btn_graph
+    fig = main_window.fig
+    ax = main_window.ax
+    canvas = main_window.canvas
+
+    # Minimap
+    minimap_container = main_window.minimap_container
+    minimap_label = main_window.minimap_label
+    minimap_title_label = main_window.minimap_title_label
+    minimap_visualizer = main_window.minimap_visualizer
+
+    # Status Panel
+    frame_status_panel = main_window.frame_status_panel
+    status_labels = main_window.status_labels
+
+    # Log
+    txt_log = main_window.txt_log
+    log_visible = main_window.log_visible
+
     # ==============================================================================
     # 8. EXECUÇÃO PRINCIPAL
     # ==============================================================================
-    
+
     app.after(1000, attach_window)
     app.protocol("WM_DELETE_WINDOW", on_close)
-    
+
     # Iniciar Sniffer de Pacotes (se habilitado)
     if SNIFFER_AVAILABLE and getattr(config, 'SNIFFER_ENABLED', False):
         server_ip = getattr(config, 'SNIFFER_SERVER_IP', '135.148.27.135')
@@ -3809,6 +4080,8 @@ if __name__ == "__main__":
     threading.Thread(target=gui_updater_loop, daemon=True).start()
     threading.Thread(target=regen_monitor_loop, daemon=True).start()
     threading.Thread(target=auto_fisher_thread, daemon=True).start()
+    threading.Thread(target=auto_eater_thread, daemon=True).start()
+    threading.Thread(target=auto_stacker_thread, daemon=True).start()
     threading.Thread(target=runemaker_thread, daemon=True).start()
     threading.Thread(target=connection_watchdog, daemon=True).start()
     threading.Thread(target=start_cavebot_thread, daemon=True).start()
@@ -3816,24 +4089,25 @@ if __name__ == "__main__":
     threading.Thread(target=start_chat_handler_thread, daemon=True).start()
     threading.Thread(target=start_spear_picker_thread, daemon=True).start()
 
-    update_stats_visibility()
+    # Atualiza visibilidade baseada na vocação
+    main_window.update_stats_visibility()
 
     # Inicializar Debug Monitor
     init_debug_monitor(app)
 
     # Abrir Debug Monitor automaticamente se habilitado
     if getattr(config, 'DEBUG_BOT_STATE', False):
-        app.after(500, show_debug_monitor)  # Delay de 500ms para GUI estabilizar
+        app.after(500, show_debug_monitor)
 
     # Iniciar loop de atualização do minimap
     app.after(1000, update_minimap_loop)
-    
+
     # Forçar resize inicial para eliminar espaço vazio
     app.update_idletasks()
     h = main_frame.winfo_reqheight() + 12
     app.geometry(f"320x{h}")
-    update_status_panel()
-    
+    main_window.update_status_panel()
+
     log("🚀 Iniciado.")
     app.mainloop()
     state.stop()  # Garante que todas as threads encerrem ao fechar

@@ -159,6 +159,10 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
     if state.is_runemaking:
         return None
 
+    # Pausa durante AFK humanization
+    if state.is_afk_paused:
+        return None
+
     # Não processa loot enquanto personagem está andando
     if is_player_moving(pm, base_addr):
         return None

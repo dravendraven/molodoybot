@@ -50,7 +50,7 @@ MELEE_RANGE = 1
 # FUNÇÕES DE CONVERSÃO: Creature -> Dict (Backward Compatibility)
 # ==============================================================================
 
-def creature_to_candidate_dict(creature, my_x, my_y, trigger_range, visual_line):
+def creature_to_candidate_dict(creature, my_x, my_y, trigger_range, visual_line, is_attacking_me=False):
     """
     Converte Creature (core.models) para dict no formato esperado pelo trainer.
     Mantém backward compatibility com EngagementDetector e lógica de retargeting.
@@ -67,7 +67,8 @@ def creature_to_candidate_dict(creature, my_x, my_y, trigger_range, visual_line)
         "abs_y": creature.position.y,
         "z": creature.position.z,
         "is_in_range": (dist_x <= trigger_range and dist_y <= trigger_range),
-        "line": visual_line
+        "line": visual_line,
+        "is_attacking_me": is_attacking_me
     }
 
 
@@ -80,7 +81,8 @@ def creature_to_entity_dict(creature):
         'name': creature.name,
         'abs_x': creature.position.x,
         'abs_y': creature.position.y,
-        'hp': creature.hp_percent
+        'hp': creature.hp_percent,
+        'is_player': creature.is_player
     }
 
 
@@ -479,15 +481,14 @@ class EngagementDetector:
             if entity['name'] == my_name:
                 continue
 
-            # Skip se é criatura alvo (monster/creature do jogo)
-            # Assume que se está em targets_list, é uma criatura, não um player
-            is_target_creature = any(target in entity['name'] for target in targets_list)
-            if is_target_creature:
+            # Skip se NÃO é player (usa is_player da Creature, detectado por outfit)
+            # CORREÇÃO: Substitui filtro por nome que falhava com "Trollkiller" vs "Troll"
+            if not entity.get('is_player', False):
                 if debug:
-                    log_func(f"  [DETECT] Skip: Criatura alvo '{entity['name']}'")
+                    log_func(f"  [DETECT] Skip: Não é player '{entity['name']}' (is_player=False)")
                 continue
 
-            # Se chegou aqui, é potencialmente um player real
+            # Se chegou aqui, é um player confirmado (detectado por outfit)
             if debug:
                 log_func(f"  [DETECT] Comparando com: '{entity['name']}' (ID:{entity['id']})")
 
@@ -543,6 +544,9 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                 status_callback(msg)
             except:
                 pass
+
+    # Será definida dentro do loop após ler debug_decisions
+    log_decision = None
 
     get_cfg = make_config_getter(config)
 
@@ -612,11 +616,23 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
             time.sleep(0.5)
             continue
 
+        # Pausa durante AFK humanization
+        if state.is_afk_paused:
+            time.sleep(0.5)
+            continue
+
         min_delay = get_cfg('min_delay', 1.0)
         max_delay = get_cfg('max_delay', 2.0)
         trigger_range = get_cfg('range', 1)  # Range para ACIONAR ataque (não confundir com MELEE_RANGE)
         log = get_cfg('log_callback', print)
         debug_mode = get_cfg('debug_mode', False)
+        debug_decisions = get_cfg('debug_mode_decisions_only', TRAINER_DEBUG_DECISIONS_ONLY)  # Log simplificado (apenas decisões)
+
+        # Helper para log de decisões críticas (modo simplificado)
+        def log_decision(msg):
+            if debug_decisions or debug_mode:
+                print(f"[DECISION] {msg}")
+
         loot_enabled = get_cfg('loot_enabled', False)
         targets_list = get_cfg('targets', [])
         ignore_first = get_cfg('ignore_first', False)
@@ -634,6 +650,8 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
         follow_before_attack = follow_then_attack_standalone or (follow_before_attack_enabled and spear_picker_enabled and trigger_range > 1)
 
         # Log de configuração anti-KS (apenas primeira iteração)
+        if mapper is None:
+            print(f"[TRAINER] Iniciando... (debug_mode={debug_mode})")
         if debug_mode and mapper is None:
             log("="*70)
             log("[TRAINER] Configuração Anti Kill-Steal")
@@ -703,11 +721,12 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
             # Atualiza overlay de debug (se XRAY_TRAINER_DEBUG ativo)
             update_trainer_overlay(all_creatures, my_x, my_y, my_z, current_target_id, current_name)
 
-            # Filtra entidades visíveis no mesmo andar (para KS detection)
+            # Filtra APENAS PLAYERS visíveis no mesmo andar (para KS detection)
+            # CORREÇÃO: Usa c.is_player em vez de filtrar por nome depois
             all_visible_entities = [
                 creature_to_entity_dict(c)
                 for c in all_creatures
-                if c.is_visible and c.position.z == my_z and c.name != current_name
+                if c.is_visible and c.position.z == my_z and c.name != current_name and c.is_player
             ]
 
             # ==============================================================================
@@ -775,7 +794,7 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                     continue
 
                 # ===== CALCULA is_attacking_me CEDO para bypass de filtros =====
-                is_attacking_me = creature.is_attacking_player(BLACKSQUARE_THRESHOLD_MS)
+                is_attacking_me = creature.is_attacking_player(BLACKSQUARE_THRESHOLD_MS, debug=(debug_decisions or debug_mode))
 
                 # Extrai dados
                 c_id = creature.id
@@ -803,7 +822,7 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                         current_line = visual_line_count
                         visual_line_count += 1
                         valid_candidates.append(
-                            creature_to_candidate_dict(creature, my_x, my_y, trigger_range, current_line)
+                            creature_to_candidate_dict(creature, my_x, my_y, trigger_range, current_line, is_attacking_me=True)
                         )
                         continue  # Já adicionado, pula para próxima criatura
 
@@ -924,7 +943,7 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                         reason = "ATACANDO PLAYER" if is_attacking_me else "KS PASS"
                         print(f"      → CANDIDATO ({reason}): HP:{hp} Dist:({dist_x},{dist_y})")
                     valid_candidates.append(
-                        creature_to_candidate_dict(creature, my_x, my_y, trigger_range, current_line)
+                        creature_to_candidate_dict(creature, my_x, my_y, trigger_range, current_line, is_attacking_me=is_attacking_me)
                     )
 
             if debug_mode:
@@ -1007,12 +1026,14 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                                     # Usa mesma lógica de follow_before_attack
                                     if follow_before_attack and dist_to_nearest > 1:
                                         log(f"🏃 RETARGET (follow): {nearest['name']} (dist={dist_to_nearest})")
+                                        log_decision(f"🔄 RETARGET: alvo inacessível → {nearest['name']} (follow, dist:{dist_to_nearest})")
                                         packet.follow(nearest["id"])
                                         state.start_follow(nearest["id"])
                                         is_currently_following = True
                                         follow_target_id = nearest["id"]
                                     else:
                                         log(f"⚔️ RETARGET: {nearest['name']} (custo: {cost})")
+                                        log_decision(f"🔄 RETARGET: alvo inacessível → {nearest['name']} (attack)")
                                         packet.attack(nearest["id"])
                                         if is_currently_following:
                                             state.stop_follow()
@@ -1060,6 +1081,7 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                         if dist_now <= 1:
                             log(f"⚔️ TRANSIÇÃO: Follow → Attack ({target_data['name']})")
                             set_status(f"atacando {target_data['name']}")
+                            log_decision(f"🔄 Follow → Attack: {target_data['name']} (chegou dist:{dist_now})")
                             packet.attack(current_target_id)
 
                             # Para estado de follow
@@ -1164,12 +1186,14 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                                             # Usa mesma lógica de follow_before_attack
                                             if follow_before_attack and dist_to_nearest > 1:
                                                 log(f"🏃 RETARGET (follow): {nearest['name']} (dist={dist_to_nearest})")
+                                                log_decision(f"🔄 RETARGET: alvo inacessível → {nearest['name']} (follow, dist:{dist_to_nearest})")
                                                 packet.follow(nearest["id"])
                                                 state.start_follow(nearest["id"])
                                                 is_currently_following = True
                                                 follow_target_id = nearest["id"]
                                             else:
                                                 log(f"⚔️ RETARGET: {nearest['name']} (custo: {cost})")
+                                                log_decision(f"🔄 RETARGET: alvo inacessível → {nearest['name']} (attack)")
                                                 packet.attack(nearest["id"])
                                                 if is_currently_following:
                                                     state.stop_follow()
@@ -1281,6 +1305,8 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                             print("DEBUG: CORPSE_READY or None")
                         # hp=0 and NOT visible - corpse ready OR creature despawned
                         log("💀 Alvo eliminado (verificação dupla confirmada).")
+                        if last_target_data:
+                            log_decision(f"💀 {last_target_data['name']} morto" + (" - iniciando loot" if loot_enabled else ""))
 
                         if last_target_data and loot_enabled:
                             if debug_mode:
@@ -1375,7 +1401,31 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                         final_candidates = [valid_candidates[1]]
                     else:
                         final_candidates = []
-                
+
+                # ===== PAUSA DURANTE LOOT/SPEAR PICKUP =====
+                # Não ataca novos alvos durante ciclo de loot ou spear pickup
+                # EXCEÇÃO: Alvos que estão atacando E adjacentes (emergência)
+                if state.is_processing_loot or state.is_spear_pickup_pending:
+                    # Filtra apenas alvos de emergência
+                    emergency_candidates = [
+                        c for c in final_candidates
+                        if c.get("is_attacking_me", False) and max(abs(c["dist_x"]), abs(c["dist_y"])) <= 1
+                    ]
+
+                    if not emergency_candidates:
+                        # Sem alvo de emergência - pula ataque neste ciclo
+                        reason = "loot" if state.is_processing_loot else "spear pickup"
+                        log_decision(f"⏸️ Pausa: {reason} em andamento (sem emergência)")
+                        next_attack_time = 0  # Reseta delay para próximo ciclo
+                        # Continua processamento mas não ataca
+                        final_candidates = []
+                    else:
+                        # Há alvo de emergência - restringe candidatos
+                        reason = "loot" if state.is_processing_loot else "spear pickup"
+                        log_decision(f"⚠️ EMERGÊNCIA: {emergency_candidates[0]['name']} atacando durante {reason}!")
+                        final_candidates = emergency_candidates
+                # =============================================
+
                 if len(final_candidates) > 0:
                     if next_attack_time == 0:
                         delay = random.uniform(min_delay, max_delay)
@@ -1386,15 +1436,64 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                         set_status(f"delay {delay:.1f}s → {target_name}")
 
                     if time.time() >= next_attack_time:
+                        # ===== LOG DETALHADO DE DECISÃO =====
+                        if debug_decisions or debug_mode:
+                            print(f"\n{'='*60}")
+                            print(f"[DECISION] 🎯 AVALIANDO NOVO ALVO")
+                            print(f"{'='*60}")
+                            print(f"[DECISION] Minha posição: ({my_x}, {my_y}, {my_z})")
+                            print(f"[DECISION] KS Prevention: {'ATIVO' if ks_enabled else 'DESATIVADO'}")
+
+                            # Lista candidatos
+                            print(f"\n[DECISION] 📋 CANDIDATOS ({len(final_candidates)}):")
+                            for idx, c in enumerate(final_candidates):
+                                c_dist = max(abs(c['dist_x']), abs(c['dist_y']))
+                                c_cost = get_distance_cost(walker, c['abs_x'] - my_x, c['abs_y'] - my_y, MELEE_RANGE)
+                                attacking_me = "⚔️ ATACANDO" if c.get('is_attacking_me') else ""
+                                print(f"  [{idx}] {c['name']} | pos:({c['abs_x']},{c['abs_y']}) | dist:{c_dist} | custo_A*:{c_cost} | HP:{c['hp']}% {attacking_me}")
+
+                            # Lista entidades visíveis (potenciais players)
+                            potential_players = [e for e in all_visible_entities if not any(t in e['name'] for t in targets_list)]
+                            if potential_players:
+                                print(f"\n[DECISION] 👥 PLAYERS VISÍVEIS ({len(potential_players)}):")
+                                for e in potential_players:
+                                    e_dist = max(abs(e['abs_x'] - my_x), abs(e['abs_y'] - my_y))
+                                    print(f"  • {e['name']} | pos:({e['abs_x']},{e['abs_y']}) | dist_de_mim:{e_dist}")
+                            else:
+                                print(f"\n[DECISION] 👥 PLAYERS VISÍVEIS: Nenhum")
+                            print(f"")
+
                         # RE-VALIDAÇÃO KS: Verifica engagement no momento do ataque
                         # Corrige cenário onde bot vê criatura antes do player
                         best = None
+                        skipped_candidates = []  # Rastreia candidatos rejeitados
+
                         for candidate in final_candidates:
                             if candidate["id"] == current_target_id:
                                 continue
 
+                            c_dist = max(abs(candidate['dist_x']), abs(candidate['dist_y']))
+                            c_cost = get_distance_cost(walker, candidate['abs_x'] - my_x, candidate['abs_y'] - my_y, MELEE_RANGE)
+
                             # Re-valida KS com lista ATUAL de entidades
-                            if ks_enabled:
+                            # BYPASS: Se criatura está atacando o player, ignora KS check
+                            if ks_enabled and not candidate.get("is_attacking_me", False):
+                                # Log detalhado do KS check
+                                if debug_decisions or debug_mode:
+                                    print(f"[DECISION] 🔍 KS CHECK: {candidate['name']}")
+                                    print(f"[DECISION]   Criatura em: ({candidate['abs_x']}, {candidate['abs_y']})")
+                                    print(f"[DECISION]   Meu custo até ela (A*): {c_cost}")
+
+                                    # Calcula distância de cada player até esta criatura
+                                    for e in all_visible_entities:
+                                        if e['name'] == current_name:
+                                            continue
+                                        if any(t in e['name'] for t in targets_list):
+                                            continue
+                                        player_cost = steps_to_adjacent(candidate['abs_x'] - e['abs_x'], candidate['abs_y'] - e['abs_y'], MELEE_RANGE) * 10
+                                        comparison = "⚠️ PLAYER MAIS PERTO" if player_cost <= c_cost else "✓ Eu mais perto"
+                                        print(f"[DECISION]   → {e['name']}: custo={player_cost} | {comparison}")
+
                                 is_engaged, ks_reason = engagement_detector.is_engaged_with_other(
                                     {'id': candidate["id"], 'abs_x': candidate["abs_x"],
                                      'abs_y': candidate["abs_y"], 'hp': candidate["hp"]},
@@ -1405,21 +1504,50 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                                     targets_list,
                                     walker=walker,
                                     attack_range=MELEE_RANGE,
-                                    debug=debug_mode,
+                                    debug=False,  # Já logamos acima
                                     log_func=print
                                 )
                                 if is_engaged:
+                                    if debug_decisions or debug_mode:
+                                        print(f"[DECISION]   ❌ REJEITADO: {ks_reason}")
                                     log(f"⚠️ [KS RE-CHECK] {candidate['name']} engajada - pulando")
+                                    skipped_candidates.append((candidate['name'], ks_reason))
                                     continue
+                                else:
+                                    if debug_decisions or debug_mode:
+                                        print(f"[DECISION]   ✅ APROVADO: Nenhum player mais próximo")
+                            elif candidate.get("is_attacking_me", False):
+                                if debug_decisions or debug_mode:
+                                    print(f"[DECISION] ⚡ KS BYPASS: {candidate['name']} está me atacando!")
 
                             best = candidate
                             break
 
+                        # Log resumo da decisão
+                        if debug_decisions or debug_mode:
+                            if skipped_candidates:
+                                print(f"\n[DECISION] 🚫 CANDIDATOS REJEITADOS POR KS:")
+                                for name, reason in skipped_candidates:
+                                    print(f"  • {name}: {reason}")
+                            print(f"")
+
                         if best and best["id"] != current_target_id:
                             # Calcula distância Chebyshev para o alvo
                             dist_to_target = max(abs(best["dist_x"]), abs(best["dist_y"]))
+                            best_cost = get_distance_cost(walker, best['abs_x'] - my_x, best['abs_y'] - my_y, MELEE_RANGE)
 
-                            # DEBUG: Log da decisão follow/attack
+                            # LOG FINAL DE DECISÃO
+                            if debug_decisions or debug_mode:
+                                action = "FOLLOW" if follow_before_attack and dist_to_target > 1 else "ATTACK"
+                                print(f"[DECISION] ✅ ALVO SELECIONADO: {best['name']}")
+                                print(f"[DECISION]   Posição: ({best['abs_x']}, {best['abs_y']})")
+                                print(f"[DECISION]   Distância: {dist_to_target} tiles | Custo A*: {best_cost}")
+                                print(f"[DECISION]   HP: {best['hp']}%")
+                                print(f"[DECISION]   Atacando-me: {'SIM' if best.get('is_attacking_me') else 'NÃO'}")
+                                print(f"[DECISION]   Ação: {action}")
+                                print(f"{'='*60}\n")
+
+                            # DEBUG: Log da decisão follow/attack (verbose)
                             if debug_mode:
                                 print(f"[FOLLOW-DEBUG] Novo alvo: {best['name']} (id={best['id']})")
                                 print(f"[FOLLOW-DEBUG]   Distância: {dist_to_target} tiles")
@@ -1431,6 +1559,7 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                                 # Usa FOLLOW em vez de attack
                                 log(f"🏃 SEGUINDO: {best['name']} (dist={dist_to_target})")
                                 set_status(f"seguindo {best['name']}")
+                                log_decision(f"🏃 SEGUINDO: {best['name']} (dist:{dist_to_target}) - ataca ao chegar dist<=1")
                                 packet.follow(best["id"])
 
                                 # Atualiza estado de follow
@@ -1446,6 +1575,8 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                                 # Attack normal (distância <= 1 ou follow desabilitado)
                                 log(f"⚔️ ATACANDO: {best['name']}")
                                 set_status(f"atacando {best['name']}")
+                                ks_status = "KS: bypass (atacando)" if best.get('is_attacking_me') else "KS: pass"
+                                log_decision(f"⚔️ ATACANDO: {best['name']} (HP:{best['hp']}%, dist:{dist_to_target}) | {ks_status}")
                                 packet.attack(best["id"])
 
                                 # Para follow se estava seguindo
@@ -1470,6 +1601,11 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                             gauss_wait(0.5, 20)
                         elif not best and len(final_candidates) > 0:
                             # Todos engajados - reseta para tentar novamente
+                            if debug_decisions or debug_mode:
+                                print(f"[DECISION] ⚠️ NENHUM ALVO VÁLIDO")
+                                print(f"[DECISION]   Todos os {len(final_candidates)} candidatos foram rejeitados por KS")
+                                print(f"[DECISION]   Aguardando próximo ciclo...")
+                                print(f"{'='*60}\n")
                             next_attack_time = 0
 
             # Throttle dinâmico baseado no estado

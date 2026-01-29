@@ -11,12 +11,16 @@ from core.chat_scanner import ChatScanner, ChatMessage
 from core.message_analyzer import MessageAnalyzer, MessageIntent
 from core.conversation_manager import ConversationManager
 from core.ai_responder import AIResponder, AIResponse
-from core.models import Position
+from core.models import Position, Creature
 from core.battlelist import BattleListScanner
 from core.map_core import get_player_pos
-from core.player_core import get_connected_char_name
+from core.player_core import get_connected_char_name, get_target_id
+from core.inventory_core import get_item_id_in_hand
+from core.bot_state import state as bot_state
+from database.lootables_db import LOOTABLES
 from config import (
-    AI_MODEL,
+    AI_MODEL, OFFSET_PLAYER_HP, OFFSET_PLAYER_HP_MAX,
+    OFFSET_PLAYER_MANA, OFFSET_PLAYER_MANA_MAX,
     CHAT_RESPONSE_COOLDOWN, CHAT_PAUSE_BOT, CHAT_PAUSE_DURATION
 )
 
@@ -242,30 +246,68 @@ class ChatHandler:
         self._response_thread.start()
 
     def _build_game_context(self, my_pos: Position) -> Dict[str, Any]:
-        """Constrói contexto do jogo para a IA."""
+        """Constrói contexto do jogo para a IA com informações ricas."""
+        # Store current position for tile char lookup
+        self._current_pos = my_pos
+
+        # Initialize context
         context = {
             "my_name": self.my_name,
-            "my_pos": {
-                "x": my_pos.x,
-                "y": my_pos.y,
-                "z": my_pos.z
-            },
+            "my_pos": {"x": my_pos.x, "y": my_pos.y, "z": my_pos.z},
+            "floor": self._get_floor_description(my_pos.z),
             "nearby_creatures": [],
-            "nearby_players": []
+            "nearby_players": [],
+            "hp_percent": 100,
+            "mana_percent": 100,
+            "hp_status": "healthy",
+            "in_combat": False,
+            "target_name": "",
+            "target_hp": 0,
+            "left_hand": "empty",
+            "right_hand": "empty",
+            "map_matrix": "",
+            "creature_legend": "",
+            "player_legend": "",
         }
 
-        # Busca criaturas próximas
+        creatures = []
+        players = []
+
+        # Get HP/Mana
+        try:
+            hp = self.pm.read_int(self.base_addr + OFFSET_PLAYER_HP)
+            hp_max = self.pm.read_int(self.base_addr + OFFSET_PLAYER_HP_MAX)
+            mana = self.pm.read_int(self.base_addr + OFFSET_PLAYER_MANA)
+            mana_max = self.pm.read_int(self.base_addr + OFFSET_PLAYER_MANA_MAX)
+
+            context["hp_percent"] = int((hp / hp_max * 100) if hp_max > 0 else 100)
+            context["mana_percent"] = int((mana / mana_max * 100) if mana_max > 0 else 100)
+            context["hp_status"] = self._get_hp_status(context["hp_percent"])
+        except Exception:
+            pass
+
+        # Get equipment
+        try:
+            left_id = get_item_id_in_hand(self.pm, self.base_addr, is_left=True)
+            right_id = get_item_id_in_hand(self.pm, self.base_addr, is_left=False)
+            context["left_hand"] = self._get_item_name(left_id)
+            context["right_hand"] = self._get_item_name(right_id)
+        except Exception:
+            pass
+
+        # Get creatures nearby
         try:
             creatures = self.battlelist.get_monsters(player_z=my_pos.z)
-            for c in creatures[:5]:  # Limita a 5 para não poluir
+            for c in creatures[:5]:
                 context["nearby_creatures"].append({
                     "name": c.name,
-                    "distance": my_pos.chebyshev_to(c.position)
+                    "distance": my_pos.chebyshev_to(c.position),
+                    "hp": c.hp_percent
                 })
         except Exception:
             pass
 
-        # Busca players próximos
+        # Get players nearby
         try:
             from config import OFFSET_PLAYER_ID
             player_id = self.pm.read_int(self.base_addr + OFFSET_PLAYER_ID)
@@ -278,7 +320,163 @@ class ChatHandler:
         except Exception:
             pass
 
+        # Get combat state
+        try:
+            target_id = get_target_id(self.pm, self.base_addr)
+            if target_id != 0:
+                context["in_combat"] = True
+                # Find target in creatures
+                for c in creatures:
+                    if c.id == target_id:
+                        context["target_name"] = c.name
+                        context["target_hp"] = c.hp_percent
+                        break
+        except Exception:
+            pass
+
+        # Build map matrix
+        try:
+            map_str, creature_legend, player_legend = self._build_map_matrix(
+                my_pos, creatures, players
+            )
+            context["map_matrix"] = map_str
+            context["creature_legend"] = creature_legend
+            context["player_legend"] = player_legend
+        except Exception:
+            context["map_matrix"] = "unavailable"
+
+        # Infer activity
+        context["activity"] = self._infer_activity(context)
+
         return context
+
+    def _build_map_matrix(self, my_pos: Position, creatures: List, players: List) -> tuple:
+        """
+        Build 7x7 ASCII map centered on player.
+
+        Returns:
+            Tuple of (map_string, creature_legend, player_legend)
+        """
+        size = 7
+        half = size // 2
+        lines = []
+        creature_chars = {}  # Track which char represents which creature
+        player_chars = {}    # Track which char represents which player
+
+        for dy in range(-half, half + 1):
+            row = ""
+            for dx in range(-half, half + 1):
+                if dx == 0 and dy == 0:
+                    row += "@"  # Player position
+                else:
+                    char = self._get_tile_char(
+                        my_pos.x + dx, my_pos.y + dy, my_pos.z,
+                        creatures, players, creature_chars, player_chars
+                    )
+                    row += char
+            lines.append(row)
+
+        # Build legends
+        creature_legend = ", ".join(
+            f"{char}={name}({hp}%)"
+            for char, (name, hp) in creature_chars.items()
+        ) if creature_chars else ""
+
+        player_legend = ", ".join(
+            f"{char}={name}"
+            for char, name in player_chars.items()
+        ) if player_chars else ""
+
+        return "\n".join(lines), creature_legend, player_legend
+
+    def _get_tile_char(self, x: int, y: int, z: int,
+                       creatures: List, players: List,
+                       creature_chars: dict, player_chars: dict) -> str:
+        """Get character representation for a tile."""
+        # Check for creature at position
+        for c in creatures:
+            if c.position.x == x and c.position.y == y and c.position.z == z:
+                char = c.name[0].upper() if c.name else "?"
+                if char not in creature_chars:
+                    creature_chars[char] = (c.name, c.hp_percent)
+                return char
+
+        # Check for player at position
+        for p in players:
+            if p.position.x == x and p.position.y == y and p.position.z == z:
+                player_chars["P"] = p.name
+                return "P"
+
+        # Check walkability from map analyzer
+        if self.memory_map:
+            try:
+                from core.map_analyzer import MapAnalyzer
+                analyzer = MapAnalyzer(self.memory_map)
+                # Convert to relative coordinates
+                rel_x = x - self._current_pos.x if hasattr(self, '_current_pos') else 0
+                rel_y = y - self._current_pos.y if hasattr(self, '_current_pos') else 0
+                props = analyzer.get_tile_properties(rel_x, rel_y)
+                if props.get('walkable', False):
+                    return "."
+            except Exception:
+                pass
+
+        return "#"  # Blocked or unknown
+
+    def _infer_activity(self, context: dict) -> str:
+        """Infer what the player is doing based on game state."""
+        # Check if runemaking
+        if bot_state.is_runemaking:
+            return "making runes"
+
+        # Check combat
+        if context.get("in_combat"):
+            target = context.get("target_name", "creature")
+            return f"fighting {target}"
+
+        # Check equipment for hints
+        left_hand = context.get("left_hand", "")
+        right_hand = context.get("right_hand", "")
+
+        if "rod" in left_hand.lower() or "rod" in right_hand.lower():
+            return "fishing"
+        if "spear" in left_hand.lower() or "spear" in right_hand.lower():
+            return "training"
+
+        # Check creatures nearby
+        if context.get("nearby_creatures"):
+            return "hunting"
+
+        return "walking around"
+
+    def _get_floor_description(self, z: int) -> str:
+        """Get human-readable floor description."""
+        if z == 7:
+            return "surface"
+        elif z < 7:
+            return f"rooftop +{7 - z}"
+        else:
+            return f"underground -{z - 7}"
+
+    def _get_hp_status(self, hp_percent: float) -> str:
+        """Get human-readable HP status."""
+        if hp_percent >= 90:
+            return "healthy"
+        elif hp_percent >= 50:
+            return "wounded"
+        elif hp_percent >= 25:
+            return "badly hurt"
+        else:
+            return "critical"
+
+    def _get_item_name(self, item_id: int) -> str:
+        """Get item name from ID."""
+        if item_id == 0:
+            return "empty"
+        item_data = LOOTABLES.get(item_id)
+        if item_data and item_data.get('name'):
+            return item_data['name']
+        return f"item #{item_id}"
 
     def _is_paused(self) -> bool:
         """Verifica se o bot deve estar pausado (em conversa)."""

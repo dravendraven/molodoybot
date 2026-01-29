@@ -56,3 +56,14 @@ ip_changer.py
 sniffer_simple.py
 sniffer_xtea.py
 packet_sniffer.py
+vocation_debug.html
+REFACTORING_STATUS.md
+GAME_STATE_REFACTOR.md
+EATER_MIGRATION.md
+core/vocation_detector.py
+test_fullness_event.py
+scraper_playwright.py
+profession.py
+gui/mockup_ui.py
+gui/mockup_flet.py
+gui/mockup_dearpygui.py

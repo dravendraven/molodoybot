@@ -51,7 +51,7 @@ SPEAR_ID = 3277          # ID da spear
 SPEAR_WEIGHT = 20.0      # Peso de cada spear em oz
 
 # Debug - ativa/desativa prints do modulo
-DEBUG_SPEAR = True
+DEBUG_SPEAR = False
 
 def _log(msg):
     """Log condicional baseado em DEBUG_SPEAR."""
@@ -78,7 +78,7 @@ ROPE_SPOT_IDS = FLOOR_CHANGE.get('ROPE', set())
 # ========== DELAYS DE SCAN (RÁPIDOS, SEM HUMANIZAÇÃO) ==========
 # Estes delays controlam a velocidade dos loops de monitoramento
 SCAN_HAND_DELAY = 0.15         # Delay entre scans de spears na mao (monitoramento constante)
-SCAN_TILES_DELAY = 0.5         # Delay entre scans de tiles ao redor (procurando spears no chao)
+SCAN_TILES_DELAY = 0.35         # Delay entre scans de tiles ao redor (procurando spears no chao)
 
 # ========== DELAYS HUMANIZADOS (APLICADOS APENAS EM AÇÕES) ==========
 # Estes delays simulam tempo de reação humana e são aplicados APENAS em move_item
@@ -744,6 +744,13 @@ def monitor_hand_loop(pm, base_addr, check_running, get_enabled, get_max_spears,
             if attack_detected:
                 _log(f"[Spear Monitor] Ataque detectado! Spears: {current_spears}")
 
+            # Log periódico para confirmar que Monitor está ativo (a cada 30 scans = ~4.5s)
+            if not hasattr(monitor_hand_loop, '_scan_count'):
+                monitor_hand_loop._scan_count = 0
+            monitor_hand_loop._scan_count += 1
+            if monitor_hand_loop._scan_count % 30 == 0:
+                _log(f"[Spear Monitor] Sync: spears={current_spears}/{max_spears}")
+
             # Delay fixo de scan (sem humanização)
             time.sleep(SCAN_HAND_DELAY)
 
@@ -780,8 +787,11 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
     priority_pickup_start_time = None
 
     # Timeout defensivo para is_processing_loot travado
-    LOOT_STUCK_TIMEOUT = 5.0  # 10 segundos
+    LOOT_STUCK_TIMEOUT = 2.0  # 2 segundos
     loot_processing_start_time = None
+
+    # Timeout defensivo para has_open_loot travado
+    loot_open_timeout = None
 
     while True:
         if check_running and not check_running():
@@ -796,9 +806,27 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
             time.sleep(1)
             continue
 
+        # Pausa durante AFK humanization
+        if state.is_afk_paused:
+            _log(f"[Spear Action] Pausado por AFK ({state.get_afk_pause_remaining():.0f}s)")
+            time.sleep(0.5)
+            continue
+
         try:
             # Verifica se precisa procurar spears (thread-safe)
             state_data = shared_state.get_action_state()
+
+            # ===== RE-SYNC DEFENSIVO =====
+            # Se Action acha que não precisa de spears, verificar diretamente na memória
+            if not state_data['needs_spears']:
+                real_count, _ = get_spear_count_in_hands(pm, base_addr, SPEAR_ID)
+                if real_count != state_data['current_spears']:
+                    _log(f"[Spear Action] DESSINCRONIZAÇÃO DETECTADA: state={state_data['current_spears']} vs real={real_count}")
+                    # Força re-sync no shared_state
+                    max_spears = state_data['max_spears']
+                    shared_state.update_from_hand_scan(real_count, max_spears)
+                    state_data = shared_state.get_action_state()  # Re-le o estado corrigido
+            # =============================
 
             if not state_data['needs_spears']:
                 # Cleanup: se não precisa de spears mas flag está True, libera cavebot
@@ -806,6 +834,8 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
                     state.set_spear_pickup_pending(False)
                     priority_pickup_start_time = None
                     _log("[Spear Action] needs_spears=False - cavebot liberado")
+                #else:
+                    #_log(f"[Spear Action] Aguardando needs_spears (atual={state_data['current_spears']}/{state_data['max_spears']})")
                 time.sleep(SCAN_TILES_DELAY)
                 continue
 
@@ -843,6 +873,8 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
                         loot_processing_start_time = None
                         # Continua para tentar pegar spear
                     else:
+                        elapsed = time.time() - loot_processing_start_time
+                        _log(f"[Spear Action] Aguardando is_processing_loot=False (esperando há {elapsed:.1f}s / timeout={LOOT_STUCK_TIMEOUT}s)")
                         time.sleep(SCAN_TILES_DELAY)  # 500ms
                         continue
                 else:
@@ -851,8 +883,18 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
                 # Verificação adicional - previne race condition
                 # Se container está aberto, aguarda mesmo que is_processing_loot seja False
                 if state.has_open_loot:
-                    time.sleep(SCAN_TILES_DELAY)
-                    continue
+                    if loot_open_timeout is None:
+                        loot_open_timeout = time.time()
+                        _log("[Spear Action] Aguardando has_open_loot=False (container de loot aberto)")
+                    elif time.time() - loot_open_timeout > LOOT_STUCK_TIMEOUT:
+                        _log(f"[Spear Action] AVISO: has_open_loot travado por {LOOT_STUCK_TIMEOUT}s - ignorando")
+                        loot_open_timeout = None
+                        # Continua para tentar pegar spear (ignora a flag travada)
+                    else:
+                        time.sleep(SCAN_TILES_DELAY)
+                        continue
+                else:
+                    loot_open_timeout = None  # Reset quando não está bloqueando
             else:
                 _log("[Spear Action] PRIORITY PICKUP: Executando ciclo pós-loot")
             # ============================================================
@@ -896,7 +938,7 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
 
             roll = random.random()
             if roll > pick_chance:
-                #print(f"[Spear Action] Nao vai pegar (prob={pick_chance:.1%}, roll={roll:.1%})")
+                _log(f"[Spear Action] Probabilidade falhou (chance={pick_chance:.1%}, roll={roll:.1%})")
                 time.sleep(SCAN_TILES_DELAY)
                 continue
 

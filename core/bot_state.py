@@ -62,6 +62,10 @@ class BotState:
         self._is_chat_paused: bool = False  # Pausado por conversa de chat
         self._chat_pause_until: float = 0.0  # Timestamp até quando pausar por chat
 
+        # ===== AFK Humanization =====
+        self._is_afk_paused: bool = False    # Pausado por AFK humanization
+        self._afk_pause_until: float = 0.0   # Timestamp até quando pausar por AFK
+
         # ===== Follow State (Spear Picker Integration) =====
         self._is_following: bool = False           # True quando seguindo criatura (antes de atacar)
         self._follow_target_id: int = 0            # ID da criatura sendo seguida
@@ -383,6 +387,45 @@ class BotState:
             return max(0.0, remaining)
 
     # =========================================================================
+    # AFK HUMANIZATION
+    # =========================================================================
+
+    @property
+    def is_afk_paused(self) -> bool:
+        """Retorna True se bot está pausado por AFK humanization."""
+        with self._lock:
+            if not self._is_afk_paused:
+                return False
+            # Verifica se timeout expirou
+            if time.time() >= self._afk_pause_until:
+                self._is_afk_paused = False
+                return False
+            return True
+
+    def set_afk_pause(self, paused: bool, duration: float = 30.0):
+        """
+        Atualiza estado de pausa AFK.
+
+        Args:
+            paused: True para pausar, False para retomar
+            duration: Duração da pausa em segundos (se paused=True)
+        """
+        with self._lock:
+            self._is_afk_paused = paused
+            if paused:
+                self._afk_pause_until = time.time() + duration
+            else:
+                self._afk_pause_until = 0.0
+
+    def get_afk_pause_remaining(self) -> float:
+        """Retorna segundos restantes de pausa AFK."""
+        with self._lock:
+            if not self._is_afk_paused:
+                return 0.0
+            remaining = self._afk_pause_until - time.time()
+            return max(0.0, remaining)
+
+    # =========================================================================
     # FOLLOW STATE (Spear Picker Integration)
     # =========================================================================
 
@@ -486,6 +529,8 @@ class BotState:
                 'is_runemaking': self._is_runemaking,
                 'is_chat_paused': self._is_chat_paused,
                 'chat_pause_until': self._chat_pause_until,
+                'is_afk_paused': self._is_afk_paused,
+                'afk_pause_until': self._afk_pause_until,
                 'is_following': self._is_following,
                 'follow_target_id': self._follow_target_id,
                 'is_spear_pickup_pending': self._is_spear_pickup_pending,
@@ -511,6 +556,8 @@ class BotState:
             self._is_runemaking = False
             self._is_chat_paused = False
             self._chat_pause_until = 0.0
+            self._is_afk_paused = False
+            self._afk_pause_until = 0.0
             self._is_following = False
             self._follow_target_id = 0
             self._is_spear_pickup_pending = False

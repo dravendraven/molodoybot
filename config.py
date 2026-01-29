@@ -2,6 +2,34 @@
 from database import foods_db
 
 # ==============================================================================
+# DEBUG FLAGS (Centralizadas para fácil acesso durante testes)
+# ==============================================================================
+DEBUG_MODE = False    # Modo debug geral - ativa logs extras em diversos módulos
+HIT_LOG_ENABLED = False  # Controls writing hits to hits_monitor.txt
+XRAY_TRAINER_DEBUG = True    # True = mostra overlay de debug do trainer
+
+# Bot State Debugger HUD
+DEBUG_BOT_STATE = False                      # Master toggle - mostra/esconde HUD
+DEBUG_BOT_STATE_INTERVAL = 0.1              # Intervalo de atualização (segundos) - 100ms = 10 FPS
+DEBUG_BOT_STATE_AUTO_DISABLE_ON_ALARM = False # Desabilitar HUD automaticamente com alarme
+
+# Pathfinding & Navigation
+DEBUG_PATHFINDING = False  # Ativa logs detalhados do A* quando não encontra caminho
+DEBUG_MEMORY_MAP = False  # Caro de performance, ativar apenas quando necessário
+DEBUG_GLOBAL_MAP = False  # Ativa logs quando GlobalMap tenta encontrar rotas
+
+# Obstacle & Stack Clearing
+DEBUG_OBSTACLE_CLEARING = False   # Ativa logs detalhados do obstacle clearing
+DEBUG_STACK_CLEARING = False      # Ativa logs detalhados do stack clearing
+
+# Advancement & Chat
+DEBUG_ADVANCEMENT = True             # Logs detalhados de detecção de progresso
+DEBUG_CHAT_HANDLER = True           # Logs detalhados do sistema de chat
+
+# Trainer
+TRAINER_DEBUG_DECISIONS_ONLY = False  # Loga apenas decisões: atacar, retarget, morte, etc.
+
+# ==============================================================================
 # 1. GERAIS E CONEXÃO
 # ==============================================================================
 # PROCESS_NAME = "Tibia.exe"
@@ -30,11 +58,9 @@ SNIFFER_SERVER_IP = "135.148.27.135"  # IP do servidor OT
 # GUI SETTINGS
 # ==============================================================================
 RELOAD_BUTTON = True  # Exibe botão de reload na interface (desabilitar para release)
-DEBUG_MODE = True    # Modo debug geral - ativa logs extras em diversos módulos
 
 TARGET_MONSTERS = ["Rotworm", "Minotaur"]
 SAFE_CREATURES = ["Minotaur", "Rotworm", "Troll", "Wolf", "Deer", "Rabbit", "Spider", "Poison Spider", "Bug", "Rat", "Bear", "Wasp", "Orc"]
-HIT_LOG_ENABLED = False  # Controls writing hits to hits_monitor.txt
 
 OFFSET_PLAYER_ID = 0x1C684C
 OFFSET_PLAYER_HP = 0x1C6848
@@ -54,16 +80,16 @@ PLAYER_Y_ADDRESS = 0x005D16EC
 PLAYER_Z_ADDRESS = 0x005D16E8
 
 BATTLELIST_BEGIN_ADDRESS = 0x1C68B0
-TARGET_ID_PTR = 0x1C681C 
+TARGET_ID_PTR = 0x1C681C
 REL_FIRST_ID = 0x94
 STEP_SIZE = 156
 OFFSET_ID = 0
 OFFSET_NAME = 4
 OFFSET_X = 0x24       # 36
 OFFSET_Y = 0x28       # 40
-OFFSET_Z = 0x2C       
-OFFSET_HP = 0x84    
-OFFSET_SPEED = 0x88  
+OFFSET_Z = 0x2C
+OFFSET_HP = 0x84
+OFFSET_SPEED = 0x88
 OFFSET_VISIBLE = 0x8C
 OFFSET_MOVEMENT_STATUS = 0x4C    # 0=parado, 1=andando
 OFFSET_FACING_DIRECTION = 0x50  # 0=Norte, 1=Este, 2=Sul, 3=Oeste
@@ -77,7 +103,7 @@ OFFSET_OUTFIT_LEGS = 0x6C   # 108 - Cor das pernas
 OFFSET_OUTFIT_FEET = 0x70   # 112 - Cor dos pés
 OFFSET_LIGHT = 0x74         # 116 - Light level emitted
 OFFSET_LIGHT_COLOR = 0x78   # 120 - Light color
-OFFSET_BLACKSQUARE = 0x7C   # 124 - Blacksquare indicator (8 bytes, shown when creature attacks player)
+OFFSET_BLACKSQUARE = 0x80   # 128 - Blacksquare indicator (4 bytes uint32, GetTickCount timestamp when creature attacks player)
 
 MAX_CREATURES = 250
 
@@ -101,26 +127,26 @@ OFFSET_CONNECTION = 0x31C588
 
 # Endereço inicial da lista de containers (RELATIVO)
 # Cálculo: 0x05CEDD8 (C#) - 0x400000 (Base) = 0x1CEDD8
-OFFSET_CONTAINER_START = 0x1CEDD8 
+OFFSET_CONTAINER_START = 0x1CEDD8
 
 # Distância em bytes de um container para o próximo
-STEP_CONTAINER = 492 
+STEP_CONTAINER = 492
 
 # Número máximo de containers abertos
 MAX_CONTAINERS = 16
 
 # Offsets INTERNOS do Container
-OFFSET_CNT_IS_OPEN = 0      
-OFFSET_CNT_NAME    = 16     
-OFFSET_CNT_VOLUME  = 48     
-OFFSET_CNT_AMOUNT  = 56     
+OFFSET_CNT_IS_OPEN = 0
+OFFSET_CNT_NAME    = 16
+OFFSET_CNT_VOLUME  = 48
+OFFSET_CNT_AMOUNT  = 56
 
 # Offsets dos ITENS dentro do Container
 OFFSET_CNT_ITEM_ID    = 60
 OFFSET_CNT_ITEM_COUNT = 64
 
 # Offset para detectar se container é filho de outro
-OFFSET_CNT_HAS_PARENT = 52    # 0 = raiz, 1 = filho de outro container  
+OFFSET_CNT_HAS_PARENT = 52    # 0 = raiz, 1 = filho de outro container
 
 # Distância entre itens (Slot)
 STEP_SLOT = 12
@@ -131,7 +157,7 @@ STEP_SLOT = 12
 # ==============================================================================
 
 # Endereço base da GUI (Relativo)
-OFFSET_GUI_POINTER = 0x1D16B0 
+OFFSET_GUI_POINTER = 0x1D16B0
 
 # Offsets para navegar na estrutura de janelas (LinkedList)
 # Baseados na função GetItemPosition do CrystalBot
@@ -143,7 +169,7 @@ GUI_OFFSET_WINDOW_HEIGHT = 0x20
 
 # Ajuste fino da posição Y (Título da janela + borda)
 # O CrystalBot usa += 15, mas pode variar conforme a skin/versão. Vamos começar com 15.
-GUI_HEADER_HEIGHT = 15 
+GUI_HEADER_HEIGHT = 15
 
 # Largura e Altura de um Slot em pixels
 SLOT_SIZE = 36  # Padrão 32x32 + 1px de borda
@@ -296,7 +322,7 @@ SLOT_RIGHT = 5
 SLOT_LEFT = 6
 SLOT_AMMO = 7
 
-OFFSET_PLAYER_CAP = 0x1C6820  # Capacidade (Oz) 
+OFFSET_PLAYER_CAP = 0x1C6820  # Capacidade (Oz)
 
 # Cooldown do peixe (em segundos)
 # 32 minutos = 1920 segundos
@@ -311,9 +337,9 @@ CHECK_MIN_CAP = True      # Se True, o bot para de pescar se a cap estiver baixa
 MIN_CAP_VALUE = 6.0       # Valor mínimo de cap (oz) para permitir a pesca
 
 # Define quantos arremessos o bot aguenta antes de precisar descansar
-FATIGUE_ACTIONS_RANGE = (8, 22)  
+FATIGUE_ACTIONS_RANGE = (8, 22)
 # Define quanto tempo (segundos) ele descansa quando atinge o limite
-FATIGUE_REST_RANGE = (10, 50)     
+FATIGUE_REST_RANGE = (10, 50)
 # Porcentagem extra de delay motor quando estiver cansado (Ex: 0.3 = 30% mais lento)
 FATIGUE_MOTOR_PENALTY = 0.4
 
@@ -328,17 +354,6 @@ TRAVEL_SPEED_MAX = 0.09
 COLOR_FLOOR_ABOVE = "#FFFF00" # Amarelo (Andar de Cima)
 COLOR_FLOOR_BELOW = "#A52A2A" # Marrom (Andar de Baixo)
 COLOR_SAME_FLOOR  = "#FF0000" # Vermelho (Mesmo andar - Alarme visual)
-
-# Debug Overlay - Exibe info (vis, hp%, dist) acima das criaturas no trainer
-XRAY_TRAINER_DEBUG = False    # True = mostra overlay de debug do trainer
-
-# ==============================================================================
-# BOT STATE DEBUGGER HUD CONFIG
-# ==============================================================================
-# Exibe HUD com status do BotState no canto superior direito da tela
-DEBUG_BOT_STATE = False                      # Master toggle - mostra/esconde HUD
-DEBUG_BOT_STATE_INTERVAL = 0.1              # Intervalo de atualização (segundos) - 100ms = 10 FPS
-DEBUG_BOT_STATE_AUTO_DISABLE_ON_ALARM = False # Desabilitar HUD automaticamente com alarme
 
 # ==============================================================================
 # VOCATION & REGEN CONFIG
@@ -376,15 +391,15 @@ LIGHT_DEFAULT_BYTES = b'\x7E\x05'
 # ==============================================================================
 # Endereço onde fica o ponteiro para a matriz do mapa
 # Blackd: 0x5D4C20 -> Offset: 0x1D4C20
-MAP_POINTER_ADDR = 0x1D4C20      
+MAP_POINTER_ADDR = 0x1D4C20
 
 # Ponteiro para calcular offsets extras
 # Blackd: 0x5D4C3C -> Offset: 0x1D4C3C
-OFFSET_POINTER_ADDR = 0x1D4C3C   
+OFFSET_POINTER_ADDR = 0x1D4C3C
 
 # Andar do personagem (Z)
 # Blackd: 0x5D16E8 -> Offset: 0x1D16E8
-PLAYER_Z_ADDR = 0x1D16E8         
+PLAYER_Z_ADDR = 0x1D16E8
 
 # Constantes da Estrutura de Dados
 TILE_SIZE = 172 # 168 ou 172 dependendo da versão exata, vamos testar
@@ -409,7 +424,7 @@ OFFSET_CONSOLE_AUTHOR = 0x31DE08  # O log/autor ("Fulano says:")
 RESUME_DELAY_NORMAL = (10, 25)
 
 # Tempo de espera (segundos) para voltar a agir após detecção de GM (Visual ou Chat)
-RESUME_DELAY_GM = (120, 300) 
+RESUME_DELAY_GM = (120, 300)
 
 # Intervalo entre alertas no Telegram (Segundos)
 TELEGRAM_INTERVAL_NORMAL = 60
@@ -459,18 +474,6 @@ KS_HISTORY_DURATION = 5.0             # Segundos de histórico de HP a manter
 BLACKSQUARE_THRESHOLD_MS = 5000       # Considerar criatura atacando se atacou há menos de 5 segundos
 
 # ==============================================================================
-# DEBUG CONFIG (PATHFINDING & NAVIGATION)
-# ==============================================================================
-# Ativa logs detalhados do A* quando não encontra caminho
-DEBUG_PATHFINDING = False
-
-# Ativa logs detalhados de leituras de memória (tiles distantes)
-DEBUG_MEMORY_MAP = False  # Caro de performance, ativar apenas quando necessário
-
-# Ativa logs detalhados do GlobalMap pathfinding
-DEBUG_GLOBAL_MAP = False  # Ativa logs quando GlobalMap tenta encontrar rotas
-
-# ==============================================================================
 ### GLOBAL MAP
 
 WALKABLE_COLORS = [24, 129, 121, 210] # Grama, Chão Padrão cinza, Chão de Dirt/Caverna, #Amarelo: escada, buraco, etc
@@ -487,7 +490,6 @@ REALTIME_PATHING_ENABLED = True
 # OBSTACLE CLEARING CONFIG
 # ==============================================================================
 OBSTACLE_CLEARING_ENABLED = True  # Master toggle - mover mesas/cadeiras do caminho
-DEBUG_OBSTACLE_CLEARING = False   # Ativa logs detalhados do obstacle clearing
 
 # Máximo de tentativas de limpar o mesmo tile antes de desistir
 MAX_CLEAR_ATTEMPTS_PER_TILE = 3
@@ -499,7 +501,6 @@ CLEAR_ATTEMPT_COOLDOWN = 2.0
 # STACK CLEARING CONFIG (Parcels, Boxes, Furniture Packages)
 # ==============================================================================
 STACK_CLEARING_ENABLED = True     # Master toggle - mover parcels/boxes do caminho
-DEBUG_STACK_CLEARING = False      # Ativa logs detalhados do stack clearing
 
 # ==============================================================================
 # HUMANIZAÇÃO - DETECÇÃO DE FALTA DE PROGRESSO
@@ -513,9 +514,6 @@ ADVANCEMENT_EXPECTED_SPEED = 2.0      # SQM/segundo esperado em caminhada normal
 # Respostas quando player bloqueando
 PLAYER_BLOCK_WAIT_RANGE = (1.0, 4.0)  # Range de espera (segundos) - gaussiano
 PLAYER_AVOIDANCE_MULTIPLIER = 2       # Custo 2x nos tiles do player no A*
-
-# Debug
-DEBUG_ADVANCEMENT = True             # Logs detalhados de detecção de progresso
 
 # ==============================================================================
 # AI CHAT RESPONDER CONFIG
@@ -534,9 +532,6 @@ CHAT_RESPONSE_COOLDOWN = 5.0        # Segundos entre respostas
 # Pausa o bot enquanto em "conversa"
 CHAT_PAUSE_BOT = True               # Se True, pausa cavebot/trainer durante conversa
 CHAT_PAUSE_DURATION = 10.0          # Segundos de pausa após última mensagem
-
-# Debug
-DEBUG_CHAT_HANDLER = True           # Logs detalhados do sistema de chat
 
 # ==============================================================================
 # FOLLOW-THEN-ATTACK CONFIG (TRAINER)

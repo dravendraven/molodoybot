@@ -117,6 +117,11 @@ class Position:
         return Position(target_x, target_y, self.z)
 
 
+# Cache global para rastrear mudanças no blacksquare (fora da dataclass)
+# {creature_id: (last_blacksquare_value, last_change_timestamp)}
+_blacksquare_cache: dict = {}
+
+
 @dataclass
 class Creature:
     """Representa uma criatura do battlelist."""
@@ -157,12 +162,13 @@ class Creature:
         Verifica se é um jogador (não monstro).
         NOTA: NPCs NÃO aparecem no battlelist, apenas players e monstros.
 
-        DETECÇÃO DUPLA (lógica do trainer.py):
+        DETECÇÃO TRIPLA:
         1. Verifica se tem cores de outfit (head + body + legs + feet > 0)
         2. Verifica se NÃO é uma criatura humanoid conhecida (Amazon, Hunter, etc.)
+        3. FALLBACK: Se não tem cores E nome não é criatura conhecida → player
 
         Isso evita falsos positivos com criaturas que usam outfits de player.
-        Também detecta players disfarçados com outfit de criatura.
+        Também detecta players mesmo quando cores de outfit não são lidas corretamente.
         """
         if not self.name:
             return False
@@ -181,6 +187,22 @@ class Creature:
             self.outfit_legs,
             self.outfit_feet
         )
+
+        # FALLBACK: Se não tem cores de outfit, verifica pelo nome
+        # Se nome não é de nenhuma criatura conhecida → provavelmente é player
+        if not has_colors:
+            from database.corpses import CORPSE_IDS
+            # Verifica se o nome corresponde a alguma criatura conhecida
+            name_lower = self.name.lower()
+            is_known_creature = any(
+                creature_name.lower() == name_lower or
+                creature_name.lower() in name_lower or
+                name_lower in creature_name.lower()
+                for creature_name in CORPSE_IDS.keys()
+            )
+            # Nome desconhecido + sem cores = provavelmente player
+            if not is_known_creature:
+                return True
 
         # Player = tem cores E NÃO é criatura humanoid conhecida
         return has_colors and not is_known_humanoid
@@ -234,28 +256,66 @@ class Creature:
         """
         return self.is_alive and self.position.z == player_z
 
-    def is_attacking_player(self, threshold_ms: int = 5000) -> bool:
+    def is_attacking_player(self, threshold_ms: int = 5000, debug: bool = False) -> bool:
         """
-        Verifica se a criatura está nos atacando baseado no blacksquare timestamp.
+        Verifica se a criatura está nos atacando baseado em mudanças no blacksquare.
 
-        O blacksquare armazena GetTickCount() do momento do último ataque.
-        Se (GetTickCount() - blacksquare) < threshold, a criatura está nos atacando.
+        O blacksquare usa um timestamp INTERNO do cliente Tibia (não GetTickCount do Windows).
+        Por isso, rastreamos MUDANÇAS no valor em vez de comparar com tempo absoluto.
 
-        Nota: Ataques ocorrem a cada ~2 segundos, usamos 5s para garantir
-        detecção mesmo entre ciclos de scan e delays de movimento.
+        Lógica:
+        - Se blacksquare == 0: não está atacando
+        - Se blacksquare mudou recentemente: está atacando
+        - Se blacksquare não mudou por mais de threshold: parou de atacar
 
         Args:
             threshold_ms: Tempo em ms para considerar ataque ativo (default 5000ms)
+            debug: Se True, imprime valores para debug
 
         Returns:
             True se a criatura está nos atacando
         """
+        import time
+
         if self.blacksquare == 0:
+            # Limpa cache se blacksquare zerou
+            if self.id in _blacksquare_cache:
+                del _blacksquare_cache[self.id]
+            if debug:
+                print(f"  [BLACKSQUARE] {self.name}: blacksquare=0 → False")
             return False
 
-        import ctypes
-        current_tick = ctypes.windll.kernel32.GetTickCount64()
-        return (current_tick - self.blacksquare) < threshold_ms
+        current_time = time.time() * 1000  # Converte para ms
+        cache_entry = _blacksquare_cache.get(self.id)
+
+        if cache_entry is None:
+            # Primeira vez vendo esta criatura com blacksquare != 0
+            # Assume que está atacando (valor novo)
+            _blacksquare_cache[self.id] = (self.blacksquare, current_time)
+            if debug:
+                print(f"  [BLACKSQUARE] {self.name}: NOVO blacksquare={self.blacksquare} → True")
+            return True
+
+        last_value, last_change_time = cache_entry
+
+        if self.blacksquare != last_value:
+            # Blacksquare mudou - criatura atacou recentemente
+            _blacksquare_cache[self.id] = (self.blacksquare, current_time)
+            if debug:
+                print(f"  [BLACKSQUARE] {self.name}: MUDOU {last_value}→{self.blacksquare} → True")
+            return True
+
+        # Blacksquare não mudou - verifica há quanto tempo
+        age_ms = current_time - last_change_time
+
+        if debug:
+            print(f"  [BLACKSQUARE] {self.name}: blacksquare={self.blacksquare}, age={age_ms:.0f}ms, threshold={threshold_ms}")
+
+        result = age_ms < threshold_ms
+        if debug:
+            status = "ATIVO" if result else "EXPIRADO"
+            print(f"  [BLACKSQUARE] {self.name}: {status} → {result}")
+        return result
 
 
 @dataclass
@@ -303,3 +363,54 @@ class Container:
             if item.id == item_id:
                 return item
         return None
+
+
+@dataclass
+class Player:
+    """
+    Player character state snapshot.
+
+    Representa o estado completo do player lido da memória pelo game_state.
+    Atualizado 20 vezes por segundo (20Hz polling).
+    """
+    char_id: int
+    char_name: str
+    position: Position
+    hp: int
+    hp_max: int
+    hp_percent: float
+    mana: int
+    mana_max: int
+    mana_percent: float
+    cap: float  # Carrying capacity
+    speed: int  # Movement speed
+    is_moving: bool
+    is_full: bool  # Inventory full
+
+    @property
+    def is_alive(self) -> bool:
+        """Check if player is alive."""
+        return self.hp > 0
+
+    @property
+    def is_low_hp(self) -> bool:
+        """Check if HP is below 50% threshold."""
+        return self.hp_percent < 50.0
+
+    @property
+    def is_low_mana(self) -> bool:
+        """Check if mana is below 30% threshold."""
+        return self.mana_percent < 30.0
+
+    @property
+    def can_carry_more(self) -> bool:
+        """Check if player can carry more items."""
+        return self.cap > 10.0 and not self.is_full
+
+    def is_hp_below(self, threshold: float) -> bool:
+        """Check if HP is below custom threshold percent."""
+        return self.hp_percent < threshold
+
+    def is_mana_below(self, threshold: float) -> bool:
+        """Check if mana is below custom threshold percent."""
+        return self.mana_percent < threshold

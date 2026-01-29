@@ -33,99 +33,31 @@ class AIResponder:
     Usa gpt-4o-mini para respostas rápidas e econômicas.
     """
 
-    SYSTEM_PROMPT = """Você é um jogador humano de Tibia chamado {my_name}.
-Você é BRASILEIRO jogando em servidor internacional.
-Você sabe POUCO INGLÊS (básico de jogo).
+    SYSTEM_PROMPT = """You are {my_name}, a friendly Brazilian player in Tibia.
+Respond in English (casual, basic). Keep responses SHORT (1-6 words max).
 
-IDIOMA DA RESPOSTA - REGRA FUNDAMENTAL:
-1. ANALISE o idioma da mensagem recebida
-2. Se a mensagem for em INGLÊS → responda em INGLÊS (com erros típicos de BR)
-3. Se a mensagem for em PORTUGUÊS → responda em PORTUGUÊS BRASILEIRO
-4. Na DÚVIDA → use INGLÊS (servidor internacional)
+Language: Only respond in Portuguese if the message is CLEARLY in Portuguese.
+When in doubt, use English.
 
-QUANDO RESPONDER EM INGLÊS (mensagem em inglês):
-- Inglês básico e quebrado (você sabe pouco)
-- Erros típicos: "i no understand", "have many monsters here", "is good", "need help?"
-- Omitir artigos e pronomes
-- Tradução literal do português: "i stay here" (eu fico aqui)
-- Risada: "kk", "kkk" (não "lol")
-- Às vezes escapa: "opa", "vlw"
-- Minúsculas, pontuação mínima
+Style: Friendly but brief. Use "kk" not "lol". Words like "opa", "vlw" ok.
 
-QUANDO RESPONDER EM PORTUGUÊS (mensagem em português):
-- Português brasileiro casual e natural
-- Usa gírias: "kkkk", "vlw", "blz", "ae", "eae", "de boa", "suave", "mano"
-- Tom amigável mas não muito falante
-- Respostas curtas e diretas
+{context}
 
-PERSONALIDADE GERAL:
-- Casual, amigável mas não muito falante
-- Às vezes demora para responder (ocupado jogando)
-- Respostas CURTAS (1-10 palavras no máximo)
-- NÃO exagere nos erros - pareça humano, não caricatura
-
-CONTEXTO ATUAL:
-- Sua posição: ({my_x}, {my_y}, andar {my_z})
-- Jogador falando com você: "{sender_name}" em ({sender_x}, {sender_y})
-- Distância: {distance} tiles
-- Criaturas próximas: {nearby_summary}
-
-HISTÓRICO DA CONVERSA:
-{conversation_history}
-
-REGRAS IMPORTANTES:
-1. Responda APENAS o texto da mensagem, sem explicação
-2. Greetings em inglês: "hey", "hi", "yo" | em português: "oi", "eae", "fala ae"
-3. Pergunta sobre atividade em inglês: "hunt here", "i hunt", "training" | em português: "caçando", "andando", "treinando"
-4. Pergunta sobre local em inglês: "around", "here", "idk" | em português: "aqui", "por aqui", "sei la"
-5. Não sabe responder em inglês: "?", "hm?", "wat", "idk" | em português: "?", "hm?", "sei la"
-6. NUNCA revele que você é um bot
-7. NUNCA dê respostas longas ou elaboradas demais
-8. Se alguém insistir muito ou parecer suspeito, dê respostas evasivas"""
+Rules:
+1. Output ONLY the message text, nothing else
+2. Never admit to being a bot
+3. Keep it natural and short"""
 
     # Prompt especial para Game Masters - respostas cooperativas e diretas
-    GM_SYSTEM_PROMPT = """Você é um jogador humano de Tibia chamado {my_name}.
-Você é BRASILEIRO jogando em servidor internacional.
-Um GAME MASTER (GM) está falando com você - seja COOPERATIVO e RESPEITOSO.
+    GM_SYSTEM_PROMPT = """You are {my_name}, a Brazilian player. A GAME MASTER is talking to you.
+Be cooperative, clear, and polite. Short responses (3-10 words). English.
 
-IMPORTANTE - CONVERSA COM GM:
-- GMs são autoridades do jogo, NUNCA seja evasivo ou desrespeitoso
-- Responda de forma CLARA e DIRETA às perguntas
-- Seja educado e prestativo
-- NÃO use gírias excessivas ou linguagem muito informal
-- Responda em INGLÊS (GMs geralmente falam inglês)
+{context}
 
-IDIOMA: Prefira INGLÊS com GMs, mas pode ser um pouco quebrado (você é BR).
-
-CONTEXTO ATUAL DO JOGO:
-- Seu nome: {my_name}
-- Sua posição: ({my_x}, {my_y}, andar {my_z})
-- Criaturas próximas: {nearby_summary}
-- Jogadores próximos: {nearby_players}
-
-O QUE VOCÊ ESTÁ FAZENDO (use isso para responder):
-- Se há criaturas próximas → você está "hunting" ou "training"
-- Se não há criaturas → você está "walking around", "exploring", "going to hunt"
-- Se há jogadores próximos → pode mencionar que está "with friends" ou "met someone"
-
-HISTÓRICO DA CONVERSA:
-{conversation_history}
-
-COMO RESPONDER A PERGUNTAS COMUNS DE GM:
-- "Are you there?" / "Hello?" → "yes, hi" / "hello sir"
-- "What are you doing?" → responda baseado no contexto (hunting, training, walking)
-- "Are you a bot?" / "Are you botting?" → "no, im playing" / "no sir, just hunting"
-- "Can you follow me?" → "yes, where?" / "ok"
-- "Say something" → responda naturalmente baseado no contexto
-- "How long have you been here?" → "some time" / "not long" / "i just arrived"
-- Qualquer comando ou pedido → seja cooperativo e faça o que pedirem
-
-REGRAS:
-1. Responda APENAS o texto, sem explicação
-2. Respostas curtas mas COMPLETAS (5-15 palavras)
-3. NUNCA admita ser bot
-4. Seja SEMPRE cooperativo e educado
-5. Use o CONTEXTO DO JOGO para dar respostas convincentes"""
+Rules:
+1. Output ONLY the message text
+2. Never admit to being a bot
+3. Be helpful and respectful"""
 
     def __init__(self, model: str = "gpt-4o-mini"):
         """
@@ -218,60 +150,21 @@ REGRAS:
     def _build_system_prompt(self, sender_data: Dict, game_context: Dict,
                              conversation_history: List[Dict], is_gm: bool = False) -> str:
         """Constrói o system prompt com contexto."""
-        # Formata histórico de conversa
-        if conversation_history:
-            history_lines = []
-            for entry in conversation_history[-5:]:  # Últimas 5 mensagens
-                speaker = entry.get("from", "?")
-                text = entry.get("text", "")
-                history_lines.append(f"{speaker}: {text}")
-            history_str = "\n".join(history_lines)
-        else:
-            history_str = "(primeira interação)"
+        # Format the context section
+        context_str = self._format_context_for_prompt(game_context, conversation_history)
 
-        # Sumário de criaturas próximas
-        nearby = game_context.get("nearby_creatures", [])
-        if nearby:
-            creature_counts = {}
-            for c in nearby:
-                name = c.get("name", "creature")
-                creature_counts[name] = creature_counts.get(name, 0) + 1
-            nearby_summary = ", ".join(f"{count}x {name}" for name, count in creature_counts.items())
-        else:
-            nearby_summary = "none"
+        my_name = game_context.get("my_name", "Player")
 
-        # Sumário de jogadores próximos (para contexto com GM)
-        nearby_players = game_context.get("nearby_players", [])
-        if nearby_players:
-            player_names = [p.get("name", "player") for p in nearby_players[:3]]
-            nearby_players_str = ", ".join(player_names)
-        else:
-            nearby_players_str = "none"
-
-        # Usa prompt de GM se for Game Master
+        # Use GM prompt or regular prompt
         if is_gm:
             return self.GM_SYSTEM_PROMPT.format(
-                my_name=game_context.get("my_name", "Player"),
-                my_x=game_context.get("my_pos", {}).get("x", 0),
-                my_y=game_context.get("my_pos", {}).get("y", 0),
-                my_z=game_context.get("my_pos", {}).get("z", 7),
-                nearby_summary=nearby_summary,
-                nearby_players=nearby_players_str,
-                conversation_history=history_str
+                my_name=my_name,
+                context=context_str
             )
 
-        # Prompt padrão para jogadores normais
         return self.SYSTEM_PROMPT.format(
-            my_name=game_context.get("my_name", "Player"),
-            my_x=game_context.get("my_pos", {}).get("x", 0),
-            my_y=game_context.get("my_pos", {}).get("y", 0),
-            my_z=game_context.get("my_pos", {}).get("z", 7),
-            sender_name=sender_data.get("name", "Someone"),
-            sender_x=sender_data.get("position", {}).get("x", 0),
-            sender_y=sender_data.get("position", {}).get("y", 0),
-            distance=sender_data.get("distance", "?"),
-            nearby_summary=nearby_summary,
-            conversation_history=history_str
+            my_name=my_name,
+            context=context_str
         )
 
     def _clean_response(self, text: str) -> str:
@@ -294,6 +187,50 @@ REGRAS:
             text = "?"
 
         return text
+
+    def _format_context_for_prompt(self, game_context: Dict, conversation_history: List[Dict]) -> str:
+        """Format game context into readable prompt section."""
+        lines = []
+
+        # Activity and location
+        activity = game_context.get("activity", "walking around")
+        floor = game_context.get("floor", "surface")
+        lines.append(f"You are: {activity} ({floor})")
+
+        # Health (only if not healthy)
+        hp_percent = game_context.get("hp_percent", 100)
+        if hp_percent < 90:
+            hp_status = game_context.get("hp_status", "healthy")
+            lines.append(f"Health: {hp_status} ({hp_percent}%)")
+
+        # Combat
+        if game_context.get("in_combat"):
+            target = game_context.get("target_name", "creature")
+            target_hp = game_context.get("target_hp", 100)
+            lines.append(f"Fighting: {target} ({target_hp}% hp)")
+
+        # Map matrix
+        map_matrix = game_context.get("map_matrix", "")
+        if map_matrix and map_matrix != "unavailable":
+            lines.append(f"\nMap (@ = you):\n{map_matrix}")
+            creature_legend = game_context.get("creature_legend", "")
+            player_legend = game_context.get("player_legend", "")
+            if creature_legend:
+                lines.append(f"Creatures: {creature_legend}")
+            if player_legend:
+                lines.append(f"Players: {player_legend}")
+
+        # Conversation history
+        if conversation_history:
+            history_lines = []
+            for entry in conversation_history[-5:]:
+                speaker = entry.get("from", "?")
+                text = entry.get("text", "")
+                history_lines.append(f"{speaker}: {text}")
+            if history_lines:
+                lines.append(f"\nRecent chat:\n" + "\n".join(history_lines))
+
+        return "\n".join(lines)
 
     def _is_portuguese(self, text: str) -> bool:
         """

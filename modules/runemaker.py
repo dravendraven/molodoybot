@@ -369,7 +369,16 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                 packet.stop()
                 last_log_wait = time.time()
             time.sleep(1)
-            continue 
+            continue
+
+        # ======================================================================
+        # PRIORIDADE 1.5: PAUSA AFK (HUMANIZAÇÃO)
+        # ======================================================================
+        if state.is_afk_paused:
+            remaining = state.get_afk_pause_remaining()
+            set_status(f"pausado (AFK {remaining:.0f}s)")
+            time.sleep(0.5)
+            continue
 
         # ======================================================================
         # PRIORIDADE 2: FUGA (MONSTRO/PK)
@@ -518,10 +527,10 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                     state.set_runemaking(True)
 
                     try:
-                        hand_mode = get_cfg('hand_mode', 'RIGHT')
+                        hand_mode = get_cfg('hand_mode', 'DIREITA')
                         hands_to_use = []
-                        if hand_mode == "BOTH": hands_to_use = [SLOT_LEFT, SLOT_RIGHT]
-                        elif hand_mode == "LEFT": hands_to_use = [SLOT_LEFT]
+                        if hand_mode == "AMBAS": hands_to_use = [SLOT_LEFT, SLOT_RIGHT]
+                        elif hand_mode == "ESQUERDA": hands_to_use = [SLOT_LEFT]
                         else: hands_to_use = [SLOT_RIGHT]
 
                         # Verifica se temos blank runes no inventário ANTES de desarmar

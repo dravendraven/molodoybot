@@ -13,6 +13,13 @@ from core.memory_map import MemoryMap
 from core.config_utils import make_config_getter
 from core.packet_mutex import PacketMutex
 from core.bot_state import state
+from modules.eater import attempt_eat
+from core.game_state import game_state
+
+# ==============================================================================
+# DEBUG FLAGS
+# ==============================================================================
+DEBUG_AUTOEAT = True  # Debug flag para auto-eat - mostrar logs detalhados
 
 # ==============================================================================
 # VARIÁVEIS GLOBAIS DE SESSÃO
@@ -104,6 +111,17 @@ def fishing_loop(pm, base_addr, hwnd, check_running=None, log_callback=None,
     mapper = MemoryMap(pm, base_addr)
     player_id = 0
     cap_paused = False
+
+    # Auto-Eat Control
+    last_eat_attempt = 0
+    is_full_lock = False
+    full_lock_time = 0
+    FULL_COOLDOWN_SECONDS = 60
+    EAT_ATTEMPT_INTERVAL = 2  # Try eating every 2 seconds
+
+    # Periodic Stack Control
+    last_periodic_stack = 0
+    PERIODIC_STACK_INTERVAL = 5  # Stack every 5 seconds
 
     # PacketManager para envio de pacotes
     packet = PacketManager(pm, base_addr)
@@ -216,6 +234,92 @@ def fishing_loop(pm, base_addr, hwnd, check_running=None, log_callback=None,
                 set_status("pausado (loot)")
                 gauss_wait(0.5, 20)
                 continue
+            if state.is_afk_paused:
+                remaining = state.get_afk_pause_remaining()
+                set_status(f"pausado (AFK {remaining:.0f}s)")
+                gauss_wait(0.5, 20)
+                continue
+
+            # -------------------------------------------------------------
+            # AUTO-EAT: Consume food automatically
+            # -------------------------------------------------------------
+            auto_eat_enabled = get_cfg('auto_eat', False)
+            if DEBUG_AUTOEAT:
+                print(f"[DEBUG_AUTOEAT] === Ciclo Auto-Eat ===")
+                print(f"[DEBUG_AUTOEAT] config auto_eat = {auto_eat_enabled}")
+
+            if auto_eat_enabled:
+                if DEBUG_AUTOEAT:
+                    print(f"[DEBUG_AUTOEAT] is_full_lock={is_full_lock}, full_lock_time={full_lock_time:.1f}")
+
+                # Unlock after cooldown expires
+                if is_full_lock and (time.time() - full_lock_time > FULL_COOLDOWN_SECONDS):
+                    is_full_lock = False
+                    if DEBUG_AUTOEAT:
+                        print(f"[DEBUG_AUTOEAT] Desbloqueando is_full_lock (cooldown expirou)")
+
+                # Try eating every 2 seconds if not locked
+                current_time = time.time()
+                time_since_last = current_time - last_eat_attempt
+
+                if DEBUG_AUTOEAT:
+                    print(f"[DEBUG_AUTOEAT] time_since_last={time_since_last:.1f}s, interval={EAT_ATTEMPT_INTERVAL}s")
+
+                if not is_full_lock and (time_since_last >= EAT_ATTEMPT_INTERVAL):
+                    last_eat_attempt = current_time
+                    try:
+                        if DEBUG_AUTOEAT:
+                            print(f"[DEBUG_AUTOEAT] Chamando attempt_eat()...")
+
+                        res = attempt_eat(pm, base_addr, hwnd)
+
+                        if DEBUG_AUTOEAT:
+                            print(f"[DEBUG_AUTOEAT] attempt_eat() retornou: {res}")
+
+                        # Check for FULL return value from attempt_eat (legacy)
+                        # attempt_eat returns "FULL" string when player is full
+                        if res == "FULL":
+                            # Player is full - lock for 60 seconds
+                            is_full_lock = True
+                            full_lock_time = time.time()
+                            if DEBUG_AUTOEAT:
+                                print(f"[DEBUG_AUTOEAT] attempt_eat retornou FULL - bloqueando por {FULL_COOLDOWN_SECONDS}s")
+                            log_msg(f"🍖 Barriga cheia! Bloqueado por {FULL_COOLDOWN_SECONDS}s.")
+                        elif res:
+                            # Successfully ate (res = item_id)
+                            food_name = foods_db.get_food_name(res)
+                            if DEBUG_AUTOEAT:
+                                print(f"[DEBUG_AUTOEAT] Comeu com sucesso: {food_name} (ID: {res})")
+                            log_msg(f"🍖 Comeu: {food_name}")
+
+                            # CRITICAL: Skip fishing this cycle after eating
+                            # Prevents action conflict - can't eat and fish simultaneously
+                            gauss_wait(0.5, 20)  # Human-like delay after eating
+                            continue  # Skip to next loop iteration (don't fish this cycle)
+                    except Exception as e:
+                        if DEBUG_AUTOEAT:
+                            print(f"[DEBUG_AUTOEAT] ERRO: {e}")
+                            traceback.print_exc()
+                        log_msg(f"⚠️ Erro ao comer: {e}")
+                else:
+                    if DEBUG_AUTOEAT:
+                        if is_full_lock:
+                            remaining = FULL_COOLDOWN_SECONDS - (current_time - full_lock_time)
+                            print(f"[DEBUG_AUTOEAT] Pulando: is_full_lock=True (restam {remaining:.1f}s)")
+                        else:
+                            print(f"[DEBUG_AUTOEAT] Pulando: aguardando intervalo")
+
+            # -------------------------------------------------------------
+            # PERIODIC STACK: Stack fish every 5 seconds as backup
+            # -------------------------------------------------------------
+            current_time_stack = time.time()
+            if current_time_stack - last_periodic_stack >= PERIODIC_STACK_INTERVAL:
+                last_periodic_stack = current_time_stack
+                try:
+                    auto_stack_items(pm, base_addr, hwnd, loot_ids=[FISH_ID])
+                except Exception as e:
+                    if DEBUG_AUTOEAT:
+                        print(f"[DEBUG_AUTOEAT] Erro no stack periodico: {e}")
 
             if player_id == 0:
                 try:
@@ -411,7 +515,8 @@ def fishing_loop(pm, base_addr, hwnd, check_running=None, log_callback=None,
                 set_status(f"peixe! ({session_fish_caught}/{session_total_casts})")
 
                 fishing_db.mark_fish_caught(abs_x, abs_y, pz)
-                auto_stack_items(pm, base_addr, hwnd)
+                # Passa FISH_ID explicitamente para garantir stack dos peixes
+                auto_stack_items(pm, base_addr, hwnd, loot_ids=[FISH_ID])
                 if (abs_x, abs_y) in fishing_sessions: del fishing_sessions[(abs_x, abs_y)]
                 current_target_coords = None 
                 

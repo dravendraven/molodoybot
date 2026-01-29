@@ -110,7 +110,7 @@ class BattleListScanner:
             # Parse campos adicionais (tibianic-dll structures.h)
             light = struct.unpack_from('<I', raw_bytes, OFFSET_LIGHT)[0]
             light_color = struct.unpack_from('<I', raw_bytes, OFFSET_LIGHT_COLOR)[0]
-            blacksquare = struct.unpack_from('<Q', raw_bytes, OFFSET_BLACKSQUARE)[0]  # uint64_t
+            blacksquare = struct.unpack_from('<I', raw_bytes, OFFSET_BLACKSQUARE)[0]  # uint32_t (GetTickCount)
 
             return Creature(
                 id=c_id,

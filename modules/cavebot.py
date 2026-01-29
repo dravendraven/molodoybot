@@ -53,9 +53,16 @@ class Cavebot:
     STATE_PAUSED = "paused"
     STATE_WAYPOINT_REACHED = "waypoint_reached"
 
-    def __init__(self, pm, base_addr, maps_directory=None):
+    def __init__(self, pm, base_addr, maps_directory=None, spear_picker_enabled_callback=None, afk_settings_callback=None):
         self.pm = pm
         self.base_addr = base_addr
+
+        # Callback para verificar se spear picker está habilitado
+        self._spear_picker_enabled_callback = spear_picker_enabled_callback or (lambda: False)
+
+        # Callback para obter configurações de AFK humanization
+        # Retorna: {'enabled': bool, 'duration': int, 'interval': int}
+        self._afk_settings_callback = afk_settings_callback or (lambda: {'enabled': False, 'duration': 30, 'interval': 10})
 
         # Inicializa o PacketManager
         self.packet = PacketManager(pm, base_addr)
@@ -107,6 +114,11 @@ class Cavebot:
         self.no_progress_response_time = 0  # Timestamp da última resposta a bloqueio
         self.last_global_path_time = 0  # Timestamp da última geração de rota global
         self._was_paused = False  # Para detectar transição pausa → navegação
+
+        # --- AFK HUMANIZATION ---
+        self._afk_pause_active = False       # True se estamos em pausa AFK
+        self._afk_pause_until = 0            # Timestamp de quando a pausa termina
+        self._afk_next_pause_time = 0        # Timestamp para próxima pausa
 
     def load_waypoints(self, waypoints_list):
         """
@@ -309,14 +321,19 @@ class Cavebot:
             self.last_action_time = time.time()
             return
 
-        # NOVO: Pausa durante coleta de spears pós-loot
-        if state.is_spear_pickup_pending:
+        # NOVO: Pausa durante coleta de spears pós-loot (somente se feature habilitada)
+        if state.is_spear_pickup_pending and self._spear_picker_enabled_callback():
             self._was_paused = True  # Marcar que estávamos pausados
             self.current_state = self.STATE_PAUSED
             self.state_message = "⏸️ Pausado (Spear pickup)"
             if DEBUG_PATHFINDING:
                 print(f"[Cavebot] ⏸️ PAUSA: Spear pickup em progresso")
             self.last_action_time = time.time()
+            return
+
+        # === AFK HUMANIZATION ===
+        # Pausas aleatórias para simular comportamento humano (banheiro, celular, etc.)
+        if self._check_afk_pause():
             return
 
         # Controle de Cooldown - Verifica se já pode dar o próximo passo
@@ -1579,6 +1596,149 @@ class Cavebot:
             # Posição mudou (mesmo que is_moving=False agora) - não está stuck
             self.stuck_counter = 0
             self.last_known_pos = current_pos
+
+    # =========================================================================
+    # AFK HUMANIZATION: Pausas Aleatórias
+    # =========================================================================
+
+    def _check_afk_pause(self) -> bool:
+        """
+        Verifica e gerencia pausas AFK aleatórias para humanização.
+        Usa state.is_afk_paused para pausar TODOS os módulos globalmente.
+
+        Returns:
+            bool: True se deve pular o ciclo (em pausa), False para continuar
+        """
+        now = time.time()
+        afk_settings = self._afk_settings_callback()
+
+        # Feature desabilitada
+        if not afk_settings.get('enabled', False):
+            # Se estava em pausa quando desabilitou, cancela
+            if state.is_afk_paused:
+                state.set_afk_pause(False)
+                print("[Cavebot] AFK pause cancelado (feature desabilitada)")
+            return False
+
+        # === ATUALMENTE EM PAUSA AFK (via state global) ===
+        if state.is_afk_paused:
+            # Ainda em pausa - atualiza status com tempo restante
+            remaining = state.get_afk_pause_remaining()
+            self.current_state = self.STATE_PAUSED
+            self.state_message = f"😴 AFK ({remaining:.0f}s)"
+            return True
+
+        # Pausa pode ter terminado automaticamente (is_afk_paused verifica timeout)
+        # Se terminou, agenda próxima
+        if self._afk_pause_active and not state.is_afk_paused:
+            self._afk_pause_active = False
+            self._schedule_next_afk_pause(afk_settings)
+            print(f"[Cavebot] 😴 AFK pause finalizado. Retomando navegação.")
+            return False
+
+        # === VERIFICAR SE DEVE INICIAR NOVA PAUSA ===
+        # Primeira execução - agenda primeira pausa
+        if self._afk_next_pause_time == 0:
+            self._schedule_next_afk_pause(afk_settings)
+            return False
+
+        # Ainda não é hora de pausar
+        if now < self._afk_next_pause_time:
+            return False
+
+        # Hora de pausar - verificar condições de segurança
+        if not self._is_safe_for_afk_pause():
+            # Adia por 30-60 segundos
+            self._afk_next_pause_time = now + random.uniform(30, 60)
+            if DEBUG_PATHFINDING:
+                print("[Cavebot] AFK pause adiado (condições não seguras)")
+            return False
+
+        # Iniciar pausa AFK (via state global - pausa TODOS os módulos)
+        duration = self._get_afk_duration(afk_settings)
+        self._afk_pause_active = True
+        state.set_afk_pause(True, duration)
+
+        self.current_state = self.STATE_PAUSED
+        self.state_message = f"😴 AFK ({duration:.0f}s)"
+        print(f"[Cavebot] 😴 Iniciando AFK pause por {duration:.0f}s (humanização)")
+
+        return True
+
+    def _schedule_next_afk_pause(self, afk_settings):
+        """Agenda o timestamp da próxima pausa AFK."""
+        interval_min = afk_settings.get('interval', 10)  # minutos
+        interval_seconds = interval_min * 60
+
+        # Variação gaussiana: intervalo/2 a intervalo (nunca mais que o máximo)
+        min_interval = interval_seconds * 0.5
+        max_interval = interval_seconds
+
+        # Distribuição gaussiana centrada em 75% do intervalo
+        mean = (min_interval + max_interval) / 2
+        std = (max_interval - min_interval) / 4
+        next_interval = random.gauss(mean, std)
+        next_interval = max(min_interval, min(max_interval, next_interval))
+
+        self._afk_next_pause_time = time.time() + next_interval
+
+        if DEBUG_PATHFINDING:
+            print(f"[Cavebot] Próximo AFK pause em {next_interval/60:.1f} minutos")
+
+    def _is_safe_for_afk_pause(self) -> bool:
+        """Verifica se é seguro iniciar uma pausa AFK."""
+        # Não pausar se em combate
+        if state.is_in_combat:
+            return False
+
+        # Não pausar se tem loot aberto ou processando
+        if state.has_open_loot or state.is_processing_loot:
+            return False
+
+        # Não pausar se GM detectado
+        if state.is_gm_detected:
+            return False
+
+        # Não pausar se chat ativo
+        if state.is_chat_paused:
+            return False
+
+        # Verificar se há criaturas próximas (8 SQM)
+        try:
+            px, py, pz = get_player_pos(self.pm, self.base_addr)
+            player_id = self.pm.read_int(self.base_addr + OFFSET_PLAYER_ID)
+
+            scanner = BattleListScanner(self.pm, self.base_addr)
+            creatures = scanner.get_creatures_in_range((px, py, pz), 8, same_floor_only=True)
+
+            # Filtra o próprio player
+            creatures = [c for c in creatures if c.id != player_id]
+
+            if creatures:
+                if DEBUG_PATHFINDING:
+                    names = [c.name for c in creatures[:3]]
+                    print(f"[Cavebot] AFK adiado - criaturas próximas: {names}")
+                return False
+        except Exception as e:
+            if DEBUG_PATHFINDING:
+                print(f"[Cavebot] Erro ao verificar criaturas: {e}")
+            return False
+
+        return True
+
+    def _get_afk_duration(self, afk_settings) -> float:
+        """Calcula duração da pausa AFK com variação gaussiana."""
+        max_duration = afk_settings.get('duration', 30)  # segundos
+
+        # Variação: 30% a 100% do máximo
+        min_duration = max(5, max_duration * 0.3)  # Mínimo absoluto de 5s
+
+        # Distribuição gaussiana
+        mean = (min_duration + max_duration) / 2
+        std = (max_duration - min_duration) / 4
+        duration = random.gauss(mean, std)
+
+        return max(min_duration, min(max_duration, duration))
 
     # =========================================================================
     # HUMANIZAÇÃO: Detecção de Falta de Progresso

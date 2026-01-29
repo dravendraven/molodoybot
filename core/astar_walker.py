@@ -1,5 +1,6 @@
 # core/astar_walker.py
 import heapq
+import random
 
 class Node:
     def __init__(self, x, y, parent=None, g=0, h=0):
@@ -82,7 +83,10 @@ class AStarWalker:
 
                 # Calcula custo baseado no tempo real de travessia
                 is_diagonal = (dx != 0 and dy != 0)
-                move_cost = ground_speed * 3 if is_diagonal else ground_speed
+                base_move_cost = ground_speed * 3 if is_diagonal else ground_speed
+                # Human variance ±10% to break determinism
+                human_variance = random.uniform(0.9, 1.1)
+                move_cost = base_move_cost * human_variance
 
                 # Se for o destino final, ignoramos o custo extra de "Special Tile" (Ex: Escada)
                 is_target = (nx == target_rel_x and ny == target_rel_y)
@@ -264,7 +268,10 @@ class AStarWalker:
 
                 # Custo baseado no tempo real de travessia
                 is_diagonal = (dx != 0 and dy != 0)
-                move_cost = ground_speed * 3 if is_diagonal else ground_speed
+                base_move_cost = ground_speed * 3 if is_diagonal else ground_speed
+                # Human variance ±10% to break determinism
+                human_variance = random.uniform(0.9, 1.1)
+                move_cost = base_move_cost * human_variance
                 new_g = current_node.g + move_cost
 
                 if (nx, ny) not in visited or new_g < visited[(nx, ny)].g:
