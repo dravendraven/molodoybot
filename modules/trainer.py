@@ -833,12 +833,9 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                 if debug_mode:
                     print(f"   [LINHA {current_line}] -> {name} (ID: {c_id})")
 
-                # Verifica se é alvo desejado (bypass se atacando)
+                # Verifica se é alvo desejado (lista de targets é absoluta)
                 if not any(t in name for t in targets_list):
-                    if not is_attacking_me:
-                        continue
-                    elif debug_mode:
-                        print(f"   ⚠️ {name} não está na lista mas está atacando - permitido")
+                    continue
 
                 # Verifica range e HP
                 if not (is_in_range and hp > 0):

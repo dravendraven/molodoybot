@@ -67,3 +67,4 @@ profession.py
 gui/mockup_ui.py
 gui/mockup_flet.py
 gui/mockup_dearpygui.py
+.claude/settings.local.json

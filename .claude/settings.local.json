@@ -10,7 +10,8 @@
       "Bash(python -m py_compile:*)",
       "Bash(cd:*)",
       "Bash(python:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(dir:*)"
     ]
   }
 }

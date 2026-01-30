@@ -277,6 +277,13 @@ class Creature:
         """
         import time
 
+        # Criatura morta ou invisível: limpa cache para evitar falso positivo
+        # quando o slot da battlelist é reusado por outra criatura
+        if self.hp_percent <= 0 or not self.is_visible:
+            if self.id in _blacksquare_cache:
+                del _blacksquare_cache[self.id]
+            return False
+
         if self.blacksquare == 0:
             # Limpa cache se blacksquare zerou
             if self.id in _blacksquare_cache:
@@ -382,10 +389,27 @@ class Player:
     mana: int
     mana_max: int
     mana_percent: float
-    cap: float  # Carrying capacity
+    cap: float  # Carrying capacity (oz)
     speed: int  # Movement speed
     is_moving: bool
     is_full: bool  # Inventory full
+    # Stats / Progressão
+    level: int = 0
+    experience: int = 0
+    magic_level: int = 0
+    magic_level_pct: int = 0  # % progresso para próximo magic level
+    # Skills
+    sword_skill: int = 0
+    sword_skill_pct: int = 0
+    shield_skill: int = 0
+    shield_skill_pct: int = 0
+    # Equipamento (IDs dos itens)
+    right_hand_id: int = 0
+    left_hand_id: int = 0
+    ammo_id: int = 0
+    # Movimento / Combate
+    facing_direction: int = 0  # 0=N, 1=E, 2=S, 3=W
+    target_id: int = 0  # ID da criatura sendo atacada (0 = nenhuma)
 
     @property
     def is_alive(self) -> bool:

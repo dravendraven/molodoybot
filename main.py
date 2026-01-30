@@ -1207,24 +1207,30 @@ def start_trainer_thread():
     config_provider = lambda: {
         # Lê o estado do botão (Switch) em tempo real
         'enabled': switch_trainer.get(),
-        
+
         # Lê a variável de segurança controlada pelo Alarme
         'is_safe': state.is_safe(),
-        
+
         # Lê as configurações salvas/editadas no menu
         'targets': BOT_SETTINGS['targets'],
         'ignore_first': BOT_SETTINGS['ignore_first'],
         'debug_mode': BOT_SETTINGS['debug_mode'],
-        
+        'debug_mode_decisions_only': BOT_SETTINGS.get('debug_mode_decisions_only', False),
+
         # Lê o botão de loot para saber se deve abrir corpos
         'loot_enabled': switch_loot.get(),
-        
+
         # Passa a função de log da interface
         'log_callback': log,
 
         'min_delay': BOT_SETTINGS.get('trainer_min_delay', 1.0),
         'max_delay': BOT_SETTINGS.get('trainer_max_delay', 2.0),
-        'range': BOT_SETTINGS.get('trainer_range', 1)
+        'range': BOT_SETTINGS.get('trainer_range', 1),
+
+        # Anti Kill-Steal e Spear Picker (antes faltavam - usavam default fixo)
+        'ks_prevention_enabled': BOT_SETTINGS.get('ks_prevention_enabled', True),
+        'spear_picker_enabled': BOT_SETTINGS.get('spear_picker_enabled', False),
+        'follow_before_attack_enabled': BOT_SETTINGS.get('follow_before_attack_enabled', False),
     }
 
     # Função para checar se o bot ainda deve rodar (stop kill)

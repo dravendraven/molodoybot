@@ -33,11 +33,20 @@ from core.map_core import get_player_pos
 from core.player_core import (
     get_player_id, get_target_id,
     is_player_moving, get_player_speed,
-    get_connected_char_name
+    get_connected_char_name, get_player_facing_direction
 )
 from modules.auto_loot import scan_containers, is_player_full
 from core.inventory_core import get_item_id_in_hand
-from config import OFFSET_PLAYER_HP, OFFSET_PLAYER_HP_MAX, OFFSET_PLAYER_MANA, OFFSET_PLAYER_MANA_MAX, OFFSET_PLAYER_CAP
+from config import (
+    OFFSET_PLAYER_HP, OFFSET_PLAYER_HP_MAX,
+    OFFSET_PLAYER_MANA, OFFSET_PLAYER_MANA_MAX,
+    OFFSET_PLAYER_CAP,
+    OFFSET_LEVEL, OFFSET_EXP, OFFSET_MAGIC_LEVEL, OFFSET_MAGIC_PCT,
+    OFFSET_SKILL_SWORD, OFFSET_SKILL_SWORD_PCT,
+    OFFSET_SKILL_SHIELD, OFFSET_SKILL_SHIELD_PCT,
+    OFFSET_SLOT_RIGHT, OFFSET_SLOT_LEFT, OFFSET_SLOT_AMMO,
+    TARGET_ID_PTR,
+)
 
 # Import bot control state (GM detection, alarm)
 from core.bot_state import state as legacy_state
@@ -229,6 +238,23 @@ class GameState:
             mana_max = self.pm.read_int(self.base_addr + OFFSET_PLAYER_MANA_MAX)
             cap = self.pm.read_float(self.base_addr + OFFSET_PLAYER_CAP)
 
+            # Stats / Progressão
+            level = self.pm.read_int(self.base_addr + OFFSET_LEVEL)
+            experience = self.pm.read_int(self.base_addr + OFFSET_EXP)
+            magic_level = self.pm.read_int(self.base_addr + OFFSET_MAGIC_LEVEL)
+            magic_level_pct = self.pm.read_int(self.base_addr + OFFSET_MAGIC_PCT)
+
+            # Skills
+            sword_skill = self.pm.read_int(self.base_addr + OFFSET_SKILL_SWORD)
+            sword_skill_pct = self.pm.read_int(self.base_addr + OFFSET_SKILL_SWORD_PCT)
+            shield_skill = self.pm.read_int(self.base_addr + OFFSET_SKILL_SHIELD)
+            shield_skill_pct = self.pm.read_int(self.base_addr + OFFSET_SKILL_SHIELD_PCT)
+
+            # Equipment
+            right_hand_equip = self.pm.read_int(self.base_addr + OFFSET_SLOT_RIGHT)
+            left_hand_equip = self.pm.read_int(self.base_addr + OFFSET_SLOT_LEFT)
+            ammo_equip = self.pm.read_int(self.base_addr + OFFSET_SLOT_AMMO)
+
             # Calculate percentages
             hp_percent = (hp / hp_max * 100) if hp_max > 0 else 0
             mana_percent = (mana / mana_max * 100) if mana_max > 0 else 0
@@ -239,6 +265,7 @@ class GameState:
 
             # Target
             target_id = get_target_id(self.pm, self.base_addr)
+            facing_direction = get_player_facing_direction(self.pm, self.base_addr)
 
             # Character name
             char_name = get_connected_char_name(self.pm, self.base_addr)
@@ -292,7 +319,7 @@ class GameState:
                 self._player = Player(
                     char_id=player_id,
                     char_name=char_name,
-                    position=position,  # Position object, not tuple
+                    position=position,
                     hp=hp,
                     hp_max=hp_max,
                     hp_percent=hp_percent,
@@ -302,7 +329,20 @@ class GameState:
                     cap=cap,
                     speed=speed,
                     is_moving=is_moving,
-                    is_full=is_full
+                    is_full=is_full,
+                    level=level,
+                    experience=experience,
+                    magic_level=magic_level,
+                    magic_level_pct=magic_level_pct,
+                    sword_skill=sword_skill,
+                    sword_skill_pct=sword_skill_pct,
+                    shield_skill=shield_skill,
+                    shield_skill_pct=shield_skill_pct,
+                    right_hand_id=right_hand_equip,
+                    left_hand_id=left_hand_equip,
+                    ammo_id=ammo_equip,
+                    facing_direction=facing_direction,
+                    target_id=target_id,
                 )
 
                 # Target
@@ -378,21 +418,8 @@ class GameState:
         """Get full player state snapshot (copy)."""
         with self._lock:
             # Return a copy to avoid mutation
-            return Player(
-                char_id=self._player.char_id,
-                char_name=self._player.char_name,
-                position=self._player.position,  # Position object
-                hp=self._player.hp,
-                hp_max=self._player.hp_max,
-                hp_percent=self._player.hp_percent,
-                mana=self._player.mana,
-                mana_max=self._player.mana_max,
-                mana_percent=self._player.mana_percent,
-                cap=self._player.cap,
-                speed=self._player.speed,
-                is_moving=self._player.is_moving,
-                is_full=self._player.is_full
-            )
+            import dataclasses
+            return dataclasses.replace(self._player)
 
     def get_player_position(self) -> Position:
         """Get player position as Position object."""
