@@ -244,7 +244,8 @@ class RealtimeMinimapVisualizer:
                         px = center_px + dx
                         py = center_py + dy
                         if 0 <= px < img.width and 0 <= py < img.height:
-                            pixels[px, py] = (50, 150, 255)  # Blue
+                            color = (128, 0, 255) if wp.get('in_cooldown') else (50, 150, 255)
+                            pixels[px, py] = color
 
     def _draw_floor_transitions(self, img, all_waypoints, current_z, bbox, pixels_per_tile):
         """

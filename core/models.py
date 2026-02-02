@@ -146,6 +146,11 @@ class Creature:
     blacksquare: int = 0    # Shown when creature attacks player (8 bytes)
 
     @property
+    def is_npc(self) -> bool:
+        """NPCs have bit 31 set in their creature ID (0x80000000+)."""
+        return (self.id & 0x80000000) != 0
+
+    @property
     def is_valid(self) -> bool:
         """Valida se a criatura é válida."""
         if self.hp_percent < 0 or self.hp_percent > 100:
@@ -160,7 +165,8 @@ class Creature:
     def is_player(self) -> bool:
         """
         Verifica se é um jogador (não monstro).
-        NOTA: NPCs NÃO aparecem no battlelist, apenas players e monstros.
+        NOTA: NPCs aparecem no battlelist com bit 31 do ID setado (0x80000000+).
+        São filtrados via is_npc antes desta verificação.
 
         DETECÇÃO TRIPLA:
         1. Verifica se tem cores de outfit (head + body + legs + feet > 0)
@@ -171,6 +177,10 @@ class Creature:
         Também detecta players mesmo quando cores de outfit não são lidas corretamente.
         """
         if not self.name:
+            return False
+
+        # NPCs não são players
+        if self.is_npc:
             return False
 
         # Players têm cores no outfit
@@ -209,8 +219,8 @@ class Creature:
 
     @property
     def is_monster(self) -> bool:
-        """Verifica se é um monstro (não player)."""
-        return not self.is_player
+        """Verifica se é um monstro (não player, não NPC)."""
+        return not self.is_player and not self.is_npc
 
     @property
     def is_dead(self) -> bool:

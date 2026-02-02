@@ -41,6 +41,7 @@ class SettingsCallbacks:
     on_light_toggle: Callable[[bool], None]
     on_lookid_toggle: Callable[[bool], None]
     on_spear_picker_toggle: Callable[[bool], None]
+    on_auto_torch_toggle: Callable[[bool], None]
     on_ai_chat_toggle: Callable[[bool], None]
     on_console_log_toggle: Callable[[bool], None]
     update_stats_visibility: Callable[[], None]
@@ -53,6 +54,7 @@ class SettingsCallbacks:
     set_rune_pos: Callable[[str], None]  # "WORK" ou "SAFE"
 
     # === TAB CAVEBOT CALLBACKS ===
+    on_auto_explore_toggle: Callable[[bool, int, int], None]  # (enabled, search_radius, revisit_cooldown)
     load_waypoints_file: Callable[[], None]
     save_waypoints_file: Callable[[], None]
     refresh_scripts_combo: Callable[[Optional[str]], List[str]]
@@ -247,7 +249,8 @@ class SettingsWindow:
         """Cria a janela principal e todas as tabs."""
         self.window = ctk.CTkToplevel(self.parent)
         self.window.title("Configurações")
-        self.window.geometry("390x520")
+        self._min_height = 520
+        self.window.geometry(f"390x{self._min_height}")
         self.window.attributes("-topmost", True)
 
         self.window.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -275,11 +278,33 @@ class SettingsWindow:
         self._build_tab_rune(tab_rune)
         self._build_tab_cavebot(tab_cavebot)
 
+        # Auto-resize ao trocar de aba
+        self._tabview = tabview
+        tabview.configure(command=lambda: self._adjust_window_height(tabview))
+        self.window.after(100, lambda: self._adjust_window_height(tabview))
+
     def _on_close(self) -> None:
         """Handler de fechamento da janela."""
         if self.window:
             self.window.destroy()
         self.window = None
+
+    def _adjust_window_height(self, tabview) -> None:
+        """Ajusta a altura da janela para caber o conteúdo da aba ativa, sem diminuir abaixo do mínimo."""
+        if not self.window or not self.window.winfo_exists():
+            return
+        try:
+            tab_name = tabview.get()
+            tab_frame = tabview.tab(tab_name)
+            self.window.update_idletasks()
+            content_h = tab_frame.winfo_reqheight()
+            # Overhead: tab buttons (~40px) + tabview padding (~40px) + window padding (~20px)
+            overhead = 100
+            needed = content_h + overhead
+            new_height = max(self._min_height, needed)
+            self.window.geometry(f"390x{new_height}")
+        except Exception:
+            pass
 
     def _create_grid_frame(self, parent) -> ctk.CTkFrame:
         """Helper para criar frames de grid (Label Esq | Input Dir)."""
@@ -392,6 +417,14 @@ class SettingsWindow:
         entry_spear_max.bind("<FocusOut>", on_spear_max_change)
         entry_spear_max.bind("<Return>", on_spear_max_change)
 
+        # Auto Torch
+        switch_auto_torch = ctk.CTkSwitch(frame_switches, text="Auto Torch",
+                                           command=lambda: self.cb.on_auto_torch_toggle(bool(switch_auto_torch.get())),
+                                           progress_color="#F39C12", **self.UI['BODY'])
+        switch_auto_torch.pack(anchor="w", pady=self.UI['PAD_ITEM'])
+        if settings.get('auto_torch_enabled', False):
+            switch_auto_torch.select()
+
         # AI Chat
         switch_ai_chat = ctk.CTkSwitch(frame_switches, text="Responder via IA",
                                        command=lambda: self.cb.on_ai_chat_toggle(bool(switch_ai_chat.get())),
@@ -418,6 +451,7 @@ class SettingsWindow:
             entry_client_path.configure(state="disabled")
             s['ai_chat_enabled'] = bool(switch_ai_chat.get())
             s['spear_picker_enabled'] = bool(switch_spear_picker.get())
+            s['auto_torch_enabled'] = bool(switch_auto_torch.get())
             try:
                 s['spear_max_count'] = int(entry_spear_max.get())
             except:
@@ -508,8 +542,11 @@ class SettingsWindow:
                 s['trainer_range'] = int(entry_tr_range.get())
                 self.cb.save_config_file()
                 self.cb.log("⚔️ Trainer salvo!")
-            except:
+                # DEBUG: Confirma que o valor foi gravado no dict correto
+                print(f"[DEBUG SAVE] trainer_range={s['trainer_range']} | id(dict)={id(s)}")
+            except Exception as e:
                 self.cb.log("❌ Erro nos valores.")
+                print(f"[DEBUG SAVE] EXCEPTION: {e}")
 
         ctk.CTkButton(tab, text="Salvar Trainer", command=save_trainer,
                      fg_color="#2CC985", height=32).pack(side="bottom", pady=10, fill="x", padx=20)
@@ -598,6 +635,23 @@ class SettingsWindow:
         if settings.get('alarm_chat_enabled', False):
             switch_chat.select()
 
+        # Movimento Inesperado
+        ctk.CTkLabel(tab, text="Movimento Inesperado:", **self.UI['H1']).pack(anchor="w", padx=10, pady=(5, 5))
+
+        switch_movement = ctk.CTkSwitch(tab, text="Alarme de Movimento",
+                                         command=lambda: None,
+                                         progress_color="#FF5555", **self.UI['BODY'])
+        switch_movement.pack(anchor="w", padx=self.UI['PAD_INDENT'], pady=2)
+        if settings.get('alarm_movement_enabled', False):
+            switch_movement.select()
+
+        switch_keep_pos = ctk.CTkSwitch(tab, text="Manter Posição (retornar ao ponto)",
+                                         command=lambda: None,
+                                         progress_color="#FFA500", **self.UI['BODY'])
+        switch_keep_pos.pack(anchor="w", padx=self.UI['PAD_INDENT'], pady=2)
+        if settings.get('alarm_keep_position', False):
+            switch_keep_pos.select()
+
         # Botão Salvar
         def save_alarm():
             try:
@@ -610,6 +664,8 @@ class SettingsWindow:
                 s['alarm_players'] = bool(switch_alarm_players.get())
                 s['alarm_creatures'] = bool(switch_alarm_creatures.get())
                 s['alarm_chat_enabled'] = bool(switch_chat.get())
+                s['alarm_movement_enabled'] = bool(switch_movement.get())
+                s['alarm_keep_position'] = bool(switch_keep_pos.get())
                 self.cb.save_config_file()
                 self.cb.log("🔔 Alarme salvo.")
             except:
@@ -1075,76 +1131,94 @@ class SettingsWindow:
             selectforeground="#ffffff",
             highlightthickness=0,
             borderwidth=0,
-            height=6,
+            height=4,
             yscrollcommand=scrollbar_wp.set
         )
         self.waypoint_listbox.pack(side="left", fill="both", expand=True)
         scrollbar_wp.config(command=self.waypoint_listbox.yview)
 
-        # Seção AFK
+        # Editor Visual button
+        ctk.CTkButton(frame_waypoints, text="🗺️ Editor Visual",
+                     fg_color="#2E8B57", hover_color="#228B45",
+                     command=self.cb.open_waypoint_editor,
+                     **self.UI['BUTTON_SM']).pack(fill="x", padx=10, pady=(0, 8))
+
+        # === AUTO-EXPLORE ===
+        frame_explore = ctk.CTkFrame(frame_cb_root, fg_color="#3a3a3a")
+        frame_explore.pack(fill="x", pady=(0, 8))
+
+        ctk.CTkLabel(frame_explore, text="Auto-Explore", **self.UI['H1']).pack(anchor="w", padx=10, pady=5)
+
+        # Toggle
+        frame_explore_toggle = ctk.CTkFrame(frame_explore, fg_color="transparent")
+        frame_explore_toggle.pack(fill="x", padx=10, pady=(0, 5))
+
+        self._auto_explore_var = ctk.IntVar(value=1 if settings.get('auto_explore_enabled', False) else 0)
+
+        # Raio
+        frame_explore_params = ctk.CTkFrame(frame_explore, fg_color="transparent")
+        frame_explore_params.pack(fill="x", padx=10, pady=(0, 5))
+
+        ctk.CTkLabel(frame_explore_params, text="Raio:", width=40, **self.UI['BODY']).pack(side="left")
+        self._entry_explore_radius = ctk.CTkEntry(frame_explore_params, width=45, **self.UI['BODY'])
+        self._entry_explore_radius.pack(side="left", padx=(0, 10))
+        self._entry_explore_radius.insert(0, str(settings.get('auto_explore_radius', 50)))
+
+        def toggle_auto_explore():
+            enabled = self._auto_explore_var.get() == 1
+            try:
+                radius = int(self._entry_explore_radius.get())
+            except ValueError:
+                radius = 50
+            self.cb.on_auto_explore_toggle(enabled, radius, 600)
+
+        switch_auto_explore = ctk.CTkSwitch(frame_explore_toggle, text="Explorar spawns automaticamente",
+                                            variable=self._auto_explore_var, command=toggle_auto_explore,
+                                            **self.UI['BODY'])
+        switch_auto_explore.pack(side="left")
+
+        # (salvo pelo botão geral "Salvar Cavebot")
+
+        # === AFK HUMANIZATION ===
         frame_afk = ctk.CTkFrame(frame_cb_root, fg_color="#3a3a3a")
         frame_afk.pack(fill="x", pady=(0, 8))
 
+        ctk.CTkLabel(frame_afk, text="AFK Humanization", **self.UI['H1']).pack(anchor="w", padx=10, pady=5)
+
+        # Toggle AFK
         frame_afk_toggle = ctk.CTkFrame(frame_afk, fg_color="transparent")
         frame_afk_toggle.pack(fill="x", padx=10, pady=5)
 
-        switch_afk_pause_var = ctk.IntVar(value=1 if settings.get('afk_pause_enabled', False) else 0)
+        self._afk_pause_var = ctk.IntVar(value=1 if settings.get('afk_pause_enabled', False) else 0)
 
         def toggle_afk_pause():
             s = self.cb.get_bot_settings()
-            s['afk_pause_enabled'] = (switch_afk_pause_var.get() == 1)
+            s['afk_pause_enabled'] = (self._afk_pause_var.get() == 1)
             self.cb.save_config_file()
 
-        switch_afk_pause = ctk.CTkSwitch(frame_afk_toggle, text="Pausas AFK aleatórias",
-                                         variable=switch_afk_pause_var, command=toggle_afk_pause,
-                                         **self.UI['BODY'])
-        switch_afk_pause.pack(side="left")
+        ctk.CTkSwitch(frame_afk_toggle, text="Pausas AFK aleatórias",
+                       variable=self._afk_pause_var, command=toggle_afk_pause,
+                       **self.UI['BODY']).pack(side="left")
 
-        # Campos AFK
-        frame_afk_fields = ctk.CTkFrame(frame_afk, fg_color="transparent")
-        frame_afk_fields.pack(fill="x", padx=10, pady=(0, 5))
-
-        ctk.CTkLabel(frame_afk_fields, text="Duração (s):", width=70, **self.UI['BODY']).pack(side="left")
-        entry_afk_duration = ctk.CTkEntry(frame_afk_fields, width=50, **self.UI['BODY'])
-        entry_afk_duration.pack(side="left", padx=(0, 10))
-        entry_afk_duration.insert(0, str(settings.get('afk_pause_duration', 30)))
-
-        def save_afk_duration(event=None):
+        # === BOTÃO SALVAR CAVEBOT (salva tudo) ===
+        def save_cavebot():
             try:
-                val = max(5, int(entry_afk_duration.get()))
-                self.cb.get_bot_settings()['afk_pause_duration'] = val
-                entry_afk_duration.delete(0, "end")
-                entry_afk_duration.insert(0, str(val))
+                s = self.cb.get_bot_settings()
+                # Auto-Explore
+                s['auto_explore_enabled'] = self._auto_explore_var.get() == 1
+                s['auto_explore_radius'] = max(10, int(self._entry_explore_radius.get()))
+                s['auto_explore_cooldown'] = 600
+                # AFK Humanization
+                s['afk_pause_enabled'] = self._afk_pause_var.get() == 1
+                s['afk_pause_duration'] = 30
+                s['afk_pause_interval'] = 5
                 self.cb.save_config_file()
-            except ValueError:
-                pass
+                self.cb.log("🤖 Cavebot salvo!")
+            except Exception:
+                self.cb.log("❌ Erro ao salvar Cavebot.")
 
-        entry_afk_duration.bind("<FocusOut>", save_afk_duration)
-        entry_afk_duration.bind("<Return>", save_afk_duration)
-
-        ctk.CTkLabel(frame_afk_fields, text="Intervalo (min):", width=85, **self.UI['BODY']).pack(side="left")
-        entry_afk_interval = ctk.CTkEntry(frame_afk_fields, width=50, **self.UI['BODY'])
-        entry_afk_interval.pack(side="left")
-        entry_afk_interval.insert(0, str(settings.get('afk_pause_interval', 10)))
-
-        def save_afk_interval(event=None):
-            try:
-                val = max(5, int(entry_afk_interval.get()))
-                self.cb.get_bot_settings()['afk_pause_interval'] = val
-                entry_afk_interval.delete(0, "end")
-                entry_afk_interval.insert(0, str(val))
-                self.cb.save_config_file()
-            except ValueError:
-                pass
-
-        entry_afk_interval.bind("<FocusOut>", save_afk_interval)
-        entry_afk_interval.bind("<Return>", save_afk_interval)
-
-        # Botão Editor
-        ctk.CTkButton(frame_cb_root, text="🗺️ Editor Visual",
-                     fg_color="#2E8B57", hover_color="#228B45",
-                     command=self.cb.open_waypoint_editor,
-                     **self.UI['BUTTON_SM']).pack(fill="x", pady=5)
+        ctk.CTkButton(frame_cb_root, text="Salvar Cavebot", command=save_cavebot,
+                      fg_color="#2CC985", height=32).pack(fill="x", pady=(0, 5))
 
         # Inicializa lista visual
         self.update_waypoint_display_ui(self.cb.get_current_waypoints())

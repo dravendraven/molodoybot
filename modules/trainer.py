@@ -167,6 +167,9 @@ def parse_creature_from_bytes(raw_bytes):
         outfit_legs = struct.unpack_from('<I', raw_bytes, OFFSET_OUTFIT_LEGS)[0]
         outfit_feet = struct.unpack_from('<I', raw_bytes, OFFSET_OUTFIT_FEET)[0]
 
+        # NPCs have bit 31 set in their creature ID (0x80000000+)
+        is_npc = (c_id & 0x80000000) != 0
+
         has_colors = (outfit_head + outfit_body + outfit_legs + outfit_feet) > 0
 
         # Dupla validação: outfit + nome devem bater para ser criatura humanoid
@@ -174,8 +177,8 @@ def parse_creature_from_bytes(raw_bytes):
         # E também detecta players disfarçados com outfit de criatura
         is_known_humanoid = is_humanoid_creature(name, outfit_type, outfit_head, outfit_body, outfit_legs, outfit_feet)
 
-        # Player = tem cores E NÃO é criatura humanoid conhecida
-        is_player = has_colors and not is_known_humanoid
+        # Player = tem cores E NÃO é criatura humanoid conhecida E NÃO é NPC
+        is_player = has_colors and not is_known_humanoid and not is_npc
 
         return {
             'id': c_id,
@@ -185,7 +188,8 @@ def parse_creature_from_bytes(raw_bytes):
             'z': z,
             'hp': hp,
             'visible': visible,
-            'is_player': is_player
+            'is_player': is_player,
+            'is_npc': is_npc
         }
     except:
         return None
@@ -573,6 +577,11 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
     is_currently_following = False
     follow_target_id = 0
 
+    # Floor Change KS Guard
+    last_z = 0
+    floor_change_time = 0.0
+    FLOOR_CHANGE_KS_GUARD = 1.5  # seconds - guard period for KS check after floor change
+
     # Será inicializado dentro do loop com debug_mode
     mapper = None
     analyzer = None
@@ -693,10 +702,16 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
             target_addr = base_addr + TARGET_ID_PTR
             my_x, my_y, my_z = get_player_pos(pm, base_addr)
             
-            if my_z == 0: 
+            if my_z == 0:
                 time.sleep(0.2)
                 continue
-            
+
+            # Detecta mudança de andar para guard do KS
+            if last_z != 0 and my_z != last_z:
+                floor_change_time = time.time()
+                log_decision(f"⚠️ Floor change ({last_z} → {my_z}) - KS guard {FLOOR_CHANGE_KS_GUARD}s")
+            last_z = my_z
+
             mapper.read_full_map(player_id)
 
             # Lê target ID ANTES do scan para uso correto no KS check
@@ -1398,6 +1413,19 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                         final_candidates = [valid_candidates[1]]
                     else:
                         final_candidates = []
+
+                # ===== FLOOR CHANGE KS GUARD =====
+                # Após mudar de andar, battlelist pode estar incompleta (players não popularam)
+                # Só permite alvos adjacentes atacando até battlelist estabilizar
+                if ks_enabled:
+                    floor_change_elapsed = time.time() - floor_change_time
+                    if floor_change_elapsed < FLOOR_CHANGE_KS_GUARD and len(all_visible_entities) == 0:
+                        final_candidates = [
+                            c for c in final_candidates
+                            if c.get("is_attacking_me", False) and max(abs(c["dist_x"]), abs(c["dist_y"])) <= 1
+                        ]
+                        if not final_candidates:
+                            log_decision(f"⏸️ Floor change KS guard: no visible players yet ({floor_change_elapsed:.1f}s)")
 
                 # ===== PAUSA DURANTE LOOT/SPEAR PICKUP =====
                 # Não ataca novos alvos durante ciclo de loot ou spear pickup

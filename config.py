@@ -14,9 +14,9 @@ DEBUG_BOT_STATE_INTERVAL = 0.1              # Intervalo de atualização (segund
 DEBUG_BOT_STATE_AUTO_DISABLE_ON_ALARM = False # Desabilitar HUD automaticamente com alarme
 
 # Pathfinding & Navigation
-DEBUG_PATHFINDING = False  # Ativa logs detalhados do A* quando não encontra caminho
+DEBUG_PATHFINDING = True  # Ativa logs detalhados do A* quando não encontra caminho
 DEBUG_MEMORY_MAP = False  # Caro de performance, ativar apenas quando necessário
-DEBUG_GLOBAL_MAP = False  # Ativa logs quando GlobalMap tenta encontrar rotas
+DEBUG_GLOBAL_MAP = True  # Ativa logs quando GlobalMap tenta encontrar rotas
 
 # Obstacle & Stack Clearing
 DEBUG_OBSTACLE_CLEARING = False   # Ativa logs detalhados do obstacle clearing
@@ -24,10 +24,10 @@ DEBUG_STACK_CLEARING = False      # Ativa logs detalhados do stack clearing
 
 # Advancement & Chat
 DEBUG_ADVANCEMENT = False             # Logs detalhados de detecção de progresso
-DEBUG_CHAT_HANDLER = True           # Logs detalhados do sistema de chat
+DEBUG_CHAT_HANDLER = False           # Logs detalhados do sistema de chat
 
 # Trainer
-TRAINER_DEBUG_DECISIONS_ONLY = False  # Loga apenas decisões: atacar, retarget, morte, etc.
+TRAINER_DEBUG_DECISIONS_ONLY = True  # Loga apenas decisões: atacar, retarget, morte, etc.
 
 # ==============================================================================
 # 1. GERAIS E CONEXÃO
@@ -476,7 +476,7 @@ BLACKSQUARE_THRESHOLD_MS = 5000       # Considerar criatura atacando se atacou h
 # ==============================================================================
 ### GLOBAL MAP
 
-WALKABLE_COLORS = [24, 129, 121, 210] # Grama, Chão Padrão cinza, Chão de Dirt/Caverna, #Amarelo: escada, buraco, etc
+WALKABLE_COLORS = [24, 129, 121, 210, 179, 207] # Grama, Chão Padrão cinza, Chão de Dirt/Caverna, Amarelo: escada/buraco, Neve/Gelo, Deserto/Areia
 MAPS_DIRECTORY = r"c:\Users\vitor\Downloads\amera-client-latest"
 
 # ==============================================================================
@@ -539,3 +539,23 @@ CHAT_PAUSE_DURATION = 10.0          # Segundos de pausa após última mensagem
 # Modo de combate: seguir criatura até dist<=1, depois atacar
 # Independente do spear_picker - útil para testes e combate melee
 FOLLOW_THEN_ATTACK = True  # True = segue antes de atacar
+
+# ==============================================================================
+# AUTO-EXPLORE CONFIG (CAVEBOT)
+# ==============================================================================
+# Modo de exploração automática sem waypoints, usando spawn points do world-spawn.xml
+AUTO_EXPLORE_SPAWN_RADIUS = 5         # Raio da "área" de cada spawn (tiles)
+AUTO_EXPLORE_SEARCH_RADIUS = 100       # Raio máximo de busca de spawns (Manhattan tiles)
+AUTO_EXPLORE_REVISIT_COOLDOWN = 300   # Segundos antes de revisitar um spawn
+AUTO_EXPLORE_ARRIVAL_DIST = 4         # Distância para considerar "chegou" no spawn
+AUTO_EXPLORE_MAX_FLOORS = 2           # Máx andares de diferença para considerar spawns
+DEBUG_AUTO_EXPLORE = True
+USE_MULTIFLOOR_PATHFINDING = True     # Usa get_path_multilevel (A* 3D cross-floor)
+
+# ==============================================================================
+# AUTO TORCH CONFIG
+# ==============================================================================
+TORCH_UNLIT_IDS = [2920, 2922, 2924]   # Tochas apagadas (diferentes estágios)
+TORCH_LIT_IDS = [2921, 2923, 2925]     # Tochas acesas (diferentes estágios)
+TORCH_BURNT_ID = 2926                   # Tocha queimada (sem combustível)
+TORCH_ALL_IDS = TORCH_UNLIT_IDS + TORCH_LIT_IDS + [TORCH_BURNT_ID]

@@ -9,6 +9,7 @@ SEM CACHE - dados em tempo real são críticos para:
 - Visibilidade (para detectar spawn/despawn)
 """
 import struct
+import time
 from typing import List, Optional, Callable
 from config import (
     BATTLELIST_BEGIN_ADDRESS, TARGET_ID_PTR, REL_FIRST_ID,
@@ -147,7 +148,7 @@ class BattleListScanner:
             include_dead: Se True, inclui monstros mortos (default: False)
             player_z: Se fornecido, filtra apenas criaturas no mesmo andar
 
-        NOTA: NPCs NÃO aparecem no battlelist.
+        NOTA: NPCs aparecem no battlelist com bit 31 do ID setado (filtrados via is_npc).
         """
         def is_valid_monster(c: Creature) -> bool:
             if c.is_player:
@@ -222,3 +223,103 @@ class BattleListScanner:
             return c.is_in_range(player_pos, attack_range)
 
         return self.scan_all(filter_fn=in_range_filter)
+
+
+class SpawnTracker:
+    """
+    Detecta criaturas que aparecem suspeitamente perto do player.
+
+    GMs testam bots sumonando criaturas próximas. Uma criatura normal:
+    - Aparece primeiro a distância maior (caminhando em direção ao player)
+    - Ou aparece primeiro em outro andar (subindo/descendo)
+
+    Spawn suspeito = criatura nova que aparece já perto, sem histórico prévio.
+    """
+
+    def __init__(self, suspicious_range=5, floor_change_cooldown=3.0, cleanup_age=30.0):
+        self.known_creatures = {}  # {creature_id: timestamp_first_seen}
+        self.last_player_z = None
+        self.last_floor_change_time = 0.0
+        self.suspicious_range = suspicious_range
+        self.floor_change_cooldown = floor_change_cooldown
+        self.cleanup_age = cleanup_age
+        self._warmed_up = False  # Primeiro ciclo apenas registra
+
+    def update(self, creatures: List[Creature], player_x: int, player_y: int, player_z: int, self_id: int = 0) -> List[Creature]:
+        """
+        Atualiza tracker com scan atual e retorna criaturas com spawn suspeito.
+
+        Args:
+            creatures: Lista completa do scan_all()
+            player_x, player_y, player_z: Posição atual do player
+            self_id: ID do próprio personagem (para excluir do tracking)
+
+        Returns:
+            Lista de Creature que apareceram suspeitamente perto
+        """
+        now = time.time()
+        suspicious = []
+
+        # Detecta mudança de andar do player
+        if self.last_player_z is not None and player_z != self.last_player_z:
+            self.last_floor_change_time = now
+        self.last_player_z = player_z
+
+        recently_changed_floor = (now - self.last_floor_change_time) < self.floor_change_cooldown
+
+        # IDs presentes neste scan (para cleanup)
+        current_ids = set()
+
+        for creature in creatures:
+            current_ids.add(creature.id)
+
+            # Ignora o próprio personagem
+            if creature.id == self_id:
+                continue
+
+            # Ignora players e NPCs (apenas monstros são relevantes)
+            if creature.is_player:
+                continue
+
+            # Criatura já conhecida - não é suspeita
+            if creature.id in self.known_creatures:
+                continue
+
+            # Criatura nova - registra
+            self.known_creatures[creature.id] = now
+
+            # Primeiro ciclo: apenas registra sem avaliar (warmup)
+            if not self._warmed_up:
+                continue
+
+            # Não avalia se mudou de andar recentemente (tudo é novo)
+            if recently_changed_floor:
+                continue
+
+            # Não avalia se criatura está em outro andar
+            if creature.position.z != player_z:
+                continue
+
+            # Não avalia se não está visível
+            if not creature.is_visible:
+                continue
+
+            # Calcula distância Chebyshev
+            dist = max(abs(player_x - creature.position.x), abs(player_y - creature.position.y))
+
+            # Spawn suspeito: apareceu perto sem histórico prévio
+            if dist < self.suspicious_range:
+                suspicious.append(creature)
+
+        if not self._warmed_up:
+            self._warmed_up = True
+
+        # Cleanup: remove criaturas que não aparecem há muito tempo
+        stale_ids = [
+            cid for cid, ts in self.known_creatures.items()
+            if cid not in current_ids and (now - ts) > self.cleanup_age
+        ]
+        for cid in stale_ids:
+            del self.known_creatures[cid]
+
+        return suspicious

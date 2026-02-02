@@ -1,7 +1,13 @@
 # modules/cavebot.py
+import os
 import random
 import time
 import math
+from datetime import datetime
+
+def _ts():
+    """Timestamp para logs: HH:MM:SS"""
+    return datetime.now().strftime("%H:%M:%S")
 import threading
 
 from utils.timing import gauss_wait
@@ -18,15 +24,18 @@ from core.map_analyzer import MapAnalyzer
 from core.astar_walker import AStarWalker
 from core.memory_map import MemoryMap
 from core.inventory_core import find_item_in_containers, find_item_in_equipment # Necessário para achar a corda
-from database.tiles_config import ROPE_ITEM_ID, SHOVEL_ITEM_ID, get_ground_speed
+from database.tiles_config import ROPE_ITEM_ID, SHOVEL_ITEM_ID, get_ground_speed, GROUND_SPEEDS
 from core.bot_state import state
 from core.global_map import GlobalMap
 from core.player_core import get_player_speed, is_player_moving, wait_until_stopped
 from core.advancement_tracker import AdvancementTracker
 from core.battlelist import BattleListScanner
+from core.spawn_parser import parse_spawns, SpawnArea
+from core.spawn_selector import SpawnSelector
+from core.floor_connector import FloorConnector
 
 
-COOLDOWN_AFTER_COMBAT = random.uniform(2.5, 5)  # 1s a 1.5s de cooldown após combate
+COOLDOWN_AFTER_COMBAT = random.uniform(2.5, 5)
 GLOBAL_RECALC_LIMIT = 5
 
 # Mapeamento de Delta (dx, dy) para Opcode do Packet
@@ -75,8 +84,11 @@ class Cavebot:
         # [NAVEGAÇÃO HIBRIDA] Inicializa o "GPS" (Global)
         # Usa maps_directory passado como parâmetro, ou fallback para config.py
         effective_maps_dir = maps_directory if maps_directory else MAPS_DIRECTORY
-        self.global_map = GlobalMap(effective_maps_dir, WALKABLE_COLORS)
+        transitions_path = os.path.join(effective_maps_dir, "floor_transitions.json")
+        self.global_map = GlobalMap(effective_maps_dir, WALKABLE_COLORS,
+                                    transitions_file=transitions_path)
         self.current_global_path = [] # Lista de nós [(x,y,z), ...] da rota atual
+        self.last_lookahead_idx = -1
 
         # Thread-safe waypoints
         self._waypoints_lock = threading.Lock()
@@ -92,6 +104,7 @@ class Cavebot:
         self.last_known_pos = None
         self.stuck_threshold = 10  # 5 segundos (10 * 0.5s)
         self.global_recalc_counter = 0 # Para acionar o GlobalMap
+        self._hard_stuck_count = 0  # Contador de hard stucks consecutivos
 
         # --- CONFIGURAÇÃO DE FLUIDEZ (NOVO) ---
         self.walk_delay = 0.4 # Valor base, será sobrescrito dinamicamente
@@ -101,10 +114,12 @@ class Cavebot:
         self.cached_speed = 250    # Cache de velocidade para não ler battle list todo frame
         self.last_speed_check = 0  # Timestamp da última leitura de speed
         self.last_floor_change_time = 0  # Timestamp do último floor change (subir/descer andar)
+        self._last_floor_change_from_z = None  # Z de onde veio na última transição (yo-yo protection)
 
         # --- ESTADO PARA MINIMAP (NOVO) ---
         self.current_state = self.STATE_IDLE
         self.state_message = ""  # Mensagem detalhada para exibição
+        self._last_logged_pause = ""  # Dedup: evita spam de logs repetidos
 
         # --- HUMANIZAÇÃO: Detecção de Falta de Progresso ---
         self.advancement_tracker = AdvancementTracker(
@@ -120,6 +135,23 @@ class Cavebot:
         self._afk_pause_until = 0            # Timestamp de quando a pausa termina
         self._afk_next_pause_time = 0        # Timestamp para próxima pausa
 
+        # --- AUTO-EXPLORE ---
+        self.auto_explore_enabled = False
+        self._spawn_selector = None          # SpawnSelector instance
+        self._current_spawn_target = None    # SpawnArea ativo
+        self._cached_transition = None       # (spawn_id, FloorTransition) cache
+        self._nav_fail_count = 0              # Contador de falhas de navegação
+        self._explore_initialized = False
+        self._explore_xml_path = None        # Caminho para world-spawn.xml
+        self._explore_target_monsters = []   # Lista de monstros alvo (filtro)
+        self._explore_battlelist = None      # BattleListScanner para detecção de players
+
+        # --- PRE-COMPUTATION (pipelining de passos) ---
+        self._precomputed_step = None        # (dx, dy) pré-calculado durante wait
+        self._precomputed_pos = None         # (px, py, pz) quando foi calculado
+        self._precompute_done = False        # True se já tentou precomputar neste ciclo de wait
+        self._precompute_last_used_pos = None  # Pos quando último passo pré-calculado foi enviado (detecção de falha)
+
     def load_waypoints(self, waypoints_list):
         """
         Carrega lista de waypoints com validação thread-safe.
@@ -131,24 +163,24 @@ class Cavebot:
             try:
                 # Validação de estrutura
                 if not isinstance(wp, dict):
-                    print(f"[Cavebot] Aviso: Waypoint {i} não é dict, ignorando")
+                    print(f"[{_ts()}] [Cavebot] Aviso: Waypoint {i} não é dict, ignorando")
                     continue
 
                 # Validação de campos obrigatórios
                 if 'x' not in wp or 'y' not in wp or 'z' not in wp:
-                    print(f"[Cavebot] Aviso: Waypoint {i} falta coordenadas (x, y, z), ignorando")
+                    print(f"[{_ts()}] [Cavebot] Aviso: Waypoint {i} falta coordenadas (x, y, z), ignorando")
                     continue
 
                 # Validação de tipos
                 if not isinstance(wp['x'], (int, float)) or \
                    not isinstance(wp['y'], (int, float)) or \
                    not isinstance(wp['z'], (int, float)):
-                    print(f"[Cavebot] Aviso: Waypoint {i} coordenadas inválidas, ignorando")
+                    print(f"[{_ts()}] [Cavebot] Aviso: Waypoint {i} coordenadas inválidas, ignorando")
                     continue
 
                 validated.append(wp)
             except Exception as e:
-                print(f"[Cavebot] Erro ao validar waypoint {i}: {e}")
+                print(f"[{_ts()}] [Cavebot] Erro ao validar waypoint {i}: {e}")
                 continue
 
         # Thread-safe assignment
@@ -178,19 +210,19 @@ class Cavebot:
                     self._current_index = closest_idx
                     self._direction = 1  # Sempre FORWARD e ciclico
 
-                    print(f"[Cavebot] 🎯 Inicialização inteligente: WP mais próximo é #{closest_idx} (Dist: {closest_dist:.1f} SQM)")
-                    print(f"[Cavebot]    Navegação: #{closest_idx} → #{closest_idx + 1} → ... → #{len(validated) - 1} → #0 → #1 ... (FORWARD ciclico)")
+                    print(f"[{_ts()}] [Cavebot] 🎯 Inicialização inteligente: WP mais próximo é #{closest_idx} (Dist: {closest_dist:.1f} SQM)")
+                    print(f"[{_ts()}] [Cavebot]    Navegação: #{closest_idx} → #{closest_idx + 1} → ... → #{len(validated) - 1} → #0 → #1 ... (FORWARD ciclico)")
 
                 except Exception as e:
                     # Fallback para comportamento padrão se houver erro
-                    print(f"[Cavebot] ⚠️ Erro ao calcular waypoint inicial: {e}")
+                    print(f"[{_ts()}] [Cavebot] ⚠️ Erro ao calcular waypoint inicial: {e}")
                     self._current_index = 0
                     self._direction = 1
             else:
                 self._current_index = 0
                 self._direction = 1
 
-        print(f"[Cavebot] Carregados {len(validated)} waypoints válidos de {len(waypoints_list)} totais")
+        print(f"[{_ts()}] [Cavebot] Carregados {len(validated)} waypoints válidos de {len(waypoints_list)} totais")
 
     def start(self):
         self.enabled = True
@@ -229,7 +261,7 @@ class Cavebot:
                     # 4. Atualiza índice e limpa caches para forçar recálculo
                     self._current_index = closest_idx
                     if self.current_global_path:
-                        print(f"[DEBUG] Path limpo em: start() (tinha {len(self.current_global_path)} nós)")
+                        print(f"[{_ts()}] [DEBUG] Path limpo em: start() (tinha {len(self.current_global_path)} nós)")
                     self.current_global_path = []
                     self.local_path_cache = []
                     self.global_recalc_counter = 0
@@ -237,25 +269,27 @@ class Cavebot:
                     self.last_known_pos = None
 
                     if old_idx != closest_idx:
-                        print(f"[Cavebot] 🎯 Reposicionado: WP #{old_idx} → #{closest_idx} (Pos: {px},{py},{pz} | Dist: {closest_dist:.1f} SQM)")
+                        print(f"[{_ts()}] [Cavebot] 🎯 Reposicionado: WP #{old_idx} → #{closest_idx} (Pos: {px},{py},{pz} | Dist: {closest_dist:.1f} SQM)")
                     else:
-                        print(f"[Cavebot] ✓ Mantendo WP #{closest_idx} (Pos: {px},{py},{pz} | Dist: {closest_dist:.1f} SQM)")
+                        print(f"[{_ts()}] [Cavebot] ✓ Mantendo WP #{closest_idx} (Pos: {px},{py},{pz} | Dist: {closest_dist:.1f} SQM)")
 
                 except Exception as e:
-                    print(f"[Cavebot] ⚠️ Erro ao sincronizar estado: {e}")
+                    print(f"[{_ts()}] [Cavebot] ⚠️ Erro ao sincronizar estado: {e}")
 
-        print("[Cavebot] Iniciado.")
+        print(f"[{_ts()}] [Cavebot] Iniciado.")
 
     def stop(self):
         self.enabled = False
         state.set_cavebot_state(False)  # Notifica que Cavebot está inativo
-        print("[Cavebot] Parado.")
+        print(f"[{_ts()}] [Cavebot] Parado.")
 
     def run_cycle(self):
         """Deve ser chamado no loop principal do bot."""
-        # Thread-safe check de waypoints
+        # Thread-safe check
         with self._waypoints_lock:
-            if not self.enabled or not self._waypoints:
+            if not self.enabled:
+                return
+            if not self.auto_explore_enabled and not self._waypoints:
                 return
 
             # Cópia local para evitar lock durante todo ciclo
@@ -268,6 +302,8 @@ class Cavebot:
             self.state_message = "⏸️ Pausado (GM detectado)"
             # Reseta cooldown para evitar movimento imediato ao retomar
             self.last_action_time = time.time()
+            self._precomputed_step = None
+            self._precompute_done = False
             return
 
         # NOVO: Pausa enquanto runemaker está ativo
@@ -275,8 +311,9 @@ class Cavebot:
             self.current_state = self.STATE_PAUSED
             self.state_message = "⏸️ Pausado (Runemaker ativo)"
             self.last_action_time = time.time()
-            if DEBUG_PATHFINDING:
-                print(f"[Cavebot] ⏸️ PAUSA: Runemaker ativo")
+            if DEBUG_PATHFINDING and self.state_message != self._last_logged_pause:
+                self._last_logged_pause = self.state_message
+                print(f"[{_ts()}] [Cavebot] ⏸️ PAUSA: Runemaker ativo")
             return
 
         # NOVO: Pausa durante conversa de chat (AI respondendo)
@@ -285,8 +322,9 @@ class Cavebot:
             remaining = state.get_chat_pause_remaining()
             self.state_message = f"💬 Pausado (Chat - {remaining:.1f}s)"
             self.last_action_time = time.time()
-            if DEBUG_PATHFINDING:
-                print(f"[Cavebot] ⏸️ PAUSA: Chat ativo ({remaining:.1f}s restantes)")
+            if DEBUG_PATHFINDING and self._last_logged_pause != "chat_paused":
+                self._last_logged_pause = "chat_paused"
+                print(f"[{_ts()}] [Cavebot] ⏸️ PAUSA: Chat ativo ({remaining:.1f}s restantes)")
             return
 
         # NOVO: Pausa para atividades de maior prioridade
@@ -295,6 +333,8 @@ class Cavebot:
         if state.is_in_combat or state.has_open_loot or state.is_processing_loot:
             self.last_action_time = time.time()
             self._was_paused = True  # Marcar que estávamos pausados
+            self._precomputed_step = None
+            self._precompute_done = False
             # Atualiza status para exibição na GUI
             reasons = []
             if state.is_in_combat:
@@ -305,8 +345,9 @@ class Cavebot:
                 reasons.append("Proc.Loot")
             self.current_state = self.STATE_PAUSED
             self.state_message = f"⏸️ Pausado ({', '.join(reasons)})"
-            if DEBUG_PATHFINDING:
-                print(f"[Cavebot] {self.state_message}")
+            if DEBUG_PATHFINDING and self.state_message != self._last_logged_pause:
+                self._last_logged_pause = self.state_message
+                print(f"[{_ts()}] [Cavebot] {self.state_message}")
             return
 
         # NOVO: Cooldown de 1s após combate/loot para estabilização
@@ -316,8 +357,9 @@ class Cavebot:
             self._was_paused = True  # Marcar que estávamos pausados
             self.current_state = self.STATE_COMBAT_COOLDOWN
             self.state_message = f"⏰ Cooldown pós-combate ({remaining:.1f}s)"
-            if DEBUG_PATHFINDING:
-                print(f"[Cavebot] ⏸️ Cooldown pós-combate: {remaining:.1f}s")
+            if DEBUG_PATHFINDING and self._last_logged_pause != "combat_cooldown":
+                self._last_logged_pause = "combat_cooldown"
+                print(f"[{_ts()}] [Cavebot] ⏸️ Cooldown pós-combate: {remaining:.1f}s")
             self.last_action_time = time.time()
             return
 
@@ -326,8 +368,9 @@ class Cavebot:
             self._was_paused = True  # Marcar que estávamos pausados
             self.current_state = self.STATE_PAUSED
             self.state_message = "⏸️ Pausado (Spear pickup)"
-            if DEBUG_PATHFINDING:
-                print(f"[Cavebot] ⏸️ PAUSA: Spear pickup em progresso")
+            if DEBUG_PATHFINDING and self.state_message != self._last_logged_pause:
+                self._last_logged_pause = self.state_message
+                print(f"[{_ts()}] [Cavebot] ⏸️ PAUSA: Spear pickup em progresso")
             self.last_action_time = time.time()
             return
 
@@ -340,8 +383,12 @@ class Cavebot:
         # Usa next_walk_time (timestamp futuro) ao invés de last_action_time - walk_delay
         now = time.time()
         if now < self.next_walk_time:
-            if DEBUG_PATHFINDING:
-                print(f"[DEBUG] Blocked: now={now:.3f}, next_walk={self.next_walk_time:.3f}, diff={self.next_walk_time - now:.3f}s")
+            # PRE-COMPUTATION: Enquanto espera, lê mapa e calcula próximo passo
+            if not self._precompute_done:
+                self._precompute_done = True
+                self._try_precompute_next_step()
+            #elif DEBUG_PATHFINDING:
+                #print(f"[{_ts()}] [DEBUG] Blocked: now={now:.3f}, next_walk={self.next_walk_time:.3f}, diff={self.next_walk_time - now:.3f}s")
             return
 
         # NOVO: Cooldown após mudança de andar (floor change)
@@ -352,9 +399,41 @@ class Cavebot:
             self.current_state = self.STATE_FLOOR_COOLDOWN
             self.state_message = "⏰ Cooldown pós-stairs"
             if DEBUG_PATHFINDING:
-                print(f"[Cavebot] ⏸️ Cooldown pós-floor-change: {remaining:.1f}s")
+                print(f"[{_ts()}] [Cavebot] ⏸️ Cooldown pós-floor-change: {remaining:.1f}s")
             self.last_action_time = time.time()
+            self._precomputed_step = None
+            self._precompute_done = False
             return
+
+        # PRE-COMPUTATION: Se temos passo pré-calculado, usa direto (pula map read + A*)
+        if self._precomputed_step is not None:
+            px, py, pz = get_player_pos(self.pm, self.base_addr)
+            if (px, py, pz) == self._precomputed_pos:
+                # Detecta falha: se último passo pré-calculado não moveu o bot, cai no fluxo normal
+                if self._precompute_last_used_pos == (px, py, pz):
+                    if DEBUG_PATHFINDING:
+                        print(f"[{_ts()}] [Nav] ⚠️ Passo pré-calculado falhou (posição não mudou). Usando fluxo normal.")
+                    self._precomputed_step = None
+                    self._precompute_done = False
+                    self._precompute_last_used_pos = None
+                    # Fall through para fluxo normal com stuck detection
+                else:
+                    dx, dy = self._precomputed_step
+                    self._precomputed_step = None
+                    self._precompute_done = False
+                    self._precompute_last_used_pos = (px, py, pz)
+                    if DEBUG_PATHFINDING:
+                        print(f"[{_ts()}] [Nav] ⚡ Usando passo pré-calculado: ({dx}, {dy})")
+                    self._execute_smooth_step(dx, dy)
+                    self.last_action_time = time.time()
+                    return
+            else:
+                # Posição mudou (combat knockback, etc) - descarta e recalcula
+                self._precomputed_step = None
+                self._precomputed_pos = None
+                self._precompute_last_used_pos = None
+
+        self._precompute_done = False
 
         # 1. Atualizar Posição e Mapa
         px, py, pz = get_player_pos(self.pm, self.base_addr)
@@ -363,15 +442,21 @@ class Cavebot:
 
         # RETRY LOGIC: Se calibração falhar, tenta novamente
         if not success or not self.memory_map.is_calibrated:
-            print(f"[Cavebot] Calibração do mapa falhou, tentando novamente...")
+            print(f"[{_ts()}] [Cavebot] Calibração do mapa falhou, tentando novamente...")
             time.sleep(0.1)  # Aguarda 100ms para estabilizar
             player_id = self.pm.read_int(self.base_addr + OFFSET_PLAYER_ID)
             success = self.memory_map.read_full_map(player_id)
 
             if not success or not self.memory_map.is_calibrated:
-                print(f"[Cavebot] ⚠️ Calibração falhou novamente. Pulando ciclo.")
+                print(f"[{_ts()}] [Cavebot] ⚠️ Calibração falhou novamente. Pulando ciclo.")
                 self.last_action_time = time.time()
                 return
+
+        # === AUTO-EXPLORE MODE ===
+        if self.auto_explore_enabled:
+            self._run_auto_explore(px, py, pz)
+            self.last_action_time = time.time()
+            return
 
         # 2. Selecionar Waypoint Atual (thread-safe)
         wp = current_waypoints[current_index]
@@ -391,11 +476,11 @@ class Cavebot:
         if dist <= 1.5 and wp['z'] == pz:
             self.current_state = self.STATE_WAYPOINT_REACHED
             self.state_message = f"✅ Waypoint #{current_index + 1} alcançado"
-            print(f"[Cavebot] ✅ Chegou no WP {current_index}: ({wp['x']}, {wp['y']}, {wp['z']})")
+            print(f"[{_ts()}] [Cavebot] ✅ Chegou no WP {current_index}: ({wp['x']}, {wp['y']}, {wp['z']})")
             with self._waypoints_lock:
                 self._advance_waypoint()
                 if self.current_global_path:
-                    print(f"[DEBUG] Path limpo em: waypoint_reached (tinha {len(self.current_global_path)} nós)")
+                    print(f"[{_ts()}] [DEBUG] Path limpo em: waypoint_reached (tinha {len(self.current_global_path)} nós)")
                 self.current_global_path = []
                 self.last_lookahead_idx = -1
             # Limpa tracker ao mudar de waypoint
@@ -409,8 +494,9 @@ class Cavebot:
             self.advancement_tracker.reset()
             self.last_global_path_time = time.time()
             self._was_paused = False
+            self._last_logged_pause = ""
             if DEBUG_PATHFINDING:
-                print("[Cavebot] ✓ Saiu de pausa, resetando tracker de progresso")
+                print(f"[{_ts()}] [Cavebot] ✓ Saiu de pausa, resetando tracker de progresso")
 
         # HUMANIZAÇÃO: Verificar se estamos avançando (apenas fora de combate/loot)
         # NOVO: Não verificar imediatamente após gerar rota global (dar tempo de começar a andar)
@@ -431,36 +517,82 @@ class Cavebot:
             self.current_state = self.STATE_FLOOR_CHANGE
             self.state_message = f"🪜 Mudança de andar ({direction} para Z={wp['z']})"
             if DEBUG_PATHFINDING:
-                print(f"[🪜 FLOOR CHANGE] Necessário {direction}: Z atual={pz} → Z alvo={wp['z']}")
+                print(f"[{_ts()}] [🪜 FLOOR CHANGE] Necessário {direction}: Z atual={pz} → Z alvo={wp['z']}")
 
             # O scanner retorna: (rel_x, rel_y, type, special_id)
-            floor_target = self.analyzer.scan_for_floor_change(wp['z'], pz)
+            floor_target = self.analyzer.scan_for_floor_change(
+                wp['z'], pz,
+                player_abs_x=px, player_abs_y=py,
+                dest_x=wp['x'], dest_y=wp['y'],
+                transitions_by_floor=self.global_map._transitions_by_floor if hasattr(self, 'global_map') and self.global_map else None
+            )
+
+            # Se escada visível, validar contra multifloor (mesmo com 1 andar restante)
+            if floor_target and USE_MULTIFLOOR_PATHFINDING and hasattr(self, 'global_map') and self.global_map:
+                fx, fy, ftype, fid = floor_target
+                abs_stair_x = px + fx
+                abs_stair_y = py + fy
+                # Computar multifloor se não temos path cacheado
+                if not self.current_global_path:
+                    full_path = self.global_map.get_path_multilevel(
+                        (px, py, pz), (wp['x'], wp['y'], wp['z'])
+                    )
+                    if full_path:
+                        same_floor = [t for t in full_path if t[2] == pz]
+                        if same_floor:
+                            self.current_global_path = same_floor
+                # Comparar escada visível com destino do multifloor
+                if self.current_global_path:
+                    mf_target = self.current_global_path[-1]  # Última tile no andar atual
+                    if abs(mf_target[0] - abs_stair_x) + abs(mf_target[1] - abs_stair_y) > 3:
+                        print(f"[{_ts()}] [FloorChange] Escada visível ({abs_stair_x},{abs_stair_y}) ≠ multifloor target ({mf_target[0]},{mf_target[1]}). Seguindo multifloor.")
+                        floor_target = None
+
+            # Yo-yo protection: não usar transição que volta pro andar de onde acabamos de vir
+            if floor_target and self._last_floor_change_from_z is not None:
+                fx, fy, ftype, fid = floor_target
+                would_go_to_z = pz + (1 if ftype in ('DOWN', 'DOWN_USE', 'SHOVEL') else -1)
+                if would_go_to_z == self._last_floor_change_from_z:
+                    elapsed = time.time() - self.last_floor_change_time
+                    if elapsed < 5.0:
+                        if DEBUG_PATHFINDING:
+                            print(f"[{_ts()}] [Nav] Ignorando {ftype} — voltaria ao Z={self._last_floor_change_from_z} (yo-yo protection, {elapsed:.1f}s)")
+                        floor_target = None
 
             if floor_target:
                 fx, fy, ftype, fid = floor_target
                 dist_obj = math.sqrt(fx**2 + fy**2)
 
                 if DEBUG_PATHFINDING:
-                    print(f"[🪜 FLOOR CHANGE] Encontrado {ftype} (ID:{fid}) em ({fx:+d}, {fy:+d}), distância={dist_obj:.1f} SQM")
+                    print(f"[{_ts()}] [🪜 FLOOR CHANGE] Encontrado {ftype} (ID:{fid}) em ({fx:+d}, {fy:+d}), distância={dist_obj:.1f} SQM")
 
                 # Se estamos ADJACENTES (dist <= 1.5) ou EM CIMA (dist == 0)
                 # Para Ladder e Rope, precisamos estar PERTO.
                 if dist_obj <= 1.5:
                     if DEBUG_PATHFINDING:
-                        print(f"[🪜 FLOOR CHANGE] ✓ Adjacente ao {ftype}, executando...")
-                    self._handle_special_tile(fx, fy, ftype, fid, px, py, pz)
+                        print(f"[{_ts()}] [🪜 FLOOR CHANGE] ✓ Adjacente ao {ftype}, executando...")
+                    fc_success = self._handle_special_tile(fx, fy, ftype, fid, px, py, pz)
 
-                    # NOVO: Registra timestamp do floor change para cooldown
-                    self.last_floor_change_time = time.time()
+                    # Limpar path global ao mudar de andar (path antigo é inválido)
+                    if self.current_global_path:
+                        print(f"[{_ts()}] [DEBUG] Path limpo em: floor_change (tinha {len(self.current_global_path)} nós)")
+                    self.current_global_path = []
+                    self.last_lookahead_idx = -1
+
+                    # Registra timestamp do floor change para cooldown apenas se teve sucesso
+                    if fc_success:
+                        self.last_floor_change_time = time.time()
                     if DEBUG_PATHFINDING:
-                        print(f"[🪜 FLOOR CHANGE] ⏳ Aguardando 1s para permitir combate no novo andar")
+                        print(f"[{_ts()}] [🪜 FLOOR CHANGE] ⏳ Aguardando 1s para permitir combate no novo andar")
 
                     # Após uma interação de andar/usar, a posição global pode ter mudado (ex: subir de andar).
                     npx, npy, npz = get_player_pos(self.pm, self.base_addr)
+                    if npz != pz:
+                        self._last_floor_change_from_z = pz
                     if wp['z'] == npz:
                         dist_after = math.sqrt((wp['x'] - npx) ** 2 + (wp['y'] - npy) ** 2)
                         if dist_after <= 1.5:
-                            print(f"[Cavebot] Chegou no WP {current_index} após floor change")
+                            print(f"[{_ts()}] [Cavebot] Chegou no WP {current_index} após floor change")
                             with self._waypoints_lock:
                                 self._advance_waypoint()
                             self.last_action_time = time.time()
@@ -472,46 +604,89 @@ class Cavebot:
                         target_fx, target_fy = self._get_adjacent_use_tile(fx, fy)
 
                     if DEBUG_PATHFINDING:
-                        print(f"[🪜 FLOOR CHANGE] Longe do {ftype}, calculando caminho para ({target_fx:+d}, {target_fy:+d})...")
+                        print(f"[{_ts()}] [🪜 FLOOR CHANGE] Longe do {ftype}, calculando caminho para ({target_fx:+d}, {target_fy:+d})...")
                     abs_ladder_x = px + target_fx
                     abs_ladder_y = py + target_fy
                     self._navigate_hybrid(abs_ladder_x, abs_ladder_y, pz, px, py)
             else:
-                # Escada/rope fora da tela - navegar até (wp['x'], wp['y']) no andar atual
-                # O tile exato pode ser intransitável, então usamos fallback com raio maior
+                # Escada/rope fora da tela - navegar até lá
                 nav_target_x, nav_target_y = wp['x'], wp['y']
                 dist_to_target = math.sqrt((nav_target_x - px)**2 + (nav_target_y - py)**2)
 
-                if dist_to_target > 2:
-                    # Ainda longe - tentar navegar até lá (ou tile mais próximo)
-                    print(f"[Cavebot] 🔍 Escada não visível. Navegando até ({nav_target_x}, {nav_target_y}) no Z={pz} (dist: {dist_to_target:.1f})")
+                # Se já temos uma rota global, apenas caminhar (não recalcular toda tick)
+                if self.current_global_path and dist_to_target > 2:
+                    last_tile = self.current_global_path[-1]
+                    self._navigate_hybrid(last_tile[0], last_tile[1], pz, px, py)
+                    self.last_action_time = time.time()
+                    return
 
-                    # Usa GlobalMap com fallback maior para achar tile walkable mais próximo
-                    # max_offset=5 permite encontrar tile até 5 sqm de distância se o exato for parede
-                    path = self.global_map.get_path_with_fallback(
-                        (px, py, pz),
-                        (nav_target_x, nav_target_y, pz),
-                        max_offset=5  # Raio maior para floor change
-                    )
+                if dist_to_target > 2:
+                    print(f"[{_ts()}] [Cavebot] 🔍 Escada não visível. Navegando até ({nav_target_x}, {nav_target_y}) Z={wp['z']} (dist: {dist_to_target:.1f})")
+
+                    path = None
+
+                    # Multifloor: calcular rota completa cross-floor e extrair segmento atual
+                    if USE_MULTIFLOOR_PATHFINDING:
+                        print(f"[{_ts()}] [Cavebot] 🔍 Multifloor: ({px},{py},{pz}) → ({wp['x']},{wp['y']},{wp['z']})")
+                        print(f"[{_ts()}] [Cavebot]   Transitions disponíveis: andares={list(self.global_map._transitions_by_floor.keys()) if self.global_map._transitions_by_floor else 'NENHUM'}")
+                        trans_from_here = self.global_map._transitions_by_floor.get(pz, [])
+                        print(f"[{_ts()}] [Cavebot]   Transições do andar {pz}: {len(trans_from_here)} registradas")
+                        if trans_from_here:
+                            for tx, ty, tz in trans_from_here[:5]:
+                                mdist = abs(tx - px) + abs(ty - py)
+                                print(f"[{_ts()}] [Cavebot]     → ({tx},{ty}) Z→{tz} dist={mdist}")
+                        full_path = self.global_map.get_path_multilevel(
+                            (px, py, pz),
+                            (wp['x'], wp['y'], wp['z'])
+                        )
+                        if full_path:
+                            print(f"[{_ts()}] [Cavebot]   ✅ Multifloor encontrou path: {len(full_path)} tiles")
+                            # Extrair apenas tiles do andar atual (até a transição)
+                            same_floor_path = []
+                            for tile in full_path:
+                                if tile[2] == pz:
+                                    same_floor_path.append(tile)
+                                else:
+                                    break
+                            # Parar 2 tiles antes da transição para detectar tile especial
+                            if len(same_floor_path) > 2:
+                                same_floor_path = same_floor_path[:-2]
+                            if same_floor_path:
+                                path = same_floor_path
+                                print(f"[{_ts()}] [Cavebot] 🛤️ Rota multifloor: {len(full_path)} tiles total, {len(path)} neste andar")
+
+                    if USE_MULTIFLOOR_PATHFINDING and not path:
+                        print(f"[{_ts()}] [Cavebot]   ❌ Multifloor falhou (full_path={'None' if not full_path else f'{len(full_path)} tiles, same_floor=0'})")
+
+                    # Fallback: rota same-floor até coordenada do waypoint
+                    if not path:
+                        path = self.global_map.get_path_with_fallback(
+                            (px, py, pz),
+                            (nav_target_x, nav_target_y, pz),
+                            max_offset=5
+                        )
 
                     if path:
                         self.current_global_path = path
-                        print(f"[Cavebot] 🛤️ Rota para escada: {len(path)} tiles")
+                        if not USE_MULTIFLOOR_PATHFINDING:
+                            print(f"[{_ts()}] [Cavebot] 🛤️ Rota para escada: {len(path)} tiles")
+                        # Iniciar movimento imediatamente
+                        last_tile = path[-1]
+                        self._navigate_hybrid(last_tile[0], last_tile[1], pz, px, py)
                     else:
-                        # Fallback: usa navegação local direta
-                        print(f"[Cavebot] ⚠️ GlobalMap falhou. Usando navegação local.")
+                        print(f"[{_ts()}] [Cavebot] ⚠️ GlobalMap falhou. Usando navegação local.")
                         self._navigate_hybrid(nav_target_x, nav_target_y, pz, px, py)
                 else:
                     # Chegou perto mas ainda não achou escada - incrementa stuck
                     self.global_recalc_counter += 1
-                    print(f"[Cavebot] ⚠️ Escada não encontrada perto de ({nav_target_x}, {nav_target_y}, {pz})! ({self.global_recalc_counter}/{GLOBAL_RECALC_LIMIT})")
+                    print(f"[{_ts()}] [Cavebot] ⚠️ Escada não encontrada perto de ({nav_target_x}, {nav_target_y}, {pz})! ({self.global_recalc_counter}/{GLOBAL_RECALC_LIMIT})")
 
                     if self.global_recalc_counter >= GLOBAL_RECALC_LIMIT:
-                        print(f"[Cavebot] ⚠️ Limite atingido. Pulando para próximo waypoint.")
+                        print(f"[{_ts()}] [Cavebot] ⚠️ Limite atingido. Pulando para próximo waypoint.")
                         with self._waypoints_lock:
                             self._advance_waypoint()
                             if self.current_global_path:
-                                print(f"[DEBUG] Path limpo em: escada_stuck (tinha {len(self.current_global_path)} nós)")
+                                print(f"[{_ts()}] [DEBUG] Path limpo em: escada_stuck (tinha {len(self.current_global_path)} nós)")
                             self.current_global_path = []
                         self.global_recalc_counter = 0
             
@@ -528,6 +703,294 @@ class Cavebot:
         
         # Detecção de Stuck Geral (player parado no mesmo tile)
         self._check_stuck(px, py, pz, current_index)
+
+    # ==================================================================
+    # AUTO-EXPLORE
+    # ==================================================================
+
+    def init_auto_explore(self, xml_path, target_monsters=None, search_radius=None, revisit_cooldown=None):
+        """Configura o modo auto-explore. Chamado pela GUI ao ativar."""
+        self._explore_xml_path = xml_path
+        self._explore_target_monsters = target_monsters or []
+        self._explore_search_radius = search_radius or AUTO_EXPLORE_SEARCH_RADIUS
+        self._explore_revisit_cooldown = revisit_cooldown or AUTO_EXPLORE_REVISIT_COOLDOWN
+        self._explore_initialized = False
+        self._current_spawn_target = None
+        self._spawn_selector = None
+        self._nav_fail_count = 0
+
+    def _init_auto_explore_selector(self, px, py, pz):
+        """Inicializa o SpawnSelector com suporte multi-andar."""
+        if not self._explore_xml_path:
+            print(f"[{_ts()}] [AutoExplore] XML path nao configurado!")
+            return False
+
+        try:
+            all_spawns = parse_spawns(self._explore_xml_path)
+
+            # FloorConnector para navegação multi-andar
+            max_floors = AUTO_EXPLORE_MAX_FLOORS
+            floor_connector = None
+            if max_floors > 0:
+                transitions_path = os.path.join(self.global_map.maps_dir, "floor_transitions.json")
+                floor_connector = FloorConnector(self.global_map, transitions_file=transitions_path)
+                self._floor_connector = floor_connector
+
+            # Carregar grafo pré-computado se disponível
+            spawn_graph = None
+            graph_path = os.path.join(self.global_map.maps_dir, "spawn_graph.json")
+            if os.path.isfile(graph_path):
+                try:
+                    import json
+                    with open(graph_path, 'r') as f:
+                        spawn_graph = json.load(f)
+                    if DEBUG_AUTO_EXPLORE:
+                        print(f"[{_ts()}] [AutoExplore] Grafo de spawns carregado: {graph_path}")
+                except Exception as e:
+                    print(f"[{_ts()}] [AutoExplore] Erro ao carregar grafo: {e}")
+
+            self._spawn_selector = SpawnSelector(
+                spawns=all_spawns,
+                global_map=self.global_map,
+                floor_connector=floor_connector,
+                target_monsters=self._explore_target_monsters,
+                revisit_cooldown=self._explore_revisit_cooldown,
+                search_radius=self._explore_search_radius,
+                max_floors=max_floors,
+                spawn_graph=spawn_graph,
+            )
+            count = self._spawn_selector.initialize((px, py, pz))
+            self._explore_initialized = True
+            self._current_spawn_target = None
+
+            if DEBUG_AUTO_EXPLORE:
+                print(f"[{_ts()}] [AutoExplore] Inicializado: {count} spawns acessiveis (Z={pz}, max_floors={max_floors})")
+                print(f"[{_ts()}] [AutoExplore] Filtros: monstros={self._explore_target_monsters}, raio={self._explore_search_radius}")
+                # Log spawns por andar
+                floors = {}
+                for s in self._spawn_selector.active_spawns:
+                    floors.setdefault(s.cz, []).append(s)
+                for z in sorted(floors):
+                    print(f"[{_ts()}] [AutoExplore]   Z={z}: {len(floors[z])} spawns")
+
+            if count == 0:
+                print(f"[{_ts()}] [AutoExplore] Nenhum spawn acessivel encontrado!")
+                return False
+
+            return True
+        except Exception as e:
+            print(f"[{_ts()}] [AutoExplore] Erro ao inicializar: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    def _run_auto_explore(self, px, py, pz):
+        """Lógica principal do auto-explore. Chamado dentro de run_cycle."""
+        # 1. Inicialização lazy ou re-init ao mudar de andar
+        if not self._explore_initialized:
+            if not self._init_auto_explore_selector(px, py, pz):
+                self.current_state = self.STATE_STUCK
+                self.state_message = "Auto-Explore: sem spawns"
+                return
+
+        # 2. Sem target? Selecionar proximo spawn
+        if not self._current_spawn_target:
+            self._nav_fail_count = 0
+            visible_players = self._get_visible_players(pz)
+            self._current_spawn_target = self._spawn_selector.select_next(
+                (px, py, pz), visible_players
+            )
+            if not self._current_spawn_target:
+                self.current_state = self.STATE_IDLE
+                self.state_message = "Auto-Explore: aguardando cooldown"
+                if DEBUG_AUTO_EXPLORE:
+                    print(f"[{_ts()}] [AutoExplore] Nenhum spawn disponivel (todos em cooldown)")
+                return
+
+            if DEBUG_AUTO_EXPLORE:
+                spawn = self._current_spawn_target
+                print(f"[{_ts()}] [AutoExplore] Novo destino: ({spawn.cx}, {spawn.cy}, {spawn.cz}) - {spawn.monster_names()}")
+            self.advancement_tracker.reset()
+            self.last_global_path_time = time.time()
+
+        spawn = self._current_spawn_target
+
+        # HUMANIZAÇÃO: Registrar distância para tracking de avanço
+        if ADVANCEMENT_TRACKING_ENABLED:
+            dist_to_spawn = spawn.distance_to(px, py)
+            self.advancement_tracker.record_distance(dist_to_spawn)
+
+        # 3. Chegou na area do spawn?
+        if spawn.is_inside(px, py, pz):
+            self._spawn_selector.mark_visited(spawn)
+            if DEBUG_AUTO_EXPLORE:
+                print(f"[{_ts()}] [AutoExplore] Spawn visitado: ({spawn.cx}, {spawn.cy}, {spawn.cz})")
+            self._current_spawn_target = None
+            self._cached_transition = None
+            self.current_global_path = []
+            self.advancement_tracker.reset()
+            return
+
+        # 4. Player mais proximo do spawn? Pular (só no mesmo andar)
+        if spawn.cz == pz:
+            visible_players = self._get_visible_players(pz)
+            if self._spawn_selector._is_occupied_by_closer_player(spawn, px, py, visible_players):
+                if DEBUG_AUTO_EXPLORE:
+                    player_info = [(p.name, p.position.x, p.position.y, p.position.z) for p in visible_players[:3]]
+                    print(f"[{_ts()}] [AutoExplore] Spawn ocupado por player, trocando destino. Players: {player_info}")
+                spawn.last_visited = time.time()
+                self._current_spawn_target = None
+                self.current_global_path = []
+                self.advancement_tracker.reset()
+                return
+
+        # HUMANIZAÇÃO: Verificar se estamos avançando ao spawn
+        if ADVANCEMENT_TRACKING_ENABLED and spawn.cz == pz:
+            if not state.is_in_combat and not state.has_open_loot:
+                if time.time() - self.last_global_path_time < 5.0:
+                    pass  # Cooldown após gerar rota
+                elif not self.advancement_tracker.is_advancing(ADVANCEMENT_EXPECTED_SPEED):
+                    self._handle_no_progress_explore(px, py, pz, spawn)
+                    return
+
+        # 5. Spawn em andar diferente? Usar lógica de floor change
+        if spawn.cz != pz:
+            target_z = spawn.cz
+            direction = "SUBIR" if target_z < pz else "DESCER"
+            self.current_state = self.STATE_FLOOR_CHANGE
+            self.state_message = f"Auto-Explore: {direction} para Z={target_z}"
+
+            # Tenta encontrar tile especial na tela (escada/buraco/rope)
+            floor_target = self.analyzer.scan_for_floor_change(
+                target_z, pz,
+                player_abs_x=px, player_abs_y=py,
+                dest_x=spawn.cx, dest_y=spawn.cy,
+                transitions_by_floor=self.global_map._transitions_by_floor if hasattr(self, 'global_map') and self.global_map else None
+            )
+
+            if floor_target:
+                fx, fy, ftype, fid = floor_target
+                dist_obj = math.sqrt(fx**2 + fy**2)
+
+                # Yo-yo protection: não usar transição que volta pro andar de onde acabamos de vir
+                if self._last_floor_change_from_z is not None:
+                    would_go_to_z = pz + (1 if ftype in ('DOWN', 'DOWN_USE', 'SHOVEL') else -1)
+                    if would_go_to_z == self._last_floor_change_from_z:
+                        elapsed = time.time() - self.last_floor_change_time
+                        if elapsed < 5.0:
+                            if DEBUG_AUTO_EXPLORE:
+                                print(f"[{_ts()}] [AutoExplore] Ignorando {ftype} — voltaria ao Z={self._last_floor_change_from_z} (yo-yo protection, {elapsed:.1f}s)")
+                            floor_target = None
+
+            if floor_target:
+                fx, fy, ftype, fid = floor_target
+                dist_obj = math.sqrt(fx**2 + fy**2)
+
+                if dist_obj <= 1.5:
+                    # Adjacente — interagir com o tile
+                    if DEBUG_AUTO_EXPLORE:
+                        print(f"[{_ts()}] [AutoExplore] Adjacente ao {ftype}, usando...")
+                    fc_success = self._handle_special_tile(fx, fy, ftype, fid, px, py, pz)
+                    if fc_success:
+                        self.last_floor_change_time = time.time()
+
+                    # Verificar se mudou de andar
+                    npx, npy, npz = get_player_pos(self.pm, self.base_addr)
+                    if npz != pz:
+                        if DEBUG_AUTO_EXPLORE:
+                            print(f"[{_ts()}] [AutoExplore] Mudou de andar: Z={pz} -> Z={npz}")
+                        self._last_floor_change_from_z = pz
+                        # Não limpar target — manter o spawn alvo para continuar navegando até ele no novo andar
+                        self._cached_transition = None
+                        self.current_global_path = []
+                    return
+                else:
+                    # Longe — navegar até tile adjacente ao tile especial
+                    target_fx, target_fy = fx, fy
+                    if ftype in ('UP_USE', 'DOWN', 'DOWN_USE', 'SHOVEL'):
+                        target_fx, target_fy = self._get_adjacent_use_tile(fx, fy)
+                    abs_x = px + target_fx
+                    abs_y = py + target_fy
+                    if DEBUG_AUTO_EXPLORE:
+                        print(f"[{_ts()}] [AutoExplore] Navegando ate {ftype} em ({abs_x}, {abs_y})")
+                    self._navigate_hybrid(abs_x, abs_y, pz, px, py)
+                    return
+            else:
+                # Tile especial fora de vista — usar get_path_multilevel para rota até spawn
+                target_pos = spawn.nearest_walkable_target(self.global_map)
+                if not target_pos:
+                    self._current_spawn_target = None
+                    return
+                full_path = self.global_map.get_path_multilevel(
+                    (px, py, pz), target_pos
+                )
+                if not full_path:
+                    if DEBUG_AUTO_EXPLORE:
+                        print(f"[{_ts()}] [AutoExplore] Sem rota multilevel de Z={pz} para spawn Z={spawn.cz}")
+                    self._current_spawn_target = None
+                    return
+                # Extrair tiles do andar atual para navegar até a escada
+                same_floor = [t for t in full_path if t[2] == pz]
+                # Parar 2 tiles antes da transição para que scan_for_floor_change
+                # possa detectar e interagir com o tile especial (rope/escada)
+                if len(same_floor) > 2:
+                    same_floor = same_floor[:-2]
+                if same_floor:
+                    self.current_global_path = same_floor
+                    self._navigate_hybrid(same_floor[-1][0], same_floor[-1][1], pz, px, py)
+                return
+
+        # 6. Mesmo andar: navegar ate o spawn
+        target_pos = spawn.nearest_walkable_target(self.global_map)
+        if not target_pos:
+            if DEBUG_AUTO_EXPLORE:
+                print(f"[{_ts()}] [AutoExplore] Nenhum tile walkable no spawn, pulando")
+            self._current_spawn_target = None
+            return
+
+        # Verificar se rota existe antes de navegar (só quando não tem rota ativa)
+        if not self.current_global_path:
+            if USE_MULTIFLOOR_PATHFINDING and pz != target_pos[2]:
+                path = self.global_map.get_path_multilevel((px, py, pz), target_pos)
+            else:
+                path = self.global_map.get_path((px, py, pz), target_pos)
+            if not path:
+                self._nav_fail_count += 1
+                if self._nav_fail_count >= 3:
+                    if DEBUG_AUTO_EXPLORE:
+                        print(f"[{_ts()}] [AutoExplore] Spawn inalcançável após {self._nav_fail_count} tentativas, pulando")
+                    spawn.last_visited = time.time()
+                    self._current_spawn_target = None
+                    self._nav_fail_count = 0
+                return
+            self._nav_fail_count = 0
+        cost = spawn.distance_to(px, py)
+        self.current_state = self.STATE_WALKING
+        self.state_message = f"Auto-Explore: {', '.join(sorted(spawn.monster_names())[:2])} ({cost:.0f} passos)"
+
+        self._navigate_hybrid(target_pos[0], target_pos[1], target_pos[2], px, py)
+
+        # Detecção de Stuck (player parado no mesmo tile)
+        self._check_stuck(px, py, pz, mode="auto_explore")
+
+    def _get_visible_players(self, pz=None):
+        """Retorna lista de players visíveis via BattleList."""
+        try:
+            if not self._explore_battlelist:
+                self._explore_battlelist = BattleListScanner(self.pm, self.base_addr)
+            creatures = self._explore_battlelist.scan_all()
+            player_id = self.pm.read_int(self.base_addr + OFFSET_PLAYER_ID)
+            players = [c for c in creatures
+                       if c.is_player and c.id != player_id and c.is_visible]
+            if pz is not None:
+                players = [p for p in players if p.position.z == pz]
+            return players
+        except Exception:
+            return []
+
+    # ==================================================================
+    # WAYPOINT NAVIGATION
+    # ==================================================================
 
     def _navigate_hybrid(self, dest_x, dest_y, dest_z, my_x, my_y):
         """
@@ -551,17 +1014,72 @@ class Cavebot:
         if need_global:
             self.current_state = self.STATE_RECALCULATING
             self.state_message = "🔄 Recalculando rota global..."
-            print(f"[Nav] 🌍 Calculando Rota Global... Motivo: {reason}")
+            print(f"[{_ts()}] [Nav] 🌍 Calculando Rota Global... Motivo: {reason}")
             # Ao recalcular global, limpamos o cache local (só se estiver usando cache)
             if not REALTIME_PATHING_ENABLED:
                 self.local_path_cache = []
 
             # ===== NOVO: Usar fallback inteligente =====
-            path = self.global_map.get_path_with_fallback(
-                (my_x, my_y, dest_z),
-                (dest_x, dest_y, dest_z),
-                max_offset=2  # Busca até 2 tiles de distância
-            )
+            _, _, my_z = get_player_pos(self.pm, self.base_addr)
+            if USE_MULTIFLOOR_PATHFINDING and my_z != dest_z:
+                path = self.global_map.get_path_multilevel(
+                    (my_x, my_y, my_z),
+                    (dest_x, dest_y, dest_z)
+                )
+                # Se o path cruza andares, extrair apenas tiles do andar atual
+                if path and any(t[2] != my_z for t in path):
+                    same_floor = []
+                    for t in path:
+                        if t[2] == my_z:
+                            same_floor.append(t)
+                        else:
+                            break
+                    # Parar 2 tiles antes da transição (para scan_for_floor_change detectar)
+                    if len(same_floor) > 2:
+                        same_floor = same_floor[:-2]
+                    if same_floor:
+                        path = same_floor
+                        print(f"[{_ts()}] [Nav] 🔀 Rota multifloor detectada, usando {len(path)} tiles do andar atual")
+                    else:
+                        # Bot já está perto da transição — tentar floor change
+                        print(f"[{_ts()}] [Nav] 🔀 Bot próximo de transição de andar, tentando floor change...")
+                        next_z = next((t[2] for t in path if t[2] != my_z), None)
+                        if next_z is not None:
+                            floor_target = self.analyzer.scan_for_floor_change(
+                                next_z, my_z,
+                                player_abs_x=my_x, player_abs_y=my_y,
+                                transitions_by_floor=self.global_map._transitions_by_floor if self.global_map else None
+                            )
+                            if floor_target:
+                                fx, fy, ftype, fid = floor_target
+                                dist_obj = math.sqrt(fx**2 + fy**2)
+                                if dist_obj <= 1.5:
+                                    print(f"[{_ts()}] [Nav] 🪜 Adjacente a {ftype}, usando...")
+                                    fc_success = self._handle_special_tile(fx, fy, ftype, fid, my_x, my_y, dest_z)
+                                    self.current_global_path = []
+                                    if fc_success:
+                                        self.last_floor_change_time = time.time()
+                                    return
+                                else:
+                                    # Navegar até o tile especial
+                                    abs_x = my_x + fx
+                                    abs_y = my_y + fy
+                                    path = self.global_map.get_path(
+                                        (my_x, my_y, dest_z), (abs_x, abs_y, dest_z)
+                                    )
+                            if not floor_target or not path:
+                                path = None
+                        else:
+                            path = None
+            else:
+                path = None
+
+            if not path:
+                path = self.global_map.get_path_with_fallback(
+                    (my_x, my_y, dest_z),
+                    (dest_x, dest_y, dest_z),
+                    max_offset=2
+                )
 
             if path:
                 self.current_global_path = path
@@ -569,9 +1087,9 @@ class Cavebot:
                 self.last_lookahead_idx = -1
                 self.advancement_tracker.reset()  # Reseta tracker para dar tempo de começar a andar
                 self.last_global_path_time = time.time()  # Marca quando gerou rota para cooldown
-                print(f"[Nav] 🛤️ Rota Global Gerada: {len(path)} nós.")
+                print(f"[{_ts()}] [Nav] 🛤️ Rota Global Gerada: {len(path)} nós.")
             else:
-                print(f"[Nav] ⚠️ GlobalMap não achou rota (nem com fallback). Tentando direto.")
+                print(f"[{_ts()}] [Nav] ⚠️ GlobalMap não achou rota (nem com fallback). Tentando direto.")
         
         # B. Definir o Sub-Destino (Janela Deslizante)
         # O A* local não consegue ir até o destino final se for longe.
@@ -598,8 +1116,15 @@ class Cavebot:
                 # Lookahead: Pega o nó X passos à frente
                 lookahead = min(7, len(self.current_global_path) - 1)
 
+                # Reduz lookahead se sub-destino ficaria fora do range de memória (±7)
+                while lookahead > 1:
+                    lx, ly, _ = self.current_global_path[lookahead]
+                    if abs(lx - my_x) <= 7 and abs(ly - my_y) <= 7:
+                        break
+                    lookahead -= 1
+
                 if lookahead != self.last_lookahead_idx:
-                    print(f"[Nav] 🚶 Seguindo Global: Nó {lookahead}/{len(self.current_global_path)}")
+                    print(f"[{_ts()}] [Nav] 🚶 Seguindo Global: Nó {lookahead}/{len(self.current_global_path)}")
                     self.last_lookahead_idx = lookahead
 
                 tx, ty, tz = self.current_global_path[lookahead]
@@ -610,9 +1135,9 @@ class Cavebot:
                     self.advancement_tracker.record_nodes(len(self.current_global_path))
             else:
                 # Perdemos a rota, limpa para recalcular
-                print("[Nav] ⚠️ Perdido da rota global. Resetando.")
+                print(f"[{_ts()}] [Nav] ⚠️ Perdido da rota global. Resetando.")
                 if self.current_global_path:
-                    print(f"[DEBUG] Path limpo em: perdido_da_rota (tinha {len(self.current_global_path)} nós)")
+                    print(f"[{_ts()}] [DEBUG] Path limpo em: perdido_da_rota (tinha {len(self.current_global_path)} nós)")
                 self.current_global_path = []
 
         # DEBUG: Log do sub-destino definido
@@ -620,7 +1145,7 @@ class Cavebot:
             has_global = len(self.current_global_path) > 0
             source = "Global[lookahead]" if has_global else "WP direto"
             sub_dist = math.sqrt((target_local_x - my_x)**2 + (target_local_y - my_y)**2)
-            print(f"[Nav] 🎯 Sub-destino: ({target_local_x}, {target_local_y}) | Fonte: {source} | Dist: {sub_dist:.1f} sqm")
+            print(f"[{_ts()}] [Nav] 🎯 Sub-destino: ({target_local_x}, {target_local_y}) | Fonte: {source} | Dist: {sub_dist:.1f} sqm")
 
         # ============================================================
         # 3. LÓGICA DE PATHING (CACHE vs REAL-TIME)
@@ -643,7 +1168,7 @@ class Cavebot:
             rel_x = int(norm_x * MAX_LOCAL_ASTAR_DIST)
             rel_y = int(norm_y * MAX_LOCAL_ASTAR_DIST)
             if DEBUG_PATHFINDING:
-                print(f"[Nav] 📍 Destino longe ({dist_to_target:.1f} sqm), sub-destino ({rel_x}, {rel_y})")
+                print(f"[{_ts()}] [Nav] 📍 Destino longe ({dist_to_target:.1f} sqm), sub-destino ({rel_x}, {rel_y})")
 
         if REALTIME_PATHING_ENABLED:
             # ========== MODO REAL-TIME ==========
@@ -652,7 +1177,7 @@ class Cavebot:
 
             # DEBUG: Log antes de chamar A* local
             if DEBUG_PATHFINDING:
-                print(f"[Nav] 🔍 A* Local: buscando passo para rel({rel_x}, {rel_y})")
+                print(f"[{_ts()}] [Nav] 🔍 A* Local: buscando passo para rel({rel_x}, {rel_y})")
 
             step = self.walker.get_next_step(rel_x, rel_y)
 
@@ -661,38 +1186,38 @@ class Cavebot:
 
                 # DEBUG: Log do resultado do A* local (sucesso)
                 if DEBUG_PATHFINDING:
-                    print(f"[Nav] ✅ A* Local encontrou: passo ({dx}, {dy})")
+                    print(f"[{_ts()}] [Nav] ✅ A* Local encontrou: passo ({dx}, {dy})")
 
                 # OBSTACLE CLEARING: Tenta mover mesa/cadeira se estiver no caminho
                 if OBSTACLE_CLEARING_ENABLED:
                     props = self.analyzer.get_tile_properties(dx, dy)
                     if DEBUG_OBSTACLE_CLEARING:
-                        print(f"[ObstacleClear] REALTIME: Próximo passo ({dx},{dy}) - walkable={props['walkable']}, type={props.get('type')}")
+                        print(f"[{_ts()}] [ObstacleClear] REALTIME: Próximo passo ({dx},{dy}) - walkable={props['walkable']}, type={props.get('type')}")
 
                     # Verificar se tem MOVE item mesmo que "walkable" (bug fix)
                     obstacle_info = self.analyzer.get_obstacle_type(dx, dy)
                     if DEBUG_OBSTACLE_CLEARING:
-                        print(f"[ObstacleClear] REALTIME: obstacle_info={obstacle_info}")
+                        print(f"[{_ts()}] [ObstacleClear] REALTIME: obstacle_info={obstacle_info}")
 
                     # Se tem obstáculo MOVE ou STACK, tenta limpar mesmo que tile seja "walkable"
                     if obstacle_info['type'] in ('MOVE', 'STACK') and obstacle_info['clearable']:
                         if DEBUG_OBSTACLE_CLEARING or DEBUG_STACK_CLEARING:
-                            print(f"[ObstacleClear] REALTIME: Detectou {obstacle_info['type']} item, tentando limpar...")
+                            print(f"[{_ts()}] [ObstacleClear] REALTIME: Detectou {obstacle_info['type']} item, tentando limpar...")
                         cleared = self._attempt_clear_obstacle(dx, dy)
                         if cleared:
                             props = self.analyzer.get_tile_properties(dx, dy)
                             if DEBUG_OBSTACLE_CLEARING:
-                                print(f"[ObstacleClear] REALTIME: Após limpeza, walkable={props['walkable']}")
+                                print(f"[{_ts()}] [ObstacleClear] REALTIME: Após limpeza, walkable={props['walkable']}")
                     elif not props['walkable']:
                         if DEBUG_OBSTACLE_CLEARING:
-                            print(f"[ObstacleClear] REALTIME: Tile não walkable, tentando limpar...")
+                            print(f"[{_ts()}] [ObstacleClear] REALTIME: Tile não walkable, tentando limpar...")
                         cleared = self._attempt_clear_obstacle(dx, dy)
                         if cleared:
                             props = self.analyzer.get_tile_properties(dx, dy)
                         if not props['walkable']:
                             # Obstáculo não removível, recalcula no próximo ciclo
                             if DEBUG_OBSTACLE_CLEARING:
-                                print(f"[ObstacleClear] REALTIME: Não conseguiu limpar, recalculando...")
+                                print(f"[{_ts()}] [ObstacleClear] REALTIME: Não conseguiu limpar, recalculando...")
                             self.global_recalc_counter += 1
                             return
 
@@ -702,14 +1227,16 @@ class Cavebot:
                 self.state_message = f"🚶 Andando até WP #{wp_num}"
 
                 self._execute_smooth_step(dx, dy)
+                self._precompute_last_used_pos = None  # Reset para permitir precompute no próximo passo
 
-                if self.global_recalc_counter > 0:
-                    print(f"[Nav] ✓ Movimento com sucesso. Resetando stuck.")
+                if self.global_recalc_counter > 0 or self._hard_stuck_count > 0:
+                    print(f"[{_ts()}] [Nav] ✓ Movimento com sucesso. Resetando stuck.")
                     self.global_recalc_counter = 0
+                    self._hard_stuck_count = 0
             else:
                 # DEBUG: Log do resultado do A* local (falha)
                 if DEBUG_PATHFINDING:
-                    print(f"[Nav] ❌ A* Local não encontrou caminho para rel({rel_x}, {rel_y})")
+                    print(f"[{_ts()}] [Nav] ❌ A* Local não encontrou caminho para rel({rel_x}, {rel_y})")
 
                 # ===== NOVO: Tentar limpar obstáculo quando A* não encontra caminho =====
                 # Quando A* não encontra step, pode ser que um MOVE/STACK bloqueie a única rota
@@ -735,16 +1262,16 @@ class Cavebot:
 
                         obstacle_info = self.analyzer.get_obstacle_type(check_x, check_y)
                         if DEBUG_OBSTACLE_CLEARING or DEBUG_STACK_CLEARING:
-                            print(f"[ObstacleClear] NO_STEP: Verificando ({check_x},{check_y}) = {obstacle_info}")
+                            print(f"[{_ts()}] [ObstacleClear] NO_STEP: Verificando ({check_x},{check_y}) = {obstacle_info}")
 
                         if obstacle_info['clearable'] and obstacle_info['type'] in ('MOVE', 'STACK'):
                             if DEBUG_OBSTACLE_CLEARING or DEBUG_STACK_CLEARING:
-                                print(f"[ObstacleClear] NO_STEP: Encontrou {obstacle_info['type']} em ({check_x},{check_y}), tentando limpar...")
+                                print(f"[{_ts()}] [ObstacleClear] NO_STEP: Encontrou {obstacle_info['type']} em ({check_x},{check_y}), tentando limpar...")
 
                             if self._attempt_clear_obstacle(check_x, check_y):
                                 obstacle_cleared = True
                                 if DEBUG_OBSTACLE_CLEARING or DEBUG_STACK_CLEARING:
-                                    print(f"[ObstacleClear] NO_STEP: Limpeza bem sucedida!")
+                                    print(f"[{_ts()}] [ObstacleClear] NO_STEP: Limpeza bem sucedida!")
                                 break
 
                 if obstacle_cleared:
@@ -755,10 +1282,11 @@ class Cavebot:
                 self.global_recalc_counter += 1
                 self.current_state = self.STATE_STUCK
                 self.state_message = f"⚠️ Bloqueio local ({self.global_recalc_counter}/{GLOBAL_RECALC_LIMIT})"
-                print(f"[Nav] ⚠️ Bloqueio Local! ({self.global_recalc_counter}/{GLOBAL_RECALC_LIMIT})")
+                print(f"[{_ts()}] [Nav] ⚠️ Bloqueio Local! ({self.global_recalc_counter}/{GLOBAL_RECALC_LIMIT})")
 
                 if self.global_recalc_counter >= GLOBAL_RECALC_LIMIT:
-                    self._handle_hard_stuck(dest_x, dest_y, dest_z, my_x, my_y)
+                    # Passa o sub-destino (lookahead) para bloquear o tile correto
+                    self._handle_hard_stuck(target_local_x, target_local_y, dest_z, my_x, my_y)
 
         else:
             # ========== MODO CACHE (CÓDIGO ORIGINAL) ==========
@@ -772,23 +1300,23 @@ class Cavebot:
                     # [CRÍTICO] Checagem de Segurança em Tempo Real
                     props = self.analyzer.get_tile_properties(dx, dy)
                     if DEBUG_OBSTACLE_CLEARING:
-                        print(f"[ObstacleClear] CACHE: Próximo passo ({dx},{dy}) - walkable={props['walkable']}, type={props.get('type')}")
+                        print(f"[{_ts()}] [ObstacleClear] CACHE: Próximo passo ({dx},{dy}) - walkable={props['walkable']}, type={props.get('type')}")
 
                     # Verificar se tem MOVE item mesmo que "walkable" (bug fix)
                     if OBSTACLE_CLEARING_ENABLED:
                         obstacle_info = self.analyzer.get_obstacle_type(dx, dy)
                         if DEBUG_OBSTACLE_CLEARING:
-                            print(f"[ObstacleClear] CACHE: obstacle_info={obstacle_info}")
+                            print(f"[{_ts()}] [ObstacleClear] CACHE: obstacle_info={obstacle_info}")
 
                         # Se tem obstáculo MOVE, tenta limpar mesmo que tile seja "walkable"
                         if obstacle_info['type'] == 'MOVE' and obstacle_info['clearable']:
                             if DEBUG_OBSTACLE_CLEARING:
-                                print(f"[ObstacleClear] CACHE: Detectou MOVE item, tentando limpar...")
+                                print(f"[{_ts()}] [ObstacleClear] CACHE: Detectou MOVE item, tentando limpar...")
                             cleared = self._attempt_clear_obstacle(dx, dy)
                             if cleared:
                                 props = self.analyzer.get_tile_properties(dx, dy)
                                 if DEBUG_OBSTACLE_CLEARING:
-                                    print(f"[ObstacleClear] CACHE: Após limpeza, walkable={props['walkable']}")
+                                    print(f"[{_ts()}] [ObstacleClear] CACHE: Após limpeza, walkable={props['walkable']}")
 
                     if props['walkable']:
                         with self._waypoints_lock:
@@ -802,7 +1330,7 @@ class Cavebot:
                     else:
                         # Obstáculo dinâmico detectado!
                         if DEBUG_OBSTACLE_CLEARING:
-                            print(f"[ObstacleClear] CACHE: Tile não walkable, tentando limpar...")
+                            print(f"[{_ts()}] [ObstacleClear] CACHE: Tile não walkable, tentando limpar...")
                         if OBSTACLE_CLEARING_ENABLED:
                             cleared = self._attempt_clear_obstacle(dx, dy)
                             if cleared:
@@ -818,7 +1346,7 @@ class Cavebot:
 
                         # Invalida cache
                         if DEBUG_OBSTACLE_CLEARING:
-                            print(f"[ObstacleClear] CACHE: Não conseguiu limpar, invalidando cache")
+                            print(f"[{_ts()}] [ObstacleClear] CACHE: Não conseguiu limpar, invalidando cache")
                         self.local_path_cache = []
                 else:
                     # Cache esgotado
@@ -841,17 +1369,107 @@ class Cavebot:
                 self._execute_smooth_step(dx, dy)
                 self.local_path_index += 1
 
-                if self.global_recalc_counter > 0:
-                    print(f"[Nav] ✓ Movimento local com sucesso. Resetando stuck.")
+                if self.global_recalc_counter > 0 or self._hard_stuck_count > 0:
+                    print(f"[{_ts()}] [Nav] ✓ Movimento local com sucesso. Resetando stuck.")
                     self.global_recalc_counter = 0
+                    self._hard_stuck_count = 0
             else:
                 self.global_recalc_counter += 1
                 self.current_state = self.STATE_STUCK
                 self.state_message = f"⚠️ Bloqueio local ({self.global_recalc_counter}/{GLOBAL_RECALC_LIMIT})"
-                print(f"[Nav] ⚠️ Bloqueio Local! ({self.global_recalc_counter}/{GLOBAL_RECALC_LIMIT})")
+                print(f"[{_ts()}] [Nav] ⚠️ Bloqueio Local! ({self.global_recalc_counter}/{GLOBAL_RECALC_LIMIT})")
 
                 if self.global_recalc_counter >= GLOBAL_RECALC_LIMIT:
-                    self._handle_hard_stuck(dest_x, dest_y, dest_z, my_x, my_y)
+                    # Passa o sub-destino (lookahead) para bloquear o tile correto
+                    self._handle_hard_stuck(target_local_x, target_local_y, dest_z, my_x, my_y)
+
+    def _try_precompute_next_step(self):
+        """
+        Pré-calcula o próximo passo durante o tempo de espera (blocked).
+        Lê o mapa e roda A* local para ter o (dx, dy) pronto quando next_walk_time expirar.
+        Só funciona para o caso comum: andando no mesmo andar com rota global existente.
+        """
+        try:
+            # Verificações rápidas: só precomputa em cenários simples
+            if state.is_in_combat or state.has_open_loot or state.is_processing_loot:
+                return
+            if state.is_runemaking or state.is_gm_detected:
+                return
+
+            # Ler posição e mapa
+            px, py, pz = get_player_pos(self.pm, self.base_addr)
+            player_id = self.pm.read_int(self.base_addr + OFFSET_PLAYER_ID)
+            success = self.memory_map.read_full_map(player_id)
+            if not success or not self.memory_map.is_calibrated:
+                return
+
+            # Auto-explore: precisa de spawn target no mesmo andar
+            if self.auto_explore_enabled:
+                spawn = self._current_spawn_target
+                if not spawn or spawn.cz != pz:
+                    return  # Floor change ou sem target - fluxo normal
+                if spawn.is_inside(px, py, pz):
+                    return  # Chegou - fluxo normal decide próximo spawn
+
+                target_pos = spawn.nearest_walkable_target(self.global_map)
+                if not target_pos:
+                    return
+
+                dest_x, dest_y, dest_z = target_pos
+            else:
+                # Waypoint mode
+                with self._waypoints_lock:
+                    if not self._waypoints:
+                        return
+                    wp = self._waypoints[self._current_index]
+                dest_x, dest_y, dest_z = wp['x'], wp['y'], wp['z']
+                if dest_z != pz:
+                    return  # Floor change - fluxo normal
+
+            # Precisamos de rota global existente para o lookahead
+            if not self.current_global_path:
+                return  # Rota global será calculada no fluxo normal
+
+            if not REALTIME_PATHING_ENABLED:
+                return  # Só funciona com realtime pathing
+
+            # Calcular lookahead (mesma lógica de _navigate_hybrid)
+            closest_idx = -1
+            min_dist_path = 9999
+            search_limit = min(len(self.current_global_path), 40)
+            for i in range(search_limit):
+                gx, gy, gz = self.current_global_path[i]
+                d = math.sqrt((gx - px)**2 + (gy - py)**2)
+                if d < min_dist_path:
+                    min_dist_path = d
+                    closest_idx = i
+
+            if closest_idx == -1:
+                return
+
+            path_remaining = self.current_global_path[closest_idx:]
+            lookahead = min(7, len(path_remaining) - 1)
+            while lookahead > 1:
+                lx, ly, _ = path_remaining[lookahead]
+                if abs(lx - px) <= 7 and abs(ly - py) <= 7:
+                    break
+                lookahead -= 1
+
+            tx, ty, _ = path_remaining[lookahead]
+            rel_x = tx - px
+            rel_y = ty - py
+
+            # A* local
+            step = self.walker.get_next_step(rel_x, rel_y)
+            if step:
+                self._precomputed_step = step
+                self._precomputed_pos = (px, py, pz)
+                if DEBUG_PATHFINDING:
+                    print(f"[{_ts()}] [Nav] 🔮 Pré-calculado: passo ({step[0]}, {step[1]}) em pos ({px}, {py}, {pz})")
+        except Exception as e:
+            # Qualquer erro: silenciosamente falha, fluxo normal assume
+            self._precomputed_step = None
+            self._precomputed_pos = None
 
     def _execute_smooth_step(self, dx, dy):
         """
@@ -912,11 +1530,11 @@ class Cavebot:
 
         # Debug opcional (pode ser ativado com DEBUG_PATHFINDING)
         if DEBUG_PATHFINDING:
-            print(f"[Movement] Ground ID={ground_id}, Speed={ground_speed}, "
+            print(f"[{_ts()}] [Movement] Ground ID={ground_id}, Speed={ground_speed}, "
                   f"Diagonal={is_diagonal}, Base={base_ms:.1f}ms, "
                   f"Jitter={jitter:.1f}ms, Total={total_ms:.1f}ms, Wait={wait_time:.3f}s")
 
-        #print(f"[Cavebot] 🚶 Andando ({dx},{dy}) - Próximo em {wait_time:.2f}s")
+        #print(f"[{_ts()}] [Cavebot] 🚶 Andando ({dx},{dy}) - Próximo em {wait_time:.2f}s")
 
         # 11. Define o tempo em que o bot vai "acordar" para o próximo passo
         # last_action_time = quando a ação foi executada (para outros usos)
@@ -924,14 +1542,52 @@ class Cavebot:
         self.last_action_time = time.time()
         self.next_walk_time = time.time() + wait_time
         if DEBUG_PATHFINDING:
-            print(f"[DEBUG] Set next_walk_time={self.next_walk_time:.3f} (now + {wait_time:.3f}s)")
+            print(f"[{_ts()}] [DEBUG] Set next_walk_time={self.next_walk_time:.3f} (now + {wait_time:.3f}s)")
 
     def _handle_hard_stuck(self, dest_x, dest_y, dest_z, my_x, my_y):
         """Marca bloqueio no mapa global e força nova rota (Desvio)."""
-        print("[Nav] HARD STUCK! Adicionando bloqueio temporário e recalculando...")
-        
+        self._hard_stuck_count += 1
+        print(f"[{_ts()}] [Nav] HARD STUCK! (#{self._hard_stuck_count}) Adicionando bloqueio temporário e recalculando...")
+
+        # Após 3+ hard stucks consecutivos, tentar floor change (bot pode estar preso em sala)
+        if self._hard_stuck_count >= 3:
+            print(f"[{_ts()}] [Nav] 🔀 {self._hard_stuck_count} hard stucks seguidos — verificando se precisa mudar de andar...")
+            # Tentar subir (z-1) e descer (z+1)
+            for try_z in [dest_z - 1, dest_z + 1]:
+                floor_target = self.analyzer.scan_for_floor_change(
+                    try_z, dest_z,
+                    player_abs_x=my_x, player_abs_y=my_y,
+                    transitions_by_floor=self.global_map._transitions_by_floor if self.global_map else None
+                )
+                if floor_target:
+                    fx, fy, ftype, fid = floor_target
+                    dist_obj = math.sqrt(fx**2 + fy**2)
+                    print(f"[{_ts()}] [Nav] 🪜 Encontrou {ftype} (ID:{fid}) em ({fx:+d},{fy:+d}) dist={dist_obj:.1f}")
+                    if dist_obj <= 1.5:
+                        print(f"[{_ts()}] [Nav] 🪜 Adjacente — usando {ftype}!")
+                        fc_success = self._handle_special_tile(fx, fy, ftype, fid, my_x, my_y, dest_z)
+                        self.current_global_path = []
+                        if fc_success:
+                            self.last_floor_change_time = time.time()
+                        self._hard_stuck_count = 0
+                        self.global_recalc_counter = 0
+                        return
+                    else:
+                        # Navegar até o tile especial
+                        abs_x = my_x + fx
+                        abs_y = my_y + fy
+                        path = self.global_map.get_path(
+                            (my_x, my_y, dest_z), (abs_x, abs_y, dest_z)
+                        )
+                        if path:
+                            print(f"[{_ts()}] [Nav] 🪜 Navegando até {ftype} em ({abs_x},{abs_y})")
+                            self.current_global_path = path
+                            self._hard_stuck_count = 0
+                            self.global_recalc_counter = 0
+                            return
+
         block_node = None
-        
+
         # Tenta bloquear o próximo nó da rota global
         if self.current_global_path:
             for node in self.current_global_path:
@@ -940,7 +1596,7 @@ class Cavebot:
                 if max(abs(nx - my_x), abs(ny - my_y)) == 1:
                     block_node = node
                     break
-        
+
         # Fallback: Bloqueia tile na direção do destino
         if not block_node:
             dx = 1 if dest_x > my_x else -1 if dest_x < my_x else 0
@@ -951,15 +1607,15 @@ class Cavebot:
         if block_node:
             bx, by, bz = block_node
             # Adiciona bloqueio de 20s no Global Map
-            print(f"[Nav] 🧱 Adicionando barreira virtual em ({bx}, {by}) por 20s.")
+            print(f"[{_ts()}] [Nav] 🧱 Adicionando barreira virtual em ({bx}, {by}) por 20s.")
             self.global_map.add_temp_block(bx, by, bz, duration=20)
         else:
-            print("[Nav] ❓ Não foi possível identificar o tile de bloqueio.")
-        
+            print(f"[{_ts()}] [Nav] ❓ Não foi possível identificar o tile de bloqueio.")
+
         # Limpa rota para forçar recálculo imediato na próxima volta
-        print("[Nav] 🔄 Forçando recálculo de rota global...")
+        print(f"[{_ts()}] [Nav] 🔄 Forçando recálculo de rota global...")
         if self.current_global_path:
-            print(f"[DEBUG] Path limpo em: hard_stuck (tinha {len(self.current_global_path)} nós)")
+            print(f"[{_ts()}] [DEBUG] Path limpo em: hard_stuck (tinha {len(self.current_global_path)} nós)")
         self.current_global_path = []
         self.global_recalc_counter = 0
 
@@ -984,7 +1640,7 @@ class Cavebot:
 
         if self._current_index == 0:
             # Completou um loop e voltou ao início
-            print(f"[Cavebot] 🔁 Loop completo! Reiniciando do WP #0")
+            print(f"[{_ts()}] [Cavebot] 🔁 Loop completo! Reiniciando do WP #0")
 
     def _move_step(self, dx, dy):
         """Envia o pacote de andar."""
@@ -992,14 +1648,19 @@ class Cavebot:
         if opcode:
             self.packet.walk(opcode)
         else:
-            print(f"[Cavebot] Direção inválida: {dx}, {dy}")
+            print(f"[{_ts()}] [Cavebot] Direção inválida: {dx}, {dy}")
 
     def _handle_special_tile(self, rel_x, rel_y, ftype, special_id, px, py, pz):
         """Executa a ação correta para tiles especiais (escadas, buracos, rope)."""
+        # Re-check combate antes de executar floor change (race condition com trainer)
+        if state.is_in_combat:
+            print(f"[{_ts()}] [Cavebot] Abortando floor change ({ftype}) — combate iniciado.")
+            return False
+
         # Aguarda personagem parar antes de interagir com tile especial
         if not wait_until_stopped(self.pm, self.base_addr, packet=self.packet, timeout=1.5):
             if DEBUG_PATHFINDING:
-                print(f"[Cavebot] ⏳ Aguardando parada para usar {ftype}...")
+                print(f"[{_ts()}] [Cavebot] ⏳ Aguardando parada para usar {ftype}...")
             return  # Tenta novamente no próximo ciclo
 
         abs_x = px + rel_x
@@ -1011,6 +1672,11 @@ class Cavebot:
             # Essas escadas/buracos sobem/descem IMEDIATAMENTE ao pisar nelas.
             # O personagem é TELETRANSPORTADO para o novo andar assim que o servidor processa.
             if rel_x != 0 or rel_y != 0:
+                # Se diagonal, primeiro alinha para cardinal-adjacente (evita step diagonal unreliable)
+                if rel_x != 0 and rel_y != 0:
+                    self._move_step(rel_x, 0)
+                    self.next_walk_time = time.time() + 0.8
+                    return  # Próximo ciclo vai pisar no tile cardinalmente
                 self._move_step(rel_x, rel_y)
                 self.next_walk_time = time.time() + 1.0  # Previne steps duplicados durante floor change
                 # CRÍTICO: Aguarda o servidor processar a mudança de andar
@@ -1024,15 +1690,15 @@ class Cavebot:
 
             if chebyshev == 0:
                 # Já estamos em cima do sewer grate, apenas usa
-                print(f"[Cavebot] Em cima do sewer grate, executando USE. Chebyshev = {chebyshev}")
+                print(f"[{_ts()}] [Cavebot] Em cima do sewer grate, executando USE. Chebyshev = {chebyshev}")
                 self._use_down_tile(target_pos, special_id, 0, 0)
             elif chebyshev == 1:
                 # Adjacente (inclui cardinal e diagonal): usa à distância
-                print(f"[Cavebot] Adjacente ao sewer grate (cardinal ou diagonal), executando USE à distância. Chebyshev = {chebyshev}")
+                print(f"[{_ts()}] [Cavebot] Adjacente ao sewer grate (cardinal ou diagonal), executando USE à distância. Chebyshev = {chebyshev}")
                 self._use_down_tile(target_pos, special_id, rel_x, rel_y)
             else:
                 # Mais longe: alinhar para adjacência e tentar novamente
-                print(f"[Cavebot] Longe do sewer grate (Chebyshev = {chebyshev}), alinhando para adjacência.")
+                print(f"[{_ts()}] [Cavebot] Longe do sewer grate (Chebyshev = {chebyshev}), alinhando para adjacência.")
                 if not self._ensure_cardinal_adjacent(rel_x, rel_y, label="sewer grate"):
                     return
             return
@@ -1041,15 +1707,15 @@ class Cavebot:
             chebyshev = max(abs(rel_x), abs(rel_y))
             if chebyshev == 0:
                 # Já estamos em cima da ladder, apenas usa.
-                print(f"[Cavebot] Em cima da ladder, executando USE. Chebyshev = {chebyshev}")
+                print(f"[{_ts()}] [Cavebot] Em cima da ladder, executando USE. Chebyshev = {chebyshev}")
                 self._use_ladder_tile(target_pos, special_id, 0, 0)
             elif chebyshev == 1:
                 # Adjacente (inclui cardinal e diagonal): usa à distância.
-                print(f"[Cavebot] Adjacente à ladder (cardinal ou diagonal), executando USE à distância. Chebyshev = {chebyshev}")
+                print(f"[{_ts()}] [Cavebot] Adjacente à ladder (cardinal ou diagonal), executando USE à distância. Chebyshev = {chebyshev}")
                 self._use_ladder_tile(target_pos, special_id, rel_x, rel_y)
             else:
                 # Mais longe: alinhar para adjacência e tentar novamente.
-                print(f"[Cavebot] Longe da ladder (Chebyshev = {chebyshev}), alinhando para adjacência.")
+                print(f"[{_ts()}] [Cavebot] Longe da ladder (Chebyshev = {chebyshev}), alinhando para adjacência.")
                 if not self._ensure_cardinal_adjacent(rel_x, rel_y, label="ladder"):
                     return
             return
@@ -1057,10 +1723,11 @@ class Cavebot:
         if ftype == 'ROPE':
             # Rope EXIGE adjacência - o personagem NÃO pode estar em cima do rope spot
             chebyshev = max(abs(rel_x), abs(rel_y))
+            print(f"[{_ts()}] [Cavebot] [ROPE] Iniciando: pos=({px},{py},{pz}) rel=({rel_x},{rel_y}) chebyshev={chebyshev} special_id={special_id}")
 
             if chebyshev == 0:
                 # Estamos EM CIMA do rope spot - precisamos sair para uma posição adjacente
-                print("[Cavebot] ⚠️ Em cima do rope spot! Movendo para posição adjacente...")
+                print(f"[{_ts()}] [Cavebot] ⚠️ Em cima do rope spot! Movendo para posição adjacente...")
 
                 # Procura um tile adjacente walkable para se mover
                 adjacent_options = [
@@ -1073,36 +1740,49 @@ class Cavebot:
                     props = self.analyzer.get_tile_properties(adj_dx, adj_dy)
                     if props['walkable']:
                         self._move_step(adj_dx, adj_dy)
-                        self.next_walk_time = time.time() + 0.5  # Previne steps duplicados
-                        print(f"[Cavebot] Movendo para ({adj_dx}, {adj_dy}) para usar rope.")
+                        self.next_walk_time = time.time() + 0.5
+                        print(f"[{_ts()}] [Cavebot] Movendo para ({adj_dx}, {adj_dy}) para usar rope.")
                         moved = True
+                        time.sleep(0.6)
+                        # Atualiza posição relativa e absoluta após o movimento
+                        rel_x = -adj_dx
+                        rel_y = -adj_dy
+                        px = px + adj_dx
+                        py = py + adj_dy
                         break
 
                 if not moved:
-                    print("[Cavebot] ⚠️ Nenhum tile adjacente livre para sair do rope spot!")
-                return  # Volta no próximo ciclo para tentar usar a rope
+                    print(f"[{_ts()}] [Cavebot] ⚠️ Nenhum tile adjacente livre para sair do rope spot!")
+                    return False
+                # Continua para usar a rope agora que estamos adjacentes
+                print(f"[{_ts()}] [Cavebot] [ROPE] Saiu do rope spot. Nova pos=({px},{py}) rel=({rel_x},{rel_y})")
 
             if chebyshev > 1:
                 # Está longe - precisa se aproximar
                 if not self._ensure_cardinal_adjacent(rel_x, rel_y):
-                    return
+                    return False
 
             # chebyshev == 1: Está adjacente, pode usar a rope
+            print(f"[{_ts()}] [Cavebot] [ROPE] Adjacente, preparando uso. rel=({rel_x},{rel_y})")
             rope_source = self._get_rope_source_position()
             if not rope_source:
-                print("[Cavebot] Corda (3003) não encontrada em containers ou mãos.")
-                return
+                print(f"[{_ts()}] [Cavebot] Corda (3003) não encontrada em containers ou mãos.")
+                return False
 
             if not self._clear_rope_spot(rel_x, rel_y, px, py, pz, special_id or 386):
-                return
+                print(f"[{_ts()}] [Cavebot] [ROPE] _clear_rope_spot retornou False, abortando uso da corda.")
+                return False
+
+            # Re-check combate após sleeps (race condition com trainer)
+            if state.is_in_combat:
+                print(f"[{_ts()}] [Cavebot] Abortando rope — combate iniciado durante preparação.")
+                return False
 
             self.packet.use_with(rope_source, ROPE_ITEM_ID, 0, target_pos, special_id or 386, 0,
                                  rel_x=rel_x, rel_y=rel_y)
-            print("[Cavebot] Ação: USAR CORDA para subir de andar.")
-            # CRÍTICO: Aguarda o servidor processar a mudança de andar
-            # Rope teletransporta o jogador para o andar de cima
+            print(f"[{_ts()}] [Cavebot] Ação: USAR CORDA para subir de andar.")
             time.sleep(1)
-            return
+            return True
 
         if ftype == 'SHOVEL':
             # Shovel precisa de pá no inventário/equipamento
@@ -1111,13 +1791,13 @@ class Cavebot:
 
             shovel_source = self._get_shovel_source_position()
             if not shovel_source:
-                print("[Cavebot] Pá (3457) não encontrada em containers ou mãos.")
+                print(f"[{_ts()}] [Cavebot] Pá (3457) não encontrada em containers ou mãos.")
                 return
 
             # Obtém o ID do stone pile no tile
             shovel_tile = self.memory_map.get_tile_visible(rel_x, rel_y)
             if not shovel_tile or shovel_tile.count == 0:
-                print("[Cavebot] Tile do shovel spot não encontrado na memória.")
+                print(f"[{_ts()}] [Cavebot] Tile do shovel spot não encontrado na memória.")
                 return
 
             top_id = shovel_tile.get_top_item()
@@ -1127,13 +1807,13 @@ class Cavebot:
             valid_shovel_ids = FLOOR_CHANGE.get('SHOVEL', set())
 
             if top_id not in valid_shovel_ids:
-                print(f"[Cavebot] Item {top_id} no shovel spot não é um stone pile válido. Esperado: {valid_shovel_ids}")
+                print(f"[{_ts()}] [Cavebot] Item {top_id} no shovel spot não é um stone pile válido. Esperado: {valid_shovel_ids}")
                 return
 
             # Usa a pá no stone pile para criar o buraco (593 → 594)
             self.packet.use_with(shovel_source, SHOVEL_ITEM_ID, 0, target_pos, top_id, 0,
                                  rel_x=rel_x, rel_y=rel_y)
-            print(f"[Cavebot] Ação: USAR PÁ para abrir buraco. (Stone pile ID: {top_id})")
+            print(f"[{_ts()}] [Cavebot] Ação: USAR PÁ para abrir buraco. (Stone pile ID: {top_id})")
 
             # Aguarda o servidor processar (stone pile se torna hole)
             time.sleep(1)
@@ -1142,7 +1822,7 @@ class Cavebot:
     def _use_ladder_tile(self, target_pos, ladder_id, rel_x=0, rel_y=0):
         """Executa o packet de USE na ladder quando estivermos sobre ela."""
         if ladder_id == 0:
-            print("[Cavebot] Ladder sem ID especial, abortando USE.")
+            print(f"[{_ts()}] [Cavebot] Ladder sem ID especial, abortando USE.")
             return
         stack_pos = 0
         ladder_tile = self.memory_map.get_tile_visible(rel_x, rel_y)
@@ -1152,10 +1832,10 @@ class Cavebot:
                 if item_id == ladder_id:
                     stack_pos = idx
         else:
-            print("[Cavebot] Tile da ladder não encontrado na memória, usando stack_pos=0.")
+            print(f"[{_ts()}] [Cavebot] Tile da ladder não encontrado na memória, usando stack_pos=0.")
 
         self.packet.use_item(target_pos, ladder_id, stack_pos=stack_pos)
-        print(f"[Cavebot] Ação: USAR LADDER (ID: {ladder_id}, target_pos: {target_pos}, rel_x {rel_x}, rel_y {rel_y}, stack_pos: {stack_pos})")
+        print(f"[{_ts()}] [Cavebot] Ação: USAR LADDER (ID: {ladder_id}, target_pos: {target_pos}, rel_x {rel_x}, rel_y {rel_y}, stack_pos: {stack_pos})")
         # CRÍTICO: Aguarda o servidor processar a mudança de andar
         # Ladders teletransportam o jogador assim que o servidor processa
         time.sleep(0.6)
@@ -1163,7 +1843,7 @@ class Cavebot:
     def _use_down_tile(self, target_pos, tile_id, rel_x=0, rel_y=0):
         """Executa o packet de USE em tiles que descem (sewer grate, etc.)."""
         if tile_id == 0:
-            print("[Cavebot] Sewer grate sem ID especial, abortando USE.")
+            print(f"[{_ts()}] [Cavebot] Sewer grate sem ID especial, abortando USE.")
             return
 
         stack_pos = 0
@@ -1175,10 +1855,10 @@ class Cavebot:
                 if item_id == tile_id:
                     stack_pos = idx
         else:
-            print("[Cavebot] Tile do sewer grate não encontrado na memória, usando stack_pos=0.")
+            print(f"[{_ts()}] [Cavebot] Tile do sewer grate não encontrado na memória, usando stack_pos=0.")
 
         self.packet.use_item(target_pos, tile_id, stack_pos=stack_pos)
-        print(f"[Cavebot] Ação: USAR SEWER GRATE (ID: {tile_id}, target_pos: {target_pos}, rel_x {rel_x}, rel_y {rel_y}, stack_pos: {stack_pos})")
+        print(f"[{_ts()}] [Cavebot] Ação: USAR SEWER GRATE (ID: {tile_id}, target_pos: {target_pos}, rel_x {rel_x}, rel_y {rel_y}, stack_pos: {stack_pos})")
 
         # CRÍTICO: Aguarda o servidor processar a mudança de andar
         # Sewer grates teletransportam o jogador assim que o servidor processa
@@ -1223,19 +1903,19 @@ class Cavebot:
             return True
 
         if chebyshev == 0:
-            print(f"[Cavebot] {label.capitalize()} inválido (rel=0,0 - mesmo tile do player).")
+            print(f"[{_ts()}] [Cavebot] {label.capitalize()} inválido (rel=0,0 - mesmo tile do player).")
             return False
 
         # Está longe (Chebyshev > 1): tenta se aproximar
         # Prioridade: move primeiro no eixo com maior distância
         if abs(rel_x) > abs(rel_y):
             # X é maior: move em X para chegar perto
-            print(f"[Cavebot] {label.capitalize()} longe (Chebyshev={chebyshev}), movendo no eixo X...")
+            print(f"[{_ts()}] [Cavebot] {label.capitalize()} longe (Chebyshev={chebyshev}), movendo no eixo X...")
             self._move_step(1 if rel_x > 0 else -1, 0)
             self.next_walk_time = time.time() + 0.5  # Previne steps duplicados
         else:
             # Y é maior ou igual: move em Y
-            print(f"[Cavebot] {label.capitalize()} longe (Chebyshev={chebyshev}), movendo no eixo Y...")
+            print(f"[{_ts()}] [Cavebot] {label.capitalize()} longe (Chebyshev={chebyshev}), movendo no eixo Y...")
             self._move_step(0, 1 if rel_y > 0 else -1)
             self.next_walk_time = time.time() + 0.5  # Previne steps duplicados
 
@@ -1279,22 +1959,27 @@ class Cavebot:
         """
         tile = self.memory_map.get_tile_visible(rel_x, rel_y)
         if not tile or tile.count == 0:
-            print("[Cavebot] Tile do rope spot não encontrado na memória.")
+            print(f"[{_ts()}] [Cavebot] Tile do rope spot não encontrado na memória.")
             return False
 
         top_id = tile.get_top_item()
         rope_id = rope_tile_id or 386
+        print(f"[{_ts()}] [Cavebot] [ROPE] _clear_rope_spot: top_id={top_id}, rope_id={rope_id}, items={tile.count}")
 
         if top_id in (0, rope_id):
             return True
 
+        # Ground tiles (cave floor, grass, etc.) don't block rope usage
+        if top_id in GROUND_SPEEDS:
+            return True
+
         if top_id == 99:
-            print("[Cavebot] Rope spot bloqueado por criatura/jogador. Não moveremos por enquanto.")
+            print(f"[{_ts()}] [Cavebot] Rope spot bloqueado por criatura/jogador. Não moveremos por enquanto.")
             return False
 
         # NOVO: Se o item está na lista de exceção (poças, etc.), considera como "limpo"
         if top_id in ROPE_SPOT_IGNORE_IDS:
-            print(f"[Cavebot] Item {top_id} no rope spot (permitido). Rope pode ser usada.")
+            print(f"[{_ts()}] [Cavebot] Item {top_id} no rope spot (permitido). Rope pode ser usada.")
             return True
 
         # Calcula stack_pos do item no topo
@@ -1304,8 +1989,9 @@ class Cavebot:
         from_pos = get_ground_pos(px + rel_x, py + rel_y, pz)
         drop_pos = get_ground_pos(px, py, pz)
         self.packet.move_item(from_pos, drop_pos, top_id, 1, stack_pos=stack_pos)
-        print(f"[Cavebot] Movendo item {top_id} (stack_pos={stack_pos}) para liberar rope spot.")
-        return False
+        print(f"[{_ts()}] [Cavebot] Movendo item {top_id} (stack_pos={stack_pos}) para liberar rope spot.")
+        time.sleep(0.4)
+        return True
 
     # ==================================================================
     # OBSTACLE CLEARING - Move mesas/cadeiras do caminho
@@ -1323,15 +2009,15 @@ class Cavebot:
             bool: True se conseguiu limpar, False caso contrário
         """
         if DEBUG_OBSTACLE_CLEARING or DEBUG_STACK_CLEARING:
-            print(f"[ObstacleClear] _attempt_clear_obstacle chamado para rel({rel_x},{rel_y})")
+            print(f"[{_ts()}] [ObstacleClear] _attempt_clear_obstacle chamado para rel({rel_x},{rel_y})")
 
         obstacle = self.analyzer.get_obstacle_type(rel_x, rel_y)
         if DEBUG_OBSTACLE_CLEARING or DEBUG_STACK_CLEARING:
-            print(f"[ObstacleClear] get_obstacle_type retornou: {obstacle}")
+            print(f"[{_ts()}] [ObstacleClear] get_obstacle_type retornou: {obstacle}")
 
         if not obstacle['clearable']:
             if DEBUG_OBSTACLE_CLEARING or DEBUG_STACK_CLEARING:
-                print(f"[ObstacleClear] Obstáculo não é clearable, abortando")
+                print(f"[{_ts()}] [ObstacleClear] Obstáculo não é clearable, abortando")
             return False
 
         px, py, pz = get_player_pos(self.pm, self.base_addr)
@@ -1340,23 +2026,23 @@ class Cavebot:
         if obstacle['type'] == 'MOVE':
             if not OBSTACLE_CLEARING_ENABLED:
                 if DEBUG_OBSTACLE_CLEARING:
-                    print(f"[ObstacleClear] OBSTACLE_CLEARING_ENABLED=False, abortando")
+                    print(f"[{_ts()}] [ObstacleClear] OBSTACLE_CLEARING_ENABLED=False, abortando")
                 return False
             if DEBUG_OBSTACLE_CLEARING:
-                print(f"[ObstacleClear] Tipo MOVE detectado, chamando _push_move_item")
+                print(f"[{_ts()}] [ObstacleClear] Tipo MOVE detectado, chamando _push_move_item")
             return self._push_move_item(target_x, target_y, pz, rel_x, rel_y, obstacle)
 
         if obstacle['type'] == 'STACK':
             if not STACK_CLEARING_ENABLED:
                 if DEBUG_STACK_CLEARING:
-                    print(f"[StackClear] STACK_CLEARING_ENABLED=False, abortando")
+                    print(f"[{_ts()}] [StackClear] STACK_CLEARING_ENABLED=False, abortando")
                 return False
             if DEBUG_STACK_CLEARING:
-                print(f"[StackClear] Tipo STACK detectado, chamando _push_stack_item")
+                print(f"[{_ts()}] [StackClear] Tipo STACK detectado, chamando _push_stack_item")
             return self._push_stack_item(target_x, target_y, pz, rel_x, rel_y, obstacle)
 
         if DEBUG_OBSTACLE_CLEARING or DEBUG_STACK_CLEARING:
-            print(f"[ObstacleClear] Tipo {obstacle['type']} não suportado")
+            print(f"[{_ts()}] [ObstacleClear] Tipo {obstacle['type']} não suportado")
         return False
 
     def _push_move_item(self, target_x, target_y, pz, rel_x, rel_y, obstacle):
@@ -1371,9 +2057,9 @@ class Cavebot:
         px, py, _ = get_player_pos(self.pm, self.base_addr)
 
         if DEBUG_OBSTACLE_CLEARING:
-            print(f"[ObstacleClear] Mesa em rel({rel_x},{rel_y}) abs({target_x},{target_y})")
-            print(f"[ObstacleClear] Player em ({px},{py},{pz})")
-            print(f"[ObstacleClear] Item ID={obstacle['item_id']}, stack_pos={obstacle['stack_pos']}")
+            print(f"[{_ts()}] [ObstacleClear] Mesa em rel({rel_x},{rel_y}) abs({target_x},{target_y})")
+            print(f"[{_ts()}] [ObstacleClear] Player em ({px},{py},{pz})")
+            print(f"[{_ts()}] [ObstacleClear] Item ID={obstacle['item_id']}, stack_pos={obstacle['stack_pos']}")
 
         # ============================================================
         # PRIORIDADE 1: Tiles adjacentes ao PLAYER (cardinais)
@@ -1405,7 +2091,7 @@ class Cavebot:
         # PRIORIDADE 3 (FALLBACK): Tiles adjacentes à MESA
         # ============================================================
         if DEBUG_OBSTACLE_CLEARING:
-            print(f"[ObstacleClear] Fallback: tentando empurrar para tiles adjacentes à mesa")
+            print(f"[{_ts()}] [ObstacleClear] Fallback: tentando empurrar para tiles adjacentes à mesa")
 
         # Todas as 8 direções relativas à mesa
         mesa_adjacent = [
@@ -1422,7 +2108,7 @@ class Cavebot:
             return True
 
         if DEBUG_OBSTACLE_CLEARING:
-            print(f"[ObstacleClear] Nenhum tile livre encontrado em nenhuma prioridade!")
+            print(f"[{_ts()}] [ObstacleClear] Nenhum tile livre encontrado em nenhuma prioridade!")
         return False
 
     def _try_move_to_tiles(self, directions, rel_x, rel_y, target_x, target_y, pz, px, py, obstacle, ref_type="player"):
@@ -1463,7 +2149,7 @@ class Cavebot:
 
             if not tile or not tile.items:
                 if DEBUG_OBSTACLE_CLEARING:
-                    print(f"[ObstacleClear] ({check_rel_x},{check_rel_y}) - tile vazio/inexistente")
+                    print(f"[{_ts()}] [ObstacleClear] ({check_rel_x},{check_rel_y}) - tile vazio/inexistente")
                 continue
 
             # Verificar se tem item bloqueador
@@ -1471,7 +2157,7 @@ class Cavebot:
             for item_id in tile.items:
                 if item_id in MOVE_IDS or item_id in BLOCKING_IDS:
                     if DEBUG_OBSTACLE_CLEARING:
-                        print(f"[ObstacleClear] ({check_rel_x},{check_rel_y}) - bloqueador {item_id}")
+                        print(f"[{_ts()}] [ObstacleClear] ({check_rel_x},{check_rel_y}) - bloqueador {item_id}")
                     has_blocking = True
                     break
 
@@ -1482,12 +2168,12 @@ class Cavebot:
             dest_props = self.analyzer.get_tile_properties(check_rel_x, check_rel_y)
             if not dest_props['walkable']:
                 if DEBUG_OBSTACLE_CLEARING:
-                    print(f"[ObstacleClear] ({check_rel_x},{check_rel_y}) - não walkable")
+                    print(f"[{_ts()}] [ObstacleClear] ({check_rel_x},{check_rel_y}) - não walkable")
                 continue
 
             # Tile válido! Executar movimento
             if DEBUG_OBSTACLE_CLEARING:
-                print(f"[ObstacleClear] Movendo para ({check_rel_x},{check_rel_y}) abs({dest_x},{dest_y})")
+                print(f"[{_ts()}] [ObstacleClear] Movendo para ({check_rel_x},{check_rel_y}) abs({dest_x},{dest_y})")
 
             from_pos = get_ground_pos(target_x, target_y, pz)
             to_pos = get_ground_pos(dest_x, dest_y, pz)
@@ -1498,7 +2184,7 @@ class Cavebot:
                 stack_pos=obstacle['stack_pos']
             )
 
-            print(f"[Cavebot] 📦 Moveu mesa {obstacle['item_id']} para ({dest_x},{dest_y})")
+            print(f"[{_ts()}] [Cavebot] 📦 Moveu mesa {obstacle['item_id']} para ({dest_x},{dest_y})")
             # Delay humanizado após mover obstáculo (1s ± 50%)
             gauss_wait(1.0, 50)
             return True
@@ -1520,9 +2206,9 @@ class Cavebot:
         px, py, _ = get_player_pos(self.pm, self.base_addr)
 
         if DEBUG_STACK_CLEARING:
-            print(f"[StackClear] Parcel em rel({rel_x},{rel_y}) abs({target_x},{target_y})")
-            print(f"[StackClear] Player em ({px},{py},{pz})")
-            print(f"[StackClear] Item ID={obstacle['item_id']}, stack_pos={obstacle['stack_pos']}")
+            print(f"[{_ts()}] [StackClear] Parcel em rel({rel_x},{rel_y}) abs({target_x},{target_y})")
+            print(f"[{_ts()}] [StackClear] Player em ({px},{py},{pz})")
+            print(f"[{_ts()}] [StackClear] Item ID={obstacle['item_id']}, stack_pos={obstacle['stack_pos']}")
 
         # ============================================================
         # PRIORIDADE 0: Mover para o pé do player (0, 0)
@@ -1531,7 +2217,7 @@ class Cavebot:
         dest_x, dest_y = px, py
 
         if DEBUG_STACK_CLEARING:
-            print(f"[StackClear] Tentando mover para pé do player ({dest_x},{dest_y})")
+            print(f"[{_ts()}] [StackClear] Tentando mover para pé do player ({dest_x},{dest_y})")
 
         from_pos = get_ground_pos(target_x, target_y, pz)
         to_pos = get_ground_pos(dest_x, dest_y, pz)
@@ -1542,7 +2228,7 @@ class Cavebot:
             stack_pos=obstacle['stack_pos']
         )
 
-        print(f"[Cavebot] 📦 Moveu parcel {obstacle['item_id']} para pé do player ({dest_x},{dest_y})")
+        print(f"[{_ts()}] [Cavebot] 📦 Moveu parcel {obstacle['item_id']} para pé do player ({dest_x},{dest_y})")
         # Delay humanizado após mover obstáculo (1s ± 50%)
         gauss_wait(1.0, 50)
         return True
@@ -1551,10 +2237,14 @@ class Cavebot:
         # podemos adicionar fallback usando _try_move_to_tiles() com as prioridades 1-4.
         # Por agora, mover para (0,0) é sempre válido para parcels.
 
-    def _check_stuck(self, px, py, pz, current_index):
+    def _check_stuck(self, px, py, pz, current_index=None, mode="waypoint"):
         """
         Detecta se o player está travado.
         Usa is_player_moving como fonte primária de detecção.
+
+        Args:
+            mode: "waypoint" = pula para próximo waypoint
+                  "auto_explore" = pula spawn atual
 
         Lógica:
         - Se estamos em rota e o personagem NÃO está se movendo
@@ -1574,22 +2264,33 @@ class Cavebot:
             self.stuck_counter += 1
 
             if DEBUG_PATHFINDING:
-                print(f"[Cavebot] ⚠️ Parado há {self.stuck_counter} ciclos (is_moving=False)")
+                print(f"[{_ts()}] [Cavebot] ⚠️ Parado há {self.stuck_counter} ciclos (is_moving=False)")
 
             if self.stuck_counter >= self.stuck_threshold:
                 stuck_time = self.stuck_counter * self.walk_delay
                 self.current_state = self.STATE_STUCK
-                self.state_message = f"🧱 Stuck! Pulando WP #{current_index + 1}"
-                print(f"[Cavebot] ⚠️ STUCK! {stuck_time:.1f}s parado ({px}, {py}, {pz})")
 
-                # Estratégia de recuperação: Pula para próximo waypoint
-                with self._waypoints_lock:
-                    if len(self._waypoints) > 1:
-                        print(f"[Cavebot] Pulando para próximo waypoint...")
-                        self._advance_waypoint()
-                        if self.current_global_path:
-                            print(f"[DEBUG] Path limpo em: check_stuck (tinha {len(self.current_global_path)} nós)")
-                        self.current_global_path = []
+                if mode == "auto_explore":
+                    # Estratégia de recuperação: Pula spawn atual
+                    self.state_message = f"🧱 Stuck! Pulando spawn"
+                    print(f"[{_ts()}] [AutoExplore] ⚠️ STUCK! {stuck_time:.1f}s parado ({px}, {py}, {pz}). Pulando spawn.")
+                    if self._current_spawn_target:
+                        self._current_spawn_target.last_visited = time.time()
+                        self._current_spawn_target = None
+                    if self.current_global_path:
+                        print(f"[{_ts()}] [DEBUG] Path limpo em: check_stuck_explore (tinha {len(self.current_global_path)} nós)")
+                    self.current_global_path = []
+                else:
+                    # Estratégia de recuperação: Pula para próximo waypoint
+                    self.state_message = f"🧱 Stuck! Pulando WP #{current_index + 1 if current_index is not None else '?'}"
+                    print(f"[{_ts()}] [Cavebot] ⚠️ STUCK! {stuck_time:.1f}s parado ({px}, {py}, {pz})")
+                    with self._waypoints_lock:
+                        if len(self._waypoints) > 1:
+                            print(f"[{_ts()}] [Cavebot] Pulando para próximo waypoint...")
+                            self._advance_waypoint()
+                            if self.current_global_path:
+                                print(f"[{_ts()}] [DEBUG] Path limpo em: check_stuck (tinha {len(self.current_global_path)} nós)")
+                            self.current_global_path = []
 
                 self.stuck_counter = 0
         else:
@@ -1617,7 +2318,7 @@ class Cavebot:
             # Se estava em pausa quando desabilitou, cancela
             if state.is_afk_paused:
                 state.set_afk_pause(False)
-                print("[Cavebot] AFK pause cancelado (feature desabilitada)")
+                print(f"[{_ts()}] [Cavebot] AFK pause cancelado (feature desabilitada)")
             return False
 
         # === ATUALMENTE EM PAUSA AFK (via state global) ===
@@ -1633,7 +2334,7 @@ class Cavebot:
         if self._afk_pause_active and not state.is_afk_paused:
             self._afk_pause_active = False
             self._schedule_next_afk_pause(afk_settings)
-            print(f"[Cavebot] 😴 AFK pause finalizado. Retomando navegação.")
+            print(f"[{_ts()}] [Cavebot] 😴 AFK pause finalizado. Retomando navegação.")
             return False
 
         # === VERIFICAR SE DEVE INICIAR NOVA PAUSA ===
@@ -1651,7 +2352,7 @@ class Cavebot:
             # Adia por 30-60 segundos
             self._afk_next_pause_time = now + random.uniform(30, 60)
             if DEBUG_PATHFINDING:
-                print("[Cavebot] AFK pause adiado (condições não seguras)")
+                print(f"[{_ts()}] [Cavebot] AFK pause adiado (condições não seguras)")
             return False
 
         # Iniciar pausa AFK (via state global - pausa TODOS os módulos)
@@ -1661,7 +2362,7 @@ class Cavebot:
 
         self.current_state = self.STATE_PAUSED
         self.state_message = f"😴 AFK ({duration:.0f}s)"
-        print(f"[Cavebot] 😴 Iniciando AFK pause por {duration:.0f}s (humanização)")
+        print(f"[{_ts()}] [Cavebot] 😴 Iniciando AFK pause por {duration:.0f}s (humanização)")
 
         return True
 
@@ -1683,7 +2384,7 @@ class Cavebot:
         self._afk_next_pause_time = time.time() + next_interval
 
         if DEBUG_PATHFINDING:
-            print(f"[Cavebot] Próximo AFK pause em {next_interval/60:.1f} minutos")
+            print(f"[{_ts()}] [Cavebot] Próximo AFK pause em {next_interval/60:.1f} minutos")
 
     def _is_safe_for_afk_pause(self) -> bool:
         """Verifica se é seguro iniciar uma pausa AFK."""
@@ -1709,7 +2410,7 @@ class Cavebot:
             player_id = self.pm.read_int(self.base_addr + OFFSET_PLAYER_ID)
 
             scanner = BattleListScanner(self.pm, self.base_addr)
-            creatures = scanner.get_creatures_in_range((px, py, pz), 8, same_floor_only=True)
+            creatures = scanner.get_creatures_in_range((px, py, pz), 8, player_z=pz)
 
             # Filtra o próprio player
             creatures = [c for c in creatures if c.id != player_id]
@@ -1717,11 +2418,11 @@ class Cavebot:
             if creatures:
                 if DEBUG_PATHFINDING:
                     names = [c.name for c in creatures[:3]]
-                    print(f"[Cavebot] AFK adiado - criaturas próximas: {names}")
+                    print(f"[{_ts()}] [Cavebot] AFK adiado - criaturas próximas: {names}")
                 return False
         except Exception as e:
             if DEBUG_PATHFINDING:
-                print(f"[Cavebot] Erro ao verificar criaturas: {e}")
+                print(f"[{_ts()}] [Cavebot] Erro ao verificar criaturas: {e}")
             return False
 
         return True
@@ -1795,10 +2496,10 @@ class Cavebot:
         info = self.advancement_tracker.get_advancement_info()
         if DEBUG_ADVANCEMENT or DEBUG_PATHFINDING:
             if info['mode'] == 'nodes':
-                print(f"[Cavebot] ⚠️ Sem progresso! Modo: nodes, taxa: {info['node_rate']:.2f} nodes/s")
+                print(f"[{_ts()}] [Cavebot] ⚠️ Sem progresso! Modo: nodes, taxa: {info['node_rate']:.2f} nodes/s")
             else:
-                print(f"[Cavebot] ⚠️ Sem progresso! Modo: distância, taxa: {info['distance_rate']:.2f} SQM/s")
-            print(f"[Cavebot] Player '{player.name}' adjacente em ({player.position.x}, {player.position.y}). Resposta: {response}")
+                print(f"[{_ts()}] [Cavebot] ⚠️ Sem progresso! Modo: distância, taxa: {info['distance_rate']:.2f} SQM/s")
+            print(f"[{_ts()}] [Cavebot] Player '{player.name}' adjacente em ({player.position.x}, {player.position.y}). Resposta: {response}")
 
         if response == 'WAIT':
             # Ficar parado 1-4 segundos (gaussiano)
@@ -1808,7 +2509,7 @@ class Cavebot:
 
             self.current_state = self.STATE_PAUSED
             self.state_message = f"⏸️ Aguardando player passar ({wait_time:.1f}s)"
-            print(f"[Cavebot] ⏸️ Aguardando player '{player.name}' passar ({wait_time:.1f}s)")
+            print(f"[{_ts()}] [Cavebot] ⏸️ Aguardando player '{player.name}' passar ({wait_time:.1f}s)")
 
             time.sleep(wait_time)
             # Após esperar, limpa o tracker para dar nova chance
@@ -1820,17 +2521,17 @@ class Cavebot:
             # Limpar cache para forçar recálculo de rota
             self.local_path_cache = []
             if self.current_global_path:
-                print(f"[DEBUG] Path limpo em: player_avoid (tinha {len(self.current_global_path)} nós)")
+                print(f"[{_ts()}] [DEBUG] Path limpo em: player_avoid (tinha {len(self.current_global_path)} nós)")
             self.current_global_path = []
-            print(f"[Cavebot] 🔄 Tentando desviar de '{player.name}' (peso 2x nos tiles adjacentes)")
+            print(f"[{_ts()}] [Cavebot] 🔄 Tentando desviar de '{player.name}' (peso 2x nos tiles adjacentes)")
 
         elif response == 'SKIP':
             # Pular para próximo waypoint
-            print(f"[Cavebot] ⏭️ Pulando WP #{self._current_index} devido a bloqueio por '{player.name}'")
+            print(f"[{_ts()}] [Cavebot] ⏭️ Pulando WP #{self._current_index} devido a bloqueio por '{player.name}'")
             with self._waypoints_lock:
                 self._advance_waypoint()
                 if self.current_global_path:
-                    print(f"[DEBUG] Path limpo em: player_skip (tinha {len(self.current_global_path)} nós)")
+                    print(f"[{_ts()}] [DEBUG] Path limpo em: player_skip (tinha {len(self.current_global_path)} nós)")
                 self.current_global_path = []
             self.advancement_tracker.reset()
 
@@ -1842,16 +2543,16 @@ class Cavebot:
         info = self.advancement_tracker.get_advancement_info()
         if DEBUG_ADVANCEMENT or DEBUG_PATHFINDING:
             if info['mode'] == 'nodes':
-                print(f"[Cavebot] ⚠️ Sem progresso (sem player). Modo: nodes, taxa: {info['node_rate']:.2f} nodes/s")
+                print(f"[{_ts()}] [Cavebot] ⚠️ Sem progresso (sem player). Modo: nodes, taxa: {info['node_rate']:.2f} nodes/s")
             else:
-                print(f"[Cavebot] ⚠️ Sem progresso (sem player). Modo: distância, taxa: {info['distance_rate']:.2f} SQM/s")
+                print(f"[{_ts()}] [Cavebot] ⚠️ Sem progresso (sem player). Modo: distância, taxa: {info['distance_rate']:.2f} SQM/s")
 
         # Limpar player avoidance (pode ter sido setado anteriormente)
         self.analyzer.clear_player_avoidance()
 
         # Forçar recálculo de rota global
         if self.current_global_path:
-            print(f"[DEBUG] Path limpo em: general_stuck (tinha {len(self.current_global_path)} nós)")
+            print(f"[{_ts()}] [DEBUG] Path limpo em: general_stuck (tinha {len(self.current_global_path)} nós)")
         self.current_global_path = []
         self.local_path_cache = []
         self.global_recalc_counter += 1
@@ -1867,3 +2568,93 @@ class Cavebot:
         self.analyzer.set_player_reference(my_x, my_y)
         # Define penalidade nos tiles do player e adjacentes
         self.analyzer.set_player_avoidance(player_x, player_y)
+
+    # ==================================================================
+    # AUTO-EXPLORE: Respostas a falta de progresso
+    # ==================================================================
+
+    def _handle_no_progress_explore(self, px, py, pz, spawn):
+        """
+        Chamado quando não estamos avançando ao spawn no auto-explore.
+        Identifica causa e aplica resposta humanizada.
+        """
+        if time.time() - self.no_progress_response_time < 3.0:
+            return
+
+        nearby_player = self._find_adjacent_player(px, py, pz)
+
+        if nearby_player:
+            self._respond_to_player_blocking_explore(nearby_player, px, py, pz, spawn)
+        else:
+            self._respond_to_general_stuck_explore(px, py, pz, spawn)
+
+        self.no_progress_response_time = time.time()
+
+    def _respond_to_player_blocking_explore(self, player, px, py, pz, spawn):
+        """
+        Resposta humanizada quando player está bloqueando no auto-explore.
+        Escolhe aleatoriamente entre: WAIT, AVOID, SKIP
+        """
+        response = random.choices(
+            ['WAIT', 'AVOID', 'SKIP'],
+            weights=[0.6, 0.3, 0.1]  # 60% esperar, 30% desviar, 10% pular
+        )[0]
+
+        if DEBUG_ADVANCEMENT or DEBUG_AUTO_EXPLORE:
+            info = self.advancement_tracker.get_advancement_info()
+            if info['mode'] == 'nodes':
+                print(f"[{_ts()}] [AutoExplore] Sem progresso! Modo: nodes, taxa: {info['node_rate']:.2f} nodes/s")
+            else:
+                print(f"[{_ts()}] [AutoExplore] Sem progresso! Modo: distância, taxa: {info['distance_rate']:.2f} SQM/s")
+            print(f"[{_ts()}] [AutoExplore] Player '{player.name}' adjacente em ({player.position.x}, {player.position.y}). Resposta: {response}")
+
+        if response == 'WAIT':
+            min_wait, max_wait = PLAYER_BLOCK_WAIT_RANGE
+            wait_time = random.gauss((min_wait + max_wait) / 2, (max_wait - min_wait) / 4)
+            wait_time = max(min_wait, min(max_wait, wait_time))
+
+            self.current_state = self.STATE_PAUSED
+            self.state_message = f"⏸️ Aguardando player passar ({wait_time:.1f}s)"
+            print(f"[{_ts()}] [AutoExplore] ⏸️ Aguardando player '{player.name}' passar ({wait_time:.1f}s)")
+
+            time.sleep(wait_time)
+            self.advancement_tracker.reset()
+
+        elif response == 'AVOID':
+            self._set_player_avoidance(player.position.x, player.position.y, px, py)
+            self.local_path_cache = []
+            if self.current_global_path:
+                print(f"[{_ts()}] [DEBUG] Path limpo em: player_avoid_explore (tinha {len(self.current_global_path)} nós)")
+            self.current_global_path = []
+            print(f"[{_ts()}] [AutoExplore] Tentando desviar de '{player.name}' (peso 2x nos tiles adjacentes)")
+
+        elif response == 'SKIP':
+            print(f"[{_ts()}] [AutoExplore] Pulando spawn devido a bloqueio por '{player.name}'")
+            spawn.last_visited = time.time()
+            self._current_spawn_target = None
+            if self.current_global_path:
+                print(f"[{_ts()}] [DEBUG] Path limpo em: player_skip_explore (tinha {len(self.current_global_path)} nós)")
+            self.current_global_path = []
+            self.advancement_tracker.reset()
+
+    def _respond_to_general_stuck_explore(self, px, py, pz, spawn):
+        """
+        Resposta quando sem progresso e sem player adjacente no auto-explore.
+        Provavelmente pathing ruim ou obstáculo não detectado.
+        """
+        info = self.advancement_tracker.get_advancement_info()
+        if DEBUG_ADVANCEMENT or DEBUG_AUTO_EXPLORE:
+            if info['mode'] == 'nodes':
+                print(f"[{_ts()}] [AutoExplore] Sem progresso (sem player). Modo: nodes, taxa: {info['node_rate']:.2f} nodes/s")
+            else:
+                print(f"[{_ts()}] [AutoExplore] Sem progresso (sem player). Modo: distância, taxa: {info['distance_rate']:.2f} SQM/s")
+
+        self.analyzer.clear_player_avoidance()
+
+        if self.current_global_path:
+            print(f"[{_ts()}] [DEBUG] Path limpo em: general_stuck_explore (tinha {len(self.current_global_path)} nós)")
+        self.current_global_path = []
+        self.local_path_cache = []
+        self.global_recalc_counter += 1
+
+        self.advancement_tracker.reset()

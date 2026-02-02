@@ -1,13 +1,41 @@
 import os
+import json
 import heapq
 import time
+from collections import defaultdict
+
+# Custos de movimento (Tibia: diagonal = 3x cardinal)
+COST_CARDINAL = 10
+COST_DIAGONAL = 30
+COST_TRANSITION = 20
+LEVEL_PENALTY = 80
 
 class GlobalMap:
-    def __init__(self, maps_dir, walkable_ids):
+    def __init__(self, maps_dir, walkable_ids, transitions_file=None):
         self.maps_dir = maps_dir
         self.walkable_ids = set(walkable_ids) # Ex: {186, 121} - IDs que são chão
         self.cache = {} # Cache de arquivos carregados
         self.temporary_obstacles = {} # (x, y, z) -> timestamp
+
+        # Transições entre andares: z -> [(x, y, z_to), ...]
+        self._transitions_by_floor = defaultdict(list)
+        # Lookup rápido: (x, y, z) -> [z_to, ...]
+        self._transition_lookup = defaultdict(list)
+        # Tiles de transição para bloquear no pathfinding same-floor
+        # (evita que o A* roteie por cima de buracos/escadas acidentalmente)
+        self._transition_tiles = set()
+        if transitions_file and os.path.isfile(transitions_file):
+            self._load_transitions(transitions_file)
+
+    def _load_transitions(self, filepath):
+        with open(filepath, 'r') as f:
+            data = json.load(f)
+        for t in data.get("transitions", []):
+            self._transitions_by_floor[t["z_from"]].append(
+                (t["x"], t["y"], t["z_to"])
+            )
+            self._transition_lookup[(t["x"], t["y"], t["z_from"])].append(t["z_to"])
+            self._transition_tiles.add((t["x"], t["y"], t["z_from"]))
 
     def get_color_id(self, abs_x, abs_y, abs_z):
         """Lê o byte do arquivo .map correto."""
@@ -44,7 +72,7 @@ class GlobalMap:
             return data[index]
         return 0
 
-    def is_walkable(self, x, y, z):
+    def is_walkable(self, x, y, z, ignore_transitions=False):
         # 1. Verifica bloqueio temporário
         if (x, y, z) in self.temporary_obstacles:
             if time.time() < self.temporary_obstacles[(x, y, z)]:
@@ -52,7 +80,11 @@ class GlobalMap:
             else:
                 del self.temporary_obstacles[(x, y, z)] # Expire
 
-        # 2. Verifica cor do mapa
+        # 2. Verifica se é tile de transição (buraco/escada) — evitar roteamento acidental
+        if not ignore_transitions and (x, y, z) in self._transition_tiles:
+            return False
+
+        # 3. Verifica cor do mapa
         color = self.get_color_id(x, y, z)
         return color in self.walkable_ids
 
@@ -63,7 +95,7 @@ class GlobalMap:
     def clear_temp_blocks(self):
         self.temporary_obstacles.clear()
 
-    def get_path(self, start_pos, end_pos, max_dist=5000):
+    def get_path(self, start_pos, end_pos, max_dist=5000, max_iter=0):
         """
         A* Global com suporte a diagonais.
         Retorna lista [(x,y,z), (x,y,z)...] do início ao fim.
@@ -102,12 +134,16 @@ class GlobalMap:
         came_from = {}
         cost_so_far = {(sx, sy): 0}
         
+        iterations = 0
         while open_list:
+            if max_iter and iterations >= max_iter:
+                break
+            iterations += 1
             _, _, cx, cy = heapq.heappop(open_list)
-            
+
             if (cx, cy) == (ex, ey):
                 break
-            
+
             current_cost = cost_so_far[(cx, cy)]
             if current_cost > max_dist * 10: # Ajuste do limite pelo custo base
                 continue
@@ -170,7 +206,7 @@ class GlobalMap:
         path = self.get_path(start_pos, end_pos)
         if path:
             if DEBUG_GLOBAL_MAP:
-                print(f"[GlobalMap] ✅ Rota direta encontrada para waypoint {end_pos}")
+                print(f"[GlobalMap] [OK] Rota direta encontrada para waypoint {end_pos}")
             return path
 
         # Tentativa 2: Buscar tile adjacente walkable
@@ -195,13 +231,13 @@ class GlobalMap:
             if not self.is_walkable(nx, ny, nz):
                 continue
 
-            # Tenta calcular rota até esse tile vizinho
+            # Tenta calcular rota ate esse tile vizinho
             neighbor_end = (nx, ny, nz)
             path = self.get_path(start_pos, neighbor_end)
 
             if path:
                 if DEBUG_GLOBAL_MAP:
-                    print(f"[GlobalMap] ✅ Rota alternativa encontrada!")
+                    print(f"[GlobalMap] [OK] Rota alternativa encontrada!")
                     print(f"[GlobalMap]   Waypoint original: ({ex}, {ey}, {ez})")
                     print(f"[GlobalMap]   Tile alternativo: ({nx}, {ny}, {nz}) [offset: ({dx:+d}, {dy:+d})]")
                     print(f"[GlobalMap]   Distância ao waypoint: {dist} sqm")
@@ -209,15 +245,156 @@ class GlobalMap:
 
         # Nenhum tile adjacente funcionou
         if DEBUG_GLOBAL_MAP:
-            print(f"[GlobalMap] ❌ FALHA COMPLETA: Nem waypoint nem tiles adjacentes (raio {max_offset}) têm rota")
+            print(f"[GlobalMap] [X] FALHA COMPLETA: Nem waypoint nem tiles adjacentes (raio {max_offset}) têm rota")
 
         #self.diagnose_path_failure(start_pos, end_pos)
 
         return None
     
-    # Adicione isso dentro da classe GlobalMap, no final do arquivo
-    # Adicione/Substitua estes métodos na classe GlobalMap
-    
+    # ── A* 3D Multi-Nível ──────────────────────────────────────────
+
+    def _heuristic_3d(self, pos, goal):
+        dx = abs(pos[0] - goal[0])
+        dy = abs(pos[1] - goal[1])
+        dz = abs(pos[2] - goal[2])
+        # Octile 2D (admissível com cardinal=10, diagonal=30)
+        h_2d = 10 * max(dx, dy) + 20 * min(dx, dy)
+        h_z = dz * LEVEL_PENALTY
+        return h_2d + h_z
+
+    def _get_neighbors_3d(self, x, y, z):
+        neighbors = []
+        # 8 direções no mesmo andar
+        for dx, dy, cost in (
+            (0, 1, COST_CARDINAL), (0, -1, COST_CARDINAL),
+            (1, 0, COST_CARDINAL), (-1, 0, COST_CARDINAL),
+            (1, 1, COST_DIAGONAL), (1, -1, COST_DIAGONAL),
+            (-1, 1, COST_DIAGONAL), (-1, -1, COST_DIAGONAL),
+        ):
+            nx, ny = x + dx, y + dy
+            if not self.is_walkable(nx, ny, z, ignore_transitions=True):
+                continue
+            # Diagonal: checar corner-cutting
+            if dx != 0 and dy != 0:
+                if not self.is_walkable(x + dx, y, z, ignore_transitions=True) or not self.is_walkable(x, y + dy, z, ignore_transitions=True):
+                    continue
+            neighbors.append(((nx, ny, z), cost))
+
+        # Transições de andar
+        for z_to in self._transition_lookup.get((x, y, z), []):
+            neighbors.append(((x, y, z_to), COST_TRANSITION))
+
+        return neighbors
+
+    def get_path_multilevel(self, start_pos, end_pos, max_iter=150000, debug=False):
+        sx, sy, sz = start_pos
+        ex, ey, ez = end_pos
+
+        def _dbg(msg):
+            if debug:
+                print(f"  [DEBUG] {msg}")
+
+        _dbg(f"start=({sx},{sy},{sz}) end=({ex},{ey},{ez})")
+
+        # Se destino não é walkable, buscar vizinho
+        if not self.is_walkable(ex, ey, ez):
+            _dbg(f"Destino nao walkable (cor={self.get_color_id(ex, ey, ez)}), buscando vizinho...")
+            found = False
+            for dx in range(-1, 2):
+                for dy in range(-1, 2):
+                    if dx == 0 and dy == 0:
+                        continue
+                    if self.is_walkable(ex + dx, ey + dy, ez):
+                        _dbg(f"Vizinho walkable: ({ex+dx},{ey+dy},{ez})")
+                        ex, ey = ex + dx, ey + dy
+                        found = True
+                        break
+                if found:
+                    break
+            if not found:
+                _dbg("Nenhum vizinho walkable encontrado - abortando")
+                return None
+
+        goal = (ex, ey, ez)
+        start = (sx, sy, sz)
+
+        # Checar transições disponíveis nos andares envolvidos
+        if debug:
+            floors_needed = set(range(min(sz, ez), max(sz, ez) + 1))
+            for fl in sorted(floors_needed):
+                count = len(self._transitions_by_floor.get(fl, []))
+                _dbg(f"Transicoes no andar {fl}: {count}")
+                if count <= 10:
+                    for t in self._transitions_by_floor.get(fl, []):
+                        _dbg(f"  ({t[0]},{t[1]}) -> z={t[2]}")
+
+        g_score = {start: 0}
+        came_from = {}
+        h_start = self._heuristic_3d(start, goal)
+        open_list = [(h_start, h_start, sx, sy, sz)]
+
+        iterations = 0
+        floors_visited = set()
+        transitions_used = 0
+        closest_dist = float('inf')
+        closest_node = start
+
+        while open_list and iterations < max_iter:
+            iterations += 1
+            _, _, cx, cy, cz = heapq.heappop(open_list)
+            current = (cx, cy, cz)
+
+            floors_visited.add(cz)
+
+            # Rastrear nó mais próximo do goal
+            dist = abs(cx - goal[0]) + abs(cy - goal[1]) + abs(cz - goal[2]) * 50
+            if dist < closest_dist:
+                closest_dist = dist
+                closest_node = current
+
+            if current == goal:
+                _dbg(f"Rota encontrada! iterations={iterations} floors_visited={sorted(floors_visited)}")
+                path = []
+                node = goal
+                while node != start:
+                    path.append(node)
+                    node = came_from[node]
+                path.reverse()
+                return path
+
+            current_g = g_score.get(current)
+            if current_g is None:
+                continue
+
+            for neighbor, move_cost in self._get_neighbors_3d(cx, cy, cz):
+                if debug and neighbor[2] != cz:
+                    transitions_used += 1
+                    if transitions_used <= 20:
+                        _dbg(f"Transicao: ({cx},{cy},{cz}) -> ({neighbor[0]},{neighbor[1]},{neighbor[2]}) cost={move_cost}")
+                new_g = current_g + move_cost
+                if new_g < g_score.get(neighbor, float('inf')):
+                    g_score[neighbor] = new_g
+                    came_from[neighbor] = current
+                    h = self._heuristic_3d(neighbor, goal)
+                    heapq.heappush(open_list, (new_g + h, h, neighbor[0], neighbor[1], neighbor[2]))
+
+            if debug and iterations % 30000 == 0:
+                _dbg(f"... {iterations} iteracoes, {len(g_score)} nos visitados, "
+                     f"floors={sorted(floors_visited)}, closest={closest_node} (dist={closest_dist})")
+
+        if debug:
+            _dbg(f"FALHOU: {iterations} iteracoes, {len(g_score)} nos visitados")
+            _dbg(f"  Floors visitados: {sorted(floors_visited)}")
+            _dbg(f"  Transicoes expandidas: {transitions_used}")
+            _dbg(f"  No mais proximo do goal: {closest_node} (dist_manhattan={closest_dist})")
+            _dbg(f"  Open list restante: {len(open_list)}")
+            if closest_node[2] == sz:
+                _dbg(f"  !! Nunca mudou de andar - pode ser problema nas transicoes")
+
+        return None
+
+    # ── Debug / Diagnóstico ──────────────────────────────────────
+
     def diagnose_path_failure(self, start_pos, end_pos):
         """
         Retorna dados de diagnóstico para visualização (caminho parcial e barreiras).
@@ -231,9 +408,9 @@ class GlobalMap:
         end_color = self.get_color_id(ex, ey, ez)
         
         if start_color not in self.walkable_ids:
-            print(f"❌ ERRO: A origem é parede (Cor {start_color}).")
+            print(f"[X] ERRO: A origem é parede (Cor {start_color}).")
         if end_color not in self.walkable_ids:
-            print(f"❌ ERRO: O destino é parede (Cor {end_color}).")
+            print(f"[X] ERRO: O destino é parede (Cor {end_color}).")
 
         # 2. Flood Fill (Busca o caminho mais próximo possível)
         print("🌊 Executando Flood Fill para mapear obstáculos...")
@@ -243,7 +420,7 @@ class GlobalMap:
         barriers = result['barrier_colors']
         
         dist_remaining = abs(ex - closest_point[0]) + abs(ey - closest_point[1])
-        print(f"❌ O bot travou a {dist_remaining:.1f} sqm do destino.")
+        print(f"[X] O bot travou a {dist_remaining:.1f} sqm do destino.")
         print(f"📍 Ponto mais próximo alcançado: {closest_point}")
         print(f"🎨 Cores das barreiras encontradas: {list(barriers)}")
         print("------------------------------------------------\n")
@@ -298,7 +475,7 @@ class GlobalMap:
                     barriers_coords.add((nx, ny))
                     barrier_colors.add(color)
 
-        # Reconstrói o caminho parcial até o ponto mais próximo
+        # Reconstrói o caminho parcial ate o ponto mais próximo
         partial_path = []
         curr = closest_point
         while curr:
@@ -308,7 +485,7 @@ class GlobalMap:
 
         return {
             'visited_coords': set(came_from.keys()), # Onde a "água" tocou (azul)
-            'partial_path': partial_path,            # Caminho laranja até o travamento
+            'partial_path': partial_path,            # Caminho laranja ate o travamento
             'barrier_coords': barriers_coords,       # Paredes vermelhas que tocaram na água
             'barrier_colors': barrier_colors,
             'closest_point': (closest_point[0], closest_point[1], sz)

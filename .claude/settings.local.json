@@ -11,7 +11,11 @@
       "Bash(cd:*)",
       "Bash(python:*)",
       "Bash(find:*)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(while read f)",
+      "Bash(do basename \"$f\")",
+      "Bash(done)",
+      "Read(//c/Users/vitor/OneDrive/Documentos/cheat engine/**)"
     ]
   }
 }

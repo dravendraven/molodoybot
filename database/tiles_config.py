@@ -233,12 +233,14 @@ FLOOR_CHANGE = {
     # --- SUBIR (Requer "Use" no tile) ---
     'UP_USE': {
         1948, # Ladder (Madeira)
-        1968, # Ladder (Ferro/Clickable)
+        1968, # Ladder (FerroFV/Clickable)
         # Adicione aqui escadas verticais de parede se houver
     },
     
     # --- DESCER ---
     'DOWN': {
+        370,
+        438, 
         414, # escada
         412,  # escada(trapdoor)
         437, # escada

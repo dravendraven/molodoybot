@@ -1,12 +1,13 @@
 import time
 import winsound
 import threading
+import win32gui
 from config import *
 from core.map_core import get_player_pos
 from core.player_core import get_connected_char_name, get_player_id
 from core.bot_state import state
 from core.config_utils import make_config_getter
-from modules.trainer import parse_creature_from_bytes
+from core.battlelist import BattleListScanner, SpawnTracker
 
 # Definição de intervalos de alerta (Fallback caso não esteja no config)
 TELEGRAM_INTERVAL_NORMAL = 60
@@ -126,6 +127,13 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
 
     # Configura listener de eventos do sniffer
     _setup_chat_event_listener()
+
+    # Spawn Tracker: detecta criaturas sumonadas por GM
+    scanner = BattleListScanner(pm, base_addr)
+    spawn_tracker = SpawnTracker(suspicious_range=5, floor_change_cooldown=3.0)
+
+    # Movimento inesperado: hwnd para walk-back
+    hwnd = win32gui.FindWindow("TibiaClient", None)
 
     log_msg("🔔 Módulo de Alarme Iniciado.")
 
@@ -277,76 +285,130 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
             is_visual_gm = False
 
             if visual_enabled:
-                list_start = base_addr + TARGET_ID_PTR + REL_FIRST_ID
                 my_x, my_y, my_z = get_player_pos(pm, base_addr)
+                all_creatures = scanner.scan_all()
 
-                for i in range(MAX_CREATURES):
-                    slot = list_start + (i * STEP_SIZE)
-                    try:
-                        # Lê bloco completo de bytes (inclui outfit)
-                        raw_bytes = pm.read_bytes(slot, STEP_SIZE)
-                        creature = parse_creature_from_bytes(raw_bytes)
+                for creature in all_creatures:
+                    # Skip NPCs (bit 31 do ID setado) — via Creature model
+                    if creature.is_npc:
+                        continue
 
-                        if not creature or creature['id'] <= 0:
+                    name = creature.name
+                    if name == current_name:
+                        continue
+
+                    if not creature.is_visible:
+                        continue
+
+                    cz = creature.position.z
+                    valid_floor = False
+                    if floor_mode == "Padrão": valid_floor = (cz == my_z)
+                    elif floor_mode == "Superior (+1)": valid_floor = (cz == my_z or cz == my_z - 1)
+                    elif floor_mode == "Inferior (-1)": valid_floor = (cz == my_z or cz == my_z + 1)
+                    else: valid_floor = (abs(cz - my_z) <= 1)
+
+                    if not valid_floor:
+                        continue
+
+                    # Detecta GM Visualmente (sempre dispara)
+                    if any(name.startswith(prefix) for prefix in GM_PREFIXES):
+                        visual_danger = True
+                        is_visual_gm = True
+                        visual_danger_name = f"GAMEMASTER {name}"
+                        break
+
+                    # Ignora se está na safe_list
+                    if any(s in name for s in safe_list):
+                        continue
+
+                    # Calcula distância
+                    dist = max(abs(my_x - creature.position.x), abs(my_y - creature.position.y))
+                    if dist > alarm_range:
+                        continue
+
+                    # Player vs creature — via Creature model (is_npc already filtered)
+                    if creature.is_player:
+                        if alarm_players:
+                            visual_danger = True
+                            visual_danger_name = f"PLAYER: {name} ({dist} sqm)"
+                            break
+                    else:
+                        # Ignora se é alvo do Trainer (você está caçando ela!)
+                        is_target = any(t in name for t in targets_list)
+                        if is_target:
                             continue
 
-                        name = creature['name']
-                        if name == current_name:
-                            continue
+                        if alarm_creatures:
+                            visual_danger = True
+                            visual_danger_name = f"{name} ({dist} sqm)"
+                            break
 
-                        vis = creature['visible']
-                        cz = creature['z']
+            # =================================================================
+            # C2. DETECÇÃO DE SPAWN SUSPEITO (GM sumonando criaturas)
+            # =================================================================
+            if visual_enabled:
+                suspicious_spawns = spawn_tracker.update(all_creatures, my_x, my_y, my_z, self_id=state.char_id)
 
-                        valid_floor = False
-                        if floor_mode == "Padrão": valid_floor = (cz == my_z)
-                        elif floor_mode == "Superior (+1)": valid_floor = (cz == my_z or cz == my_z - 1)
-                        elif floor_mode == "Inferior (-1)": valid_floor = (cz == my_z or cz == my_z + 1)
-                        else: valid_floor = (abs(cz - my_z) <= 1)
+                if suspicious_spawns:
+                    names = ", ".join(f"{c.name} (dist:{max(abs(my_x - c.position.x), abs(my_y - c.position.y))})" for c in suspicious_spawns)
+                    log_msg(f"👮 SPAWN SUSPEITO (possível GM): {names}")
+                    set_status(f"👮 Spawn suspeito: {names}")
+                    set_safe_state(False)
+                    set_gm_state(True)
+                    winsound.Beep(2500, 1000)
 
-                        if vis != 0 and valid_floor:
-                            # Detecta GM Visualmente (sempre dispara)
-                            if any(name.startswith(prefix) for prefix in GM_PREFIXES):
-                                visual_danger = True
-                                is_visual_gm = True
-                                visual_danger_name = f"GAMEMASTER {name}"
-                                break
+                    if (time.time() - last_telegram_time) > TELEGRAM_INTERVAL_GM:
+                        send_telegram(f"👮 SPAWN SUSPEITO (possível GM): {names}")
+                        last_telegram_time = time.time()
 
-                            # Ignora se está na safe_list (funciona para players E criaturas)
-                            is_in_safelist = any(s in name for s in safe_list)
-                            if is_in_safelist:
-                                continue
+                    visual_danger = True
+                    is_visual_gm = True
 
-                            # Calcula distância
-                            cx = creature['x']
-                            cy = creature['y']
-                            dist = max(abs(my_x - cx), abs(my_y - cy))
-                            if dist > alarm_range:
-                                continue
+            # =================================================================
+            # E. VERIFICAÇÃO DE MOVIMENTO INESPERADO
+            # =================================================================
+            movement_danger = False
+            movement_enabled = get_cfg('movement_enabled', False)
+            keep_position = get_cfg('keep_position', False)
+            runemaker_return_safe = get_cfg('runemaker_return_safe', False)
 
-                            # Usa outfit para diferenciar player de criatura
-                            if creature['is_player']:
-                                # É PLAYER (tem cores de outfit)
-                                if alarm_players:
-                                    visual_danger = True
-                                    visual_danger_name = f"PLAYER: {name} ({dist} sqm)"
-                                    break
-                            else:
-                                # É CRIATURA (sem cores de outfit)
-                                # Ignora se é alvo do Trainer (você está caçando ela!)
-                                is_target = any(t in name for t in targets_list)
-                                if is_target:
-                                    continue
+            if movement_enabled and not state.cavebot_active:
+                # Lê posição (pode já ter sido lida na seção C)
+                if not visual_enabled:
+                    my_x, my_y, my_z = get_player_pos(pm, base_addr)
 
-                                if alarm_creatures:
-                                    visual_danger = True
-                                    visual_danger_name = f"{name} ({dist} sqm)"
-                                    break
-                    except: continue
+                # Posição de origem definida ao ligar o alarme (via switch na GUI)
+                origin = state.alarm_origin_pos
+                if origin is None:
+                    # Fallback: usa posição atual como referência
+                    origin = (my_x, my_y, my_z)
+                    state.alarm_origin_pos = origin
+
+                ex, ey, ez = origin
+                if (my_x, my_y, my_z) != (ex, ey, ez):
+                    movement_danger = True
+                    dist_moved = max(abs(my_x - ex), abs(my_y - ey))
+                    log_msg(f"🚨 MOVIMENTO INESPERADO: ({ex},{ey},{ez}) → ({my_x},{my_y},{my_z}) [{dist_moved} sqm]")
+                    set_status(f"🚨 Movimento inesperado! ({dist_moved} sqm)")
+                    set_safe_state(False)
+                    winsound.Beep(1500, 500)
+
+                    if (time.time() - last_telegram_time) > TELEGRAM_INTERVAL_NORMAL:
+                        send_telegram(f"🚨 Movimento inesperado: ({ex},{ey},{ez}) → ({my_x},{my_y},{my_z})")
+                        last_telegram_time = time.time()
+
+                    # Manter Posição: retornar ao ponto (só se runemaker return_safe NÃO está ativo)
+                    if keep_position and not runemaker_return_safe:
+                        try:
+                            from modules.runemaker import move_to_coord_hybrid
+                            move_to_coord_hybrid(pm, base_addr, hwnd, origin, log_func=log_msg)
+                        except Exception as e:
+                            log_msg(f"[ALARM] Erro ao retornar posição: {e}")
 
             # =================================================================
             # D. CONSOLIDAÇÃO DE ESTADO
             # =================================================================
-            final_danger = visual_danger or chat_danger
+            final_danger = visual_danger or chat_danger or movement_danger
             final_is_gm = is_visual_gm or chat_danger # Se viu ou ouviu GM
             
             if final_danger:
@@ -378,8 +440,8 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
                         send_telegram(f"{prefix}: {visual_danger_name}!")
                         last_telegram_time = time.time()
             
-            elif not chat_danger:
-                # Se visual está limpo E chat está limpo -> Seguro
+            elif not chat_danger and not movement_danger:
+                # Se visual está limpo E chat está limpo E sem movimento inesperado -> Seguro
                 set_safe_state(True)
                 set_gm_state(False)
 

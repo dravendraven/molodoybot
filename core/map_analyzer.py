@@ -342,8 +342,17 @@ class MapAnalyzer:
             print(f"[ObstacleClear] get_obstacle_type: Nenhum obstáculo encontrado, retornando NONE")
         return {'type': 'NONE', 'item_id': None, 'clearable': False}
 
-    def scan_for_floor_change(self, target_z, current_z, range_sqm=7):
-        """Busca escadas/buracos ao redor."""
+    def scan_for_floor_change(self, target_z, current_z, range_sqm=7,
+                              player_abs_x=None, player_abs_y=None,
+                              dest_x=None, dest_y=None,
+                              transitions_by_floor=None):
+        """Busca escadas/buracos ao redor.
+
+        Se dest_x/dest_y forem fornecidos, prioriza a escada mais próxima do destino
+        ao invés da mais próxima do player. Se transitions_by_floor estiver disponível,
+        verifica para onde cada escada realmente leva e prioriza pela distância do
+        destino da transição ao waypoint final.
+        """
         required_dir = 'UP' if target_z < current_z else 'DOWN'
 
         # Define quais tipos de tiles servem para o objetivo
@@ -353,19 +362,61 @@ class MapAnalyzer:
         else:
             valid_types = ['DOWN', 'DOWN_USE', 'SHOVEL']
 
-        best_option = None
-        min_dist = 999
+        # Coleta TODAS as escadas visíveis válidas
+        candidates = []
 
         for x in range(-range_sqm, range_sqm + 1):
             for y in range(-range_sqm, range_sqm + 1):
                 props = self.get_tile_properties(x, y)
-                
+
                 if props['type'] in valid_types:
-                    dist = (x**2 + y**2) ** 0.5
-                    if dist < min_dist:
-                        min_dist = dist
-                        # Retorna (rel_x, rel_y, tipo, id_especial)
-                        # Precisamos do ID especial (props['special_id']) para checar Rope Spot
-                        best_option = (x, y, props['type'], props['special_id'])
-        
+                    candidates.append((x, y, props['type'], props['special_id']))
+
+        if not candidates:
+            return None
+
+        # Sem info de destino: retorna a mais próxima do player (comportamento original)
+        if dest_x is None or dest_y is None or player_abs_x is None or player_abs_y is None:
+            best = None
+            min_dist = 999
+            for x, y, ftype, fid in candidates:
+                dist = (x**2 + y**2) ** 0.5
+                if dist < min_dist:
+                    min_dist = dist
+                    best = (x, y, ftype, fid)
+            return best
+
+        # Validar cada escada contra transitions_by_floor e/ou distância ao destino
+        best_option = None
+        best_score = float('inf')
+
+        for x, y, ftype, fid in candidates:
+            abs_x = player_abs_x + x
+            abs_y = player_abs_y + y
+
+            # Se temos transitions_by_floor, APENAS aceitar escadas registradas
+            if transitions_by_floor:
+                transitions = transitions_by_floor.get(current_z, [])
+                matched = False
+                for tx, ty, tz_to in transitions:
+                    if abs(tx - abs_x) <= 1 and abs(ty - abs_y) <= 1:
+                        # Score = distância XY do destino da transição ao waypoint
+                        score = abs(tx - dest_x) + abs(ty - dest_y)
+                        if score < best_score:
+                            best_score = score
+                            best_option = (x, y, ftype, fid)
+                        matched = True
+                        break
+                if not matched:
+                    # Escada não registrada nas transições - ignorar (provavelmente casa/dead end)
+                    print(f"[FloorChange] Escada em ({abs_x}, {abs_y}) ignorada: não registrada em transitions")
+                continue
+
+            # Sem transitions: fallback por distância XY da escada ao waypoint destino
+            score = abs(abs_x - dest_x) + abs(abs_y - dest_y)
+            if score < best_score:
+                best_score = score
+                best_option = (x, y, ftype, fid)
+
+        # best_option pode ser None se nenhuma escada visível é válida
         return best_option

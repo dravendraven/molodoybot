@@ -16,7 +16,9 @@ COLOR_PALETTE = {
     0xBA: (200, 50, 50),    # Red (roofs)
     0xD2: (255, 255, 0),    # Yellow (stairs)
     0x1E: (30, 30, 30),     # Dark (cave)
+    0xB3: (255, 255, 255),  # White (snow/ice)
     0xC0: (255, 100, 0),    # Orange (lava)
+    0xCF: (237, 201, 142),   # Sand (desert)
 }
 
 # Default color for unknown IDs

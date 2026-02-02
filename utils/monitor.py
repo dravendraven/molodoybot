@@ -232,10 +232,11 @@ class TrainingMonitor:
                 raw_dmg = self._convert_percent_to_hp(dmg)
                 
                 # >>> AQUI ESTÁ O PRINT QUE VOCÊ QUERIA <<<
-                if raw_dmg is not None:
-                    print(f"   [HIT] Dano: {raw_dmg} HP (~{dmg}%)  |  Gap: {diff:.2f}s  |  HP: {current_hp}%")
-                else:
-                    print(f"   [HIT] Dano: {dmg}%  |  Gap: {diff:.2f}s  |  HP: {current_hp}%")
+                if self.log_hits:
+                    if raw_dmg is not None:
+                        print(f"   [HIT] Dano: {raw_dmg} HP (~{dmg}%)  |  Gap: {diff:.2f}s  |  HP: {current_hp}%")
+                    else:
+                        print(f"   [HIT] Dano: {dmg}%  |  Gap: {diff:.2f}s  |  HP: {current_hp}%")
                 if current_hp > 0:
                     self._log_hit_to_file(dmg)
 
@@ -282,10 +283,11 @@ class TrainingMonitor:
         self.log(f"   Maior Gap: {max_gap:.1f}s")
         
         # Log detalhado no Terminal
-        print(f"   [FIM] {self.target_name} eliminado.")
-        print(f"   [STATS] Hits: {len(self.damage_timestamps)-2} | Maior Gap: {max_gap:.2f}s")
-        print(f"   [STATS] Tempo Total: {total_duration:.2f}s | Tempo Eficiente: {efficient_time:.2f}s ({efficiency_pct:.2f}%) | Tempo ineficiente: {inefficient_time:.2f}s")
-        print("-" * 50)
+        if self.log_hits:
+            print(f"   [FIM] {self.target_name} eliminado.")
+            print(f"   [STATS] Hits: {len(self.damage_timestamps)-2} | Maior Gap: {max_gap:.2f}s")
+            print(f"   [STATS] Tempo Total: {total_duration:.2f}s | Tempo Eficiente: {efficient_time:.2f}s ({efficiency_pct:.2f}%) | Tempo ineficiente: {inefficient_time:.2f}s")
+            print("-" * 50)
         
         self.active = False
 

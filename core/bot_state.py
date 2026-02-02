@@ -70,6 +70,9 @@ class BotState:
         self._is_following: bool = False           # True quando seguindo criatura (antes de atacar)
         self._follow_target_id: int = 0            # ID da criatura sendo seguida
         self._is_spear_pickup_pending: bool = False  # True quando spear pickup deve rodar após loot
+
+        # ===== Alarm Movement Detection =====
+        self._alarm_origin_pos: tuple = None  # (x, y, z) posição de origem ao ligar alarme
     
     # =========================================================================
     # CONEXÃO
@@ -561,7 +564,23 @@ class BotState:
             self._is_following = False
             self._follow_target_id = 0
             self._is_spear_pickup_pending = False
+            self._alarm_origin_pos = None
             # NÃO reseta _bot_running
+
+    # =========================================================================
+    # ALARM MOVEMENT DETECTION
+    # =========================================================================
+
+    @property
+    def alarm_origin_pos(self) -> tuple:
+        """Posição de origem definida ao ligar o alarme (x, y, z) ou None."""
+        with self._lock:
+            return self._alarm_origin_pos
+
+    @alarm_origin_pos.setter
+    def alarm_origin_pos(self, value: tuple):
+        with self._lock:
+            self._alarm_origin_pos = value
 
 
 # =============================================================================

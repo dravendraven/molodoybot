@@ -173,7 +173,11 @@ BOT_SETTINGS = {
     # AFK Humanization (Cavebot)
     "afk_pause_enabled": False,     # Pausar AFK aleatórias durante rota
     "afk_pause_duration": 30,       # Duração total do AFK (segundos) - mínimo 5s
-    "afk_pause_interval": 10        # Intervalo máximo entre pausas (minutos) - mínimo 5min
+    "afk_pause_interval": 10,       # Intervalo máximo entre pausas (minutos) - mínimo 5min
+
+    # Auto-Explore
+    "auto_explore_radius": 50,      # Raio de busca de spawns (tiles)
+    "auto_explore_cooldown": 120,   # Cooldown de revisita (segundos)
 }
 
 _cached_player_name = ""
@@ -946,6 +950,36 @@ def clear_waypoints():
     _set_waypoint_name_field("")
     log("🗑️ Lista de waypoints limpa.")
 
+def on_auto_explore_toggle(enabled, search_radius, revisit_cooldown):
+    """Callback do toggle de auto-explore na GUI."""
+    global cavebot_instance
+    if not cavebot_instance:
+        log("Aguarde a conexao com o Tibia...")
+        return
+    if enabled:
+        # XML embutido na pasta do bot
+        import os, sys
+        if getattr(sys, 'frozen', False):
+            base_dir = os.path.dirname(sys.executable)
+        else:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+        xml_path = os.path.join(base_dir, "world-spawn.xml")
+        if not os.path.exists(xml_path):
+            log(f"[AutoExplore] world-spawn.xml nao encontrado em {base_dir}")
+            return
+
+        # Usa lista de targets da aba Alvos como filtro de monstros
+        target_monsters = list(BOT_SETTINGS.get('targets', []))
+
+        cavebot_instance.init_auto_explore(xml_path, target_monsters, search_radius, revisit_cooldown)
+        cavebot_instance.auto_explore_enabled = True
+        log(f"[AutoExplore] Ativado - raio={search_radius}, cooldown={revisit_cooldown}s, alvos={target_monsters or 'todos'}")
+    else:
+        cavebot_instance.auto_explore_enabled = False
+        cavebot_instance._current_spawn_target = None
+        cavebot_instance._explore_initialized = False
+        log("[AutoExplore] Desativado")
+
 def toggle_cavebot_func():
     """Callback do Switch do Cavebot."""
     global cavebot_instance
@@ -955,12 +989,13 @@ def toggle_cavebot_func():
         return
 
     if switch_cavebot_var.get() == 1:
-        if not current_waypoints_ui:
-            log("⚠️ AVISO: Carregue waypoints antes de ativar!")
+        if not current_waypoints_ui and not cavebot_instance.auto_explore_enabled:
+            log("⚠️ AVISO: Carregue waypoints ou ative Auto-Explore antes de ativar!")
             switch_cavebot_var.set(0)
             return
         # Garante que os WPs estão carregados
-        cavebot_instance.load_waypoints(current_waypoints_ui)
+        if current_waypoints_ui:
+            cavebot_instance.load_waypoints(current_waypoints_ui)
         cavebot_instance.start()
         show_minimap_panel()
         log("🚀 CAVEBOT: ATIVADO")
@@ -1117,7 +1152,7 @@ def start_cavebot_thread():
                 print(f"Erro Cavebot Loop: {e}")
                 time.sleep(1)
 
-        time.sleep(0.1)
+        time.sleep(0.05)
 
 def start_spear_picker_thread():
     """
@@ -1145,6 +1180,25 @@ def start_spear_picker_thread():
             import traceback
             traceback.print_exc()
             time.sleep(1)
+
+
+def auto_torch_thread():
+    """Thread para o Auto Torch - mantém tocha acesa no ammo slot."""
+    global pm, base_addr
+    from modules.auto_torch import auto_torch_loop
+
+    check_running = lambda: state.is_running and state.is_connected
+    get_enabled = lambda: BOT_SETTINGS.get('auto_torch_enabled', False)
+
+    while state.is_running:
+        if pm is None or not state.is_connected:
+            time.sleep(1)
+            continue
+        try:
+            auto_torch_loop(pm, base_addr, check_running, get_enabled, log_func=log)
+        except Exception as e:
+            print(f"[AutoTorch] Erro: {e}")
+            time.sleep(5)
 
 
 def start_chat_handler_thread():
@@ -1204,34 +1258,41 @@ def start_trainer_thread():
     # --- CONFIG PROVIDER ---
     # Essa função é executada pelo trainer.py a cada ciclo.
     # Ela captura o estado ATUAL dos botões e variáveis globais.
-    config_provider = lambda: {
-        # Lê o estado do botão (Switch) em tempo real
-        'enabled': switch_trainer.get(),
+    _debug_range_last = [None]  # Mutável para closure detectar mudanças
+    def config_provider():
+        cfg = {
+            # Lê o estado do botão (Switch) em tempo real
+            'enabled': switch_trainer.get(),
 
-        # Lê a variável de segurança controlada pelo Alarme
-        'is_safe': state.is_safe(),
+            # Lê a variável de segurança controlada pelo Alarme
+            'is_safe': state.is_safe(),
 
-        # Lê as configurações salvas/editadas no menu
-        'targets': BOT_SETTINGS['targets'],
-        'ignore_first': BOT_SETTINGS['ignore_first'],
-        'debug_mode': BOT_SETTINGS['debug_mode'],
-        'debug_mode_decisions_only': BOT_SETTINGS.get('debug_mode_decisions_only', False),
+            # Lê as configurações salvas/editadas no menu
+            'targets': BOT_SETTINGS['targets'],
+            'ignore_first': BOT_SETTINGS['ignore_first'],
+            'debug_mode': BOT_SETTINGS['debug_mode'],
+            'debug_mode_decisions_only': BOT_SETTINGS.get('debug_mode_decisions_only', False),
 
-        # Lê o botão de loot para saber se deve abrir corpos
-        'loot_enabled': switch_loot.get(),
+            # Lê o botão de loot para saber se deve abrir corpos
+            'loot_enabled': switch_loot.get(),
 
-        # Passa a função de log da interface
-        'log_callback': log,
+            # Passa a função de log da interface
+            'log_callback': log,
 
-        'min_delay': BOT_SETTINGS.get('trainer_min_delay', 1.0),
-        'max_delay': BOT_SETTINGS.get('trainer_max_delay', 2.0),
-        'range': BOT_SETTINGS.get('trainer_range', 1),
+            'min_delay': BOT_SETTINGS.get('trainer_min_delay', 1.0),
+            'max_delay': BOT_SETTINGS.get('trainer_max_delay', 2.0),
+            'range': BOT_SETTINGS.get('trainer_range', 1),
 
-        # Anti Kill-Steal e Spear Picker (antes faltavam - usavam default fixo)
-        'ks_prevention_enabled': BOT_SETTINGS.get('ks_prevention_enabled', True),
-        'spear_picker_enabled': BOT_SETTINGS.get('spear_picker_enabled', False),
-        'follow_before_attack_enabled': BOT_SETTINGS.get('follow_before_attack_enabled', False),
-    }
+            # Anti Kill-Steal e Spear Picker (antes faltavam - usavam default fixo)
+            'ks_prevention_enabled': BOT_SETTINGS.get('ks_prevention_enabled', True),
+            'spear_picker_enabled': BOT_SETTINGS.get('spear_picker_enabled', False),
+            'follow_before_attack_enabled': BOT_SETTINGS.get('follow_before_attack_enabled', False),
+        }
+        # DEBUG: Loga quando range muda (ou primeira leitura)
+        if cfg['range'] != _debug_range_last[0]:
+            print(f"[DEBUG CFG] range mudou: {_debug_range_last[0]} -> {cfg['range']} | id(BOT_SETTINGS)={id(BOT_SETTINGS)}")
+            _debug_range_last[0] = cfg['range']
+        return cfg
 
     # Função para checar se o bot ainda deve rodar (stop kill)
     check_running = lambda: state.is_running and state.is_connected
@@ -1340,7 +1401,10 @@ def start_alarm_thread():
         'debug_mode': BOT_SETTINGS['debug_mode'],
         'alarm_players': BOT_SETTINGS.get('alarm_players', True),
         'alarm_creatures': BOT_SETTINGS.get('alarm_creatures', True),
-        'targets_list': BOT_SETTINGS.get('targets', [])
+        'targets_list': BOT_SETTINGS.get('targets', []),
+        'movement_enabled': BOT_SETTINGS.get('alarm_movement_enabled', False),
+        'keep_position': BOT_SETTINGS.get('alarm_keep_position', False),
+        'runemaker_return_safe': BOT_SETTINGS.get('rune_movement', False),
     }
 
     check_run = lambda: state.is_running and state.is_connected
@@ -2408,6 +2472,11 @@ def create_settings_callbacks() -> SettingsCallbacks:
         status = "ativado" if enabled else "desativado"
         log(f"🎯 Pegar Spear: {status}")
 
+    def on_auto_torch_toggle(enabled: bool):
+        BOT_SETTINGS['auto_torch_enabled'] = enabled
+        status = "ativado" if enabled else "desativado"
+        log(f"🔦 Auto Torch: {status}")
+
     def on_ai_chat_toggle(enabled: bool):
         BOT_SETTINGS['ai_chat_enabled'] = enabled
         if chat_handler:
@@ -2481,6 +2550,7 @@ def create_settings_callbacks() -> SettingsCallbacks:
         on_light_toggle=on_light_toggle,
         on_lookid_toggle=on_lookid_toggle,
         on_spear_picker_toggle=on_spear_picker_toggle,
+        on_auto_torch_toggle=on_auto_torch_toggle,
         on_ai_chat_toggle=on_ai_chat_toggle,
         on_console_log_toggle=on_console_log_toggle,
         update_stats_visibility=update_stats_visibility,
@@ -2493,6 +2563,7 @@ def create_settings_callbacks() -> SettingsCallbacks:
         set_rune_pos=set_rune_pos_callback,
 
         # Tab Cavebot
+        on_auto_explore_toggle=on_auto_explore_toggle,
         load_waypoints_file=load_waypoints_file,
         save_waypoints_file=save_waypoints_file,
         refresh_scripts_combo=refresh_scripts_callback,
@@ -3489,69 +3560,6 @@ def _legacy_code_marker():
     waypoint_listbox.pack(side="left", fill="both", expand=True)
     scrollbar_wp.config(command=waypoint_listbox.yview)
 
-    # === SEÇÃO: AFK HUMANIZATION ===
-    frame_afk = ctk.CTkFrame(frame_cb_root, fg_color="#3a3a3a")
-    frame_afk.pack(fill="x", pady=(0, 8))
-
-    # Toggle AFK
-    frame_afk_toggle = ctk.CTkFrame(frame_afk, fg_color="transparent")
-    frame_afk_toggle.pack(fill="x", padx=10, pady=5)
-
-    switch_afk_pause_var = ctk.IntVar(value=1 if BOT_SETTINGS.get('afk_pause_enabled', False) else 0)
-    def toggle_afk_pause():
-        BOT_SETTINGS['afk_pause_enabled'] = (switch_afk_pause_var.get() == 1)
-        save_config_file()
-    switch_afk_pause = ctk.CTkSwitch(
-        frame_afk_toggle,
-        text="Pausas AFK aleatórias",
-        variable=switch_afk_pause_var,
-        command=toggle_afk_pause,
-        **UI['BODY']
-    )
-    switch_afk_pause.pack(side="left")
-
-    # Campos AFK
-    frame_afk_fields = ctk.CTkFrame(frame_afk, fg_color="transparent")
-    frame_afk_fields.pack(fill="x", padx=10, pady=(0, 5))
-
-    # Duração do AFK
-    ctk.CTkLabel(frame_afk_fields, text="Duração (s):", width=70, **UI['BODY']).pack(side="left")
-    entry_afk_duration = ctk.CTkEntry(frame_afk_fields, width=50, **UI['BODY'])
-    entry_afk_duration.pack(side="left", padx=(0, 10))
-    entry_afk_duration.insert(0, str(BOT_SETTINGS.get('afk_pause_duration', 30)))
-
-    def save_afk_duration(event=None):
-        try:
-            val = int(entry_afk_duration.get())
-            val = max(5, val)  # Mínimo 5 segundos
-            BOT_SETTINGS['afk_pause_duration'] = val
-            entry_afk_duration.delete(0, "end")
-            entry_afk_duration.insert(0, str(val))
-            save_config_file()
-        except ValueError:
-            pass
-    entry_afk_duration.bind("<FocusOut>", save_afk_duration)
-    entry_afk_duration.bind("<Return>", save_afk_duration)
-
-    # Intervalo máximo
-    ctk.CTkLabel(frame_afk_fields, text="Intervalo (min):", width=85, **UI['BODY']).pack(side="left")
-    entry_afk_interval = ctk.CTkEntry(frame_afk_fields, width=50, **UI['BODY'])
-    entry_afk_interval.pack(side="left")
-    entry_afk_interval.insert(0, str(BOT_SETTINGS.get('afk_pause_interval', 10)))
-
-    def save_afk_interval(event=None):
-        try:
-            val = int(entry_afk_interval.get())
-            val = max(5, val)  # Mínimo 5 minutos
-            BOT_SETTINGS['afk_pause_interval'] = val
-            entry_afk_interval.delete(0, "end")
-            entry_afk_interval.insert(0, str(val))
-            save_config_file()
-        except ValueError:
-            pass
-    entry_afk_interval.bind("<FocusOut>", save_afk_interval)
-    entry_afk_interval.bind("<Return>", save_afk_interval)
-
     # === SEÇÃO: EDITOR (Destaque) ===
     ctk.CTkButton(frame_cb_root, text="🗺️ Editor Visual",
                   fg_color="#2E8B57", hover_color="#228B45",
@@ -3897,22 +3905,49 @@ def update_minimap_loop():
         try:
             player_pos = get_player_pos(pm, base_addr)
 
-            with cavebot_instance._waypoints_lock:
-                all_waypoints = cavebot_instance._waypoints.copy()
-                current_idx = cavebot_instance._current_index
+            # Auto-Explore mode: spawns viram waypoints virtuais
+            if cavebot_instance.auto_explore_enabled and cavebot_instance._spawn_selector and cavebot_instance._spawn_selector.active_spawns:
+                active_spawns = cavebot_instance._spawn_selector.active_spawns
+                now = time.time()
+                cooldown = cavebot_instance._spawn_selector.revisit_cooldown
+                all_waypoints = [
+                    {'x': s.cx, 'y': s.cy, 'z': s.cz,
+                     'in_cooldown': (now - s.last_visited) < cooldown and s.last_visited > 0}
+                    for s in active_spawns
+                ]
+
+                # Target atual
+                spawn_target = cavebot_instance._current_spawn_target
+                if spawn_target:
+                    target_wp = {'x': spawn_target.cx, 'y': spawn_target.cy, 'z': spawn_target.cz}
+                    # Encontra indice do target na lista
+                    current_idx = 0
+                    for i, s in enumerate(active_spawns):
+                        if s is spawn_target:
+                            current_idx = i
+                            break
+                else:
+                    target_wp = all_waypoints[0] if all_waypoints else {'x': player_pos[0], 'y': player_pos[1], 'z': player_pos[2]}
+                    current_idx = 0
+            else:
+                # Modo waypoints normal
+                with cavebot_instance._waypoints_lock:
+                    all_waypoints = cavebot_instance._waypoints.copy()
+                    current_idx = cavebot_instance._current_index
+
+                if not all_waypoints:
+                    minimap_label.configure(
+                        image=None,
+                        text="📍 Nenhum Waypoint Configurado"
+                    )
+                    app.after(3000, update_minimap_loop)
+                    return
+
+                target_wp = all_waypoints[current_idx]
 
             # Collect cavebot status (thread-safe string read)
             cavebot_status = cavebot_instance.state_message
 
-            if not all_waypoints:
-                minimap_label.configure(
-                    image=None,
-                    text="📍 Nenhum Waypoint Configurado"
-                )
-                app.after(3000, update_minimap_loop)
-                return
-
-            target_wp = all_waypoints[current_idx]
             global_route = cavebot_instance.current_global_path.copy() if cavebot_instance.current_global_path else None
             local_cache = cavebot_instance.local_path_cache.copy() if cavebot_instance.local_path_cache else None
 
@@ -3952,8 +3987,13 @@ def update_minimap_loop():
         minimap_image_ref = ctk_img  # Keep reference for garbage collection
 
         # Update title label
-        wp_num = current_idx + 1
-        minimap_title_label.configure(text=f"Indo até Waypoint #{wp_num}/{len(all_waypoints)}")
+        if cavebot_instance.auto_explore_enabled and cavebot_instance._current_spawn_target:
+            spawn = cavebot_instance._current_spawn_target
+            names = ', '.join(sorted(spawn.monster_names())[:2])
+            minimap_title_label.configure(text=f"Auto-Explore: {names}")
+        else:
+            wp_num = current_idx + 1
+            minimap_title_label.configure(text=f"Indo até Waypoint #{wp_num}/{len(all_waypoints)}")
 
         # Update status label with color coding
         status_text = cavebot_status if cavebot_status else ""
@@ -4012,6 +4052,19 @@ if __name__ == "__main__":
     switch_trainer = main_window.switch_trainer
     switch_loot = main_window.switch_loot
     switch_alarm = main_window.switch_alarm
+    def _on_alarm_toggle():
+        if switch_alarm.get():
+            try:
+                if pm:
+                    pos = get_player_pos(pm, base_addr)
+                    if pos and pos[0] > 0:
+                        state.alarm_origin_pos = pos
+                        log(f"📍 Posição de origem do alarme: {pos}")
+            except Exception:
+                pass
+        else:
+            state.alarm_origin_pos = None
+    switch_alarm.configure(command=_on_alarm_toggle)
     switch_fisher = main_window.switch_fisher
     switch_runemaker = main_window.switch_runemaker
     switch_cavebot = main_window.switch_cavebot
@@ -4094,6 +4147,7 @@ if __name__ == "__main__":
     threading.Thread(target=lookid_monitor_loop, daemon=True).start()
     threading.Thread(target=start_chat_handler_thread, daemon=True).start()
     threading.Thread(target=start_spear_picker_thread, daemon=True).start()
+    threading.Thread(target=auto_torch_thread, daemon=True).start()
 
     # Atualiza visibilidade baseada na vocação
     main_window.update_stats_visibility()
