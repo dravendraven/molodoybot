@@ -122,6 +122,10 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
     last_telegram_time = 0
     last_hp_alert = 0
 
+    # Mana GM detection tracking
+    last_mana_value = None  # Track raw mana for GM manipulation detection
+    last_level_value = None  # Track level to ignore mana gain from level up
+
     last_seen_msg = ""
     last_seen_author = ""
 
@@ -197,6 +201,45 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
                                 winsound.Beep(2500, 200)
                                 last_hp_alert = time.time()
                 except: pass
+
+            # =================================================================
+            # A2. VERIFICAÇÃO DE MANA MANIPULADA (GM INJECTION)
+            # =================================================================
+            # GMs testam bots adicionando mana artificial para trigger auto-spells
+            # Mana normal sobe de 1 em 1 por tick. Incremento > threshold = GM
+            # EXCEÇÃO: Level up dá +5/+15/+30 mana dependendo da vocação
+            mana_gm_enabled = get_cfg('mana_gm_enabled', False)
+
+            if mana_gm_enabled:
+                try:
+                    curr_mana = pm.read_int(base_addr + OFFSET_PLAYER_MANA)
+                    curr_level = pm.read_int(base_addr + OFFSET_LEVEL)
+
+                    if last_mana_value is not None and curr_mana > last_mana_value:
+                        mana_diff = curr_mana - last_mana_value
+                        mana_threshold = get_cfg('mana_gm_threshold', 10)
+
+                        # Ignora se houve level up (level up dá mana: +5/+15/+30)
+                        leveled_up = (last_level_value is not None and curr_level > last_level_value)
+
+                        if mana_diff > mana_threshold and not leveled_up:
+                            # Mana aumentou mais que o normal SEM level up - possível GM
+                            log_msg(f"👮 MANA GM DETECTADA: {last_mana_value} → {curr_mana} (+{mana_diff})")
+                            set_status(f"👮 Mana GM! +{mana_diff}")
+
+                            # Ações de segurança
+                            set_safe_state(False)
+                            set_gm_state(True)
+                            winsound.Beep(2500, 1000)
+
+                            if (time.time() - last_telegram_time) > TELEGRAM_INTERVAL_GM:
+                                send_telegram(f"👮 MANA GM DETECTADA: +{mana_diff} mana artificial!")
+                                last_telegram_time = time.time()
+
+                    last_mana_value = curr_mana
+                    last_level_value = curr_level
+                except:
+                    pass
 
             # =================================================================
             # B. VERIFICAÇÃO DE CHAT (EVENTOS DO SNIFFER + MEMÓRIA)

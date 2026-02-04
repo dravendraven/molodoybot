@@ -14,6 +14,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from core.global_map import GlobalMap
 from config import WALKABLE_COLORS, MAPS_DIRECTORY
 
+# Arquivos de stone archways (tiles que aparecem como montanha mas são walkable)
+_PROJECT_ROOT = os.path.join(os.path.dirname(__file__), '..')
+ARCHWAY_FILES = [os.path.join(_PROJECT_ROOT, f"archway{i}.txt") for i in range(1, 5)]
+
 
 def parse_coords(raw):
     """Parseia coordenadas em varios formatos:
@@ -72,12 +76,62 @@ def test_route(gm, x1, y1, z1, x2, y2, z2):
         print(f"  Start walkable: {gm.is_walkable(x1, y1, z1)} (cor: {gm.get_color_id(x1, y1, z1)})")
         print(f"  End walkable:   {gm.is_walkable(x2, y2, z2)} (cor: {gm.get_color_id(x2, y2, z2)})")
 
+        # Scan de barreira multi-floor
+        dbg = getattr(gm, '_last_debug', None)
+        if dbg:
+            closest = dbg['closest_node']
+            gx, gy, gz = x2, y2, z2
+            cx = closest[0]
+            print(f"\n  === SCAN DE BARREIRA ===")
+            print(f"  Closest: {closest} -> Goal: ({gx},{gy},{gz})")
+
+            # Scan horizontal entre closest.x e goal.x na mesma Y, por floor
+            x_min = min(cx, gx)
+            x_max = max(cx, gx)
+            y_scan = gy  # usar Y do goal
+            print(f"  Scan X={x_min}..{x_max} Y={y_scan} por floor:")
+            for z in range(0, 16):
+                colors = []
+                walkable_count = 0
+                for x in range(x_min, x_max + 1):
+                    c = gm.get_color_id(x, y_scan, z)
+                    if c in gm.walkable_ids:
+                        walkable_count += 1
+                    colors.append(c)
+                total = x_max - x_min + 1
+                if walkable_count == 0:
+                    continue  # floor sem dados
+                # Achar gaps (sequencias nao-walkable)
+                gaps = []
+                in_gap = False
+                gap_start = 0
+                for i, c in enumerate(colors):
+                    if c not in gm.walkable_ids:
+                        if not in_gap:
+                            gap_start = x_min + i
+                            in_gap = True
+                    else:
+                        if in_gap:
+                            gaps.append((gap_start, x_min + i - 1))
+                            in_gap = False
+                if in_gap:
+                    gaps.append((gap_start, x_max))
+                gap_str = ", ".join(f"x={a}..{b} ({b-a+1}t)" for a, b in gaps) if gaps else "nenhum"
+                # Transicoes nessa faixa
+                trans_count = 0
+                for x in range(x_min, x_max + 1):
+                    if gm._transition_lookup.get((x, y_scan, z)):
+                        trans_count += 1
+                print(f"    Z={z:2d}: {walkable_count}/{total} walkable, gaps=[{gap_str}], transitions={trans_count}")
+
 
 def load_map():
     transitions_file = os.path.join(MAPS_DIRECTORY, "floor_transitions.json")
     print(f"Carregando mapa de: {MAPS_DIRECTORY}")
-    gm = GlobalMap(MAPS_DIRECTORY, WALKABLE_COLORS, transitions_file=transitions_file)
+    gm = GlobalMap(MAPS_DIRECTORY, WALKABLE_COLORS, transitions_file=transitions_file,
+                   archway_files=ARCHWAY_FILES)
     print(f"Transicoes carregadas: {sum(len(v) for v in gm._transitions_by_floor.values())}")
+    print(f"Archway overrides: {len(gm._walkable_overrides)}")
     return gm
 
 

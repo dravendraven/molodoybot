@@ -138,6 +138,7 @@ BOT_SETTINGS = {
     "loot_containers": 2,
     "loot_dest": 0,
     "loot_drop_food": False,
+    "loot_auto_eat": True,  # Auto-comer food do loot
     "loot_names": ["coin", "fish"],  # NOVO - Sistema configurável
     "drop_names": ["a mace", "a sword", "chain armor", "brass helmet"],        # NOVO - Sistema configurável
 
@@ -960,7 +961,7 @@ def on_auto_explore_toggle(enabled, search_radius, revisit_cooldown):
         # XML embutido na pasta do bot
         import os, sys
         if getattr(sys, 'frozen', False):
-            base_dir = os.path.dirname(sys.executable)
+            base_dir = sys._MEIPASS  # PyInstaller extrai recursos bundled aqui
         else:
             base_dir = os.path.dirname(os.path.abspath(__file__))
         xml_path = os.path.join(base_dir, "world-spawn.xml")
@@ -1405,6 +1406,8 @@ def start_alarm_thread():
         'movement_enabled': BOT_SETTINGS.get('alarm_movement_enabled', False),
         'keep_position': BOT_SETTINGS.get('alarm_keep_position', False),
         'runemaker_return_safe': BOT_SETTINGS.get('rune_movement', False),
+        'mana_gm_enabled': BOT_SETTINGS.get('alarm_mana_gm_enabled', False),
+        'mana_gm_threshold': BOT_SETTINGS.get('alarm_mana_gm_threshold', 10),
     }
 
     check_run = lambda: state.is_running and state.is_connected
@@ -1671,6 +1674,7 @@ def auto_loot_thread():
             'loot_containers': BOT_SETTINGS['loot_containers'],
             'loot_dest': BOT_SETTINGS['loot_dest'],
             'loot_drop_food': BOT_SETTINGS.get('loot_drop_food', False),
+            'loot_auto_eat': BOT_SETTINGS.get('loot_auto_eat', True),
             'loot_ids': BOT_SETTINGS.get('loot_ids', []),  # NOVO - da GUI
             'drop_ids': BOT_SETTINGS.get('drop_ids', [])   # NOVO - da GUI
         }
@@ -1680,7 +1684,8 @@ def auto_loot_thread():
         config_provider = lambda: {
             'loot_containers': BOT_SETTINGS['loot_containers'],
             'loot_dest': BOT_SETTINGS['loot_dest'],
-            'loot_drop_food': BOT_SETTINGS.get('loot_drop_food', False)
+            'loot_drop_food': BOT_SETTINGS.get('loot_drop_food', False),
+            'loot_auto_eat': BOT_SETTINGS.get('loot_auto_eat', True)
         }
 
     # ===== SAFETY NET: Limpa ciclo de loot travado (TIME-BASED) =====
@@ -2634,6 +2639,7 @@ def create_main_window_callbacks() -> MainWindowCallbacks:
         toggle_xray=toggle_xray,
         toggle_cavebot=toggle_cavebot_func,
         on_fisher_toggle=on_fisher_toggle,
+        on_pause_toggle=on_pause_toggle,
 
         # Trackers
         get_sword_tracker=lambda: sword_tracker,
@@ -3172,6 +3178,10 @@ def _legacy_code_marker():
     switch_drop_food.pack(anchor="center")
     if BOT_SETTINGS.get('loot_drop_food', False): switch_drop_food.select()
 
+    switch_auto_eat = ctk.CTkSwitch(frame_loot_opts, text="Comer Food automaticamente", command=lambda: None, progress_color="#32CD32", **UI['BODY'])
+    switch_auto_eat.pack(anchor="center")
+    if BOT_SETTINGS.get('loot_auto_eat', True): switch_auto_eat.select()
+
     # ==== LOOT NAMES CONFIGURATION (NOVO SISTEMA) ====
     # Só mostrar se USE_CONFIGURABLE_LOOT_SYSTEM = True
     if USE_CONFIGURABLE_LOOT_SYSTEM:
@@ -3201,6 +3211,7 @@ def _legacy_code_marker():
                 BOT_SETTINGS['loot_containers'] = int(entry_cont_count.get())
             BOT_SETTINGS['loot_dest'] = int(entry_dest_idx.get())
             BOT_SETTINGS['loot_drop_food'] = bool(switch_drop_food.get())
+            BOT_SETTINGS['loot_auto_eat'] = bool(switch_auto_eat.get())
 
             # NOVO: Sistema configurável (só executa se flag ativa)
             if USE_CONFIGURABLE_LOOT_SYSTEM:
@@ -3805,6 +3816,64 @@ def on_fisher_toggle():
     """Limpa o HUD visual imediatamente ao desligar o Fisher."""
     if not switch_fisher.get():
         update_fisher_hud([])
+
+
+def on_pause_toggle(is_pausing: bool):
+    """
+    Callback chamado quando o botão de pause/resume é clicado.
+    Salva e restaura estados de: full_light, spear_picker, auto_torch, ai_chat.
+
+    Args:
+        is_pausing: True se está pausando, False se está resumindo
+    """
+    global full_light_enabled, chat_handler
+
+    if is_pausing:
+        # Salvar estados atuais no main_window
+        saved_states = {
+            'full_light': full_light_enabled,
+            'spear_picker': BOT_SETTINGS.get('spear_picker_enabled', False),
+            'auto_torch': BOT_SETTINGS.get('auto_torch_enabled', False),
+            'ai_chat': BOT_SETTINGS.get('ai_chat_enabled', False),
+        }
+        main_window.paused_settings_states = saved_states
+
+        # Desativar full light
+        if full_light_enabled:
+            apply_full_light(False)
+            full_light_enabled = False
+
+        # Desativar settings
+        BOT_SETTINGS['spear_picker_enabled'] = False
+        BOT_SETTINGS['auto_torch_enabled'] = False
+        BOT_SETTINGS['ai_chat_enabled'] = False
+
+        # Desativar chat handler
+        if chat_handler:
+            chat_handler.disable()
+
+        log("⏸️ Bot pausado - todos os módulos desativados")
+
+    else:
+        # Restaurar estados salvos
+        saved = main_window.paused_settings_states
+
+        # Restaurar full light
+        if saved.get('full_light', False):
+            apply_full_light(True)
+            full_light_enabled = True
+
+        # Restaurar settings
+        BOT_SETTINGS['spear_picker_enabled'] = saved.get('spear_picker', False)
+        BOT_SETTINGS['auto_torch_enabled'] = saved.get('auto_torch', False)
+        BOT_SETTINGS['ai_chat_enabled'] = saved.get('ai_chat', False)
+
+        # Restaurar chat handler
+        if saved.get('ai_chat', False) and chat_handler:
+            chat_handler.enable()
+
+        log("▶️ Bot resumido - módulos restaurados")
+
 
 # ==============================================================================
 # MINIMAP VISUALIZATION FUNCTIONS

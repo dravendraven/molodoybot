@@ -26,6 +26,7 @@ from core.event_bus import EVENT_CHAT, EVENT_CONTAINER_OPEN, EVENT_CONTAINER_CLO
 
 # Configuração
 XTEA_KEY_ADDRESS = 0x719D78  # Endereço absoluto da chave XTEA
+NETWORK_INTERFACE = r"\Device\NPF_{5CF837D0-EF6A-4E75-A437-D3DD181B5AD2}"  # Interface com IP 192.168.0.11
 
 # Prefixos de GM para detecção
 GM_PREFIXES = ("GM ", "CM ", "GOD ", "[GM]", "[CM]", "ADM ")
@@ -393,6 +394,7 @@ class PacketSniffer(threading.Thread):
         # Inicia captura
         try:
             sniff(
+                iface=NETWORK_INTERFACE,
                 filter=f"host {self.server_ip}",
                 prn=self._on_packet,
                 store=False,

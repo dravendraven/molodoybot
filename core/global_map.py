@@ -2,6 +2,7 @@ import os
 import json
 import heapq
 import time
+import re
 from collections import defaultdict
 
 # Custos de movimento (Tibia: diagonal = 3x cardinal)
@@ -11,10 +12,11 @@ COST_TRANSITION = 20
 LEVEL_PENALTY = 80
 
 class GlobalMap:
-    def __init__(self, maps_dir, walkable_ids, transitions_file=None):
+    def __init__(self, maps_dir, walkable_ids, transitions_file=None, archway_files=None):
         self.maps_dir = maps_dir
         self.walkable_ids = set(walkable_ids) # Ex: {186, 121} - IDs que são chão
         self.cache = {} # Cache de arquivos carregados
+        self._filename_cache = {} # (chunk_x, chunk_y, z) -> filename or None
         self.temporary_obstacles = {} # (x, y, z) -> timestamp
 
         # Transições entre andares: z -> [(x, y, z_to), ...]
@@ -27,6 +29,11 @@ class GlobalMap:
         if transitions_file and os.path.isfile(transitions_file):
             self._load_transitions(transitions_file)
 
+        # Overrides de tiles walkables (ex: stone archways que aparecem como montanha)
+        self._walkable_overrides = set()
+        if archway_files:
+            self._load_archways(archway_files)
+
     def _load_transitions(self, filepath):
         with open(filepath, 'r') as f:
             data = json.load(f)
@@ -37,24 +44,42 @@ class GlobalMap:
             self._transition_lookup[(t["x"], t["y"], t["z_from"])].append(t["z_to"])
             self._transition_tiles.add((t["x"], t["y"], t["z_from"]))
 
+    def _load_archways(self, filepaths):
+        """Carrega coordenadas de stone archways dos arquivos (tiles forçados como walkable)."""
+        for filepath in filepaths:
+            if not os.path.isfile(filepath):
+                continue
+            with open(filepath, 'r') as f:
+                for line in f:
+                    # Formato: "stone archway (x,y,z)"
+                    match = re.search(r'\((\d+),(\d+),(\d+)\)', line)
+                    if match:
+                        x, y, z = int(match.group(1)), int(match.group(2)), int(match.group(3))
+                        self._walkable_overrides.add((x, y, z))
+
+    def _resolve_filename(self, chunk_x, chunk_y, abs_z):
+        """Resolve e cacheia o nome do arquivo .map para um chunk."""
+        key = (chunk_x, chunk_y, abs_z)
+        if key in self._filename_cache:
+            return self._filename_cache[key]
+
+        for f in (f"{chunk_x}{chunk_y}{abs_z:02}.map",
+                  f"{chunk_x:03}{chunk_y:03}{abs_z:02}.map"):
+            if os.path.exists(os.path.join(self.maps_dir, f)):
+                self._filename_cache[key] = f
+                return f
+
+        self._filename_cache[key] = None
+        return None
+
     def get_color_id(self, abs_x, abs_y, abs_z):
         """Lê o byte do arquivo .map correto."""
         chunk_x = abs_x // 256
         chunk_y = abs_y // 256
-        
-        # Tenta os formatos de nome padrão do Tibia
-        filenames = [
-            f"{chunk_x}{chunk_y}{abs_z:02}.map",
-            f"{chunk_x:03}{chunk_y:03}{abs_z:02}.map"
-        ]
-        
-        filename = None
-        for f in filenames:
-            if os.path.exists(os.path.join(self.maps_dir, f)):
-                filename = f
-                break
-        
-        if not filename: return 0 # Mapa não existe/não explorado
+
+        filename = self._resolve_filename(chunk_x, chunk_y, abs_z)
+        if not filename:
+            return 0
 
         if filename not in self.cache:
             try:
@@ -66,7 +91,7 @@ class GlobalMap:
         rel_x = abs_x % 256
         rel_y = abs_y % 256
         index = (rel_x * 256) + rel_y
-        
+
         data = self.cache[filename]
         if index < len(data):
             return data[index]
@@ -84,9 +109,21 @@ class GlobalMap:
         if not ignore_transitions and (x, y, z) in self._transition_tiles:
             return False
 
-        # 3. Verifica cor do mapa
+        # 3. Verifica se é override walkable (stone archways)
+        if (x, y, z) in self._walkable_overrides:
+            return True
+
+        # 4. Verifica cor do mapa
         color = self.get_color_id(x, y, z)
         return color in self.walkable_ids
+
+    def is_walkable_offline(self, x, y, z, ignore_transitions=False):
+        """Versão sem temp obstacles/time.time() para geração offline."""
+        if not ignore_transitions and (x, y, z) in self._transition_tiles:
+            return False
+        if (x, y, z) in self._walkable_overrides:
+            return True
+        return self.get_color_id(x, y, z) in self.walkable_ids
 
     def add_temp_block(self, x, y, z, duration=10):
         """Bloqueia um tile temporariamente (ex: player trapando)."""
@@ -95,24 +132,25 @@ class GlobalMap:
     def clear_temp_blocks(self):
         self.temporary_obstacles.clear()
 
-    def get_path(self, start_pos, end_pos, max_dist=5000, max_iter=0):
+    def get_path(self, start_pos, end_pos, max_dist=5000, max_iter=0, offline=False):
         """
         A* Global com suporte a diagonais.
         Retorna lista [(x,y,z), (x,y,z)...] do início ao fim.
         """
         sx, sy, sz = start_pos
         ex, ey, ez = end_pos
-        
+        _walkable = self.is_walkable_offline if offline else self.is_walkable
+
         if sz != ez: return None # Apenas mesmo andar
-        
+
         # Otimização: Se destino for parede, tenta vizinho
-        if not self.is_walkable(ex, ey, ez):
+        if not _walkable(ex, ey, ez):
             found = False
             # Procura vizinho andável (incluindo diagonais agora)
             for dx in [-1, 0, 1]:
                 for dy in [-1, 0, 1]:
                     if dx == 0 and dy == 0: continue
-                    if self.is_walkable(ex+dx, ey+dy, ez):
+                    if _walkable(ex+dx, ey+dy, ez):
                         ex, ey = ex+dx, ey+dy
                         found = True
                         break
@@ -152,8 +190,8 @@ class GlobalMap:
                 nx, ny = cx + dx, cy + dy
                 
                 # Verifica se o tile destino é andável
-                if self.is_walkable(nx, ny, sz):
-                    
+                if _walkable(nx, ny, sz):
+
                     # CUSTO EXTRA: Se for diagonal, verificar se não está "cortando parede" (opcional mas recomendado)
                     # No Tibia, você não pode andar diagonal se os dois cardinais adjacentes forem bloqueados.
                     # Para o GlobalMap (Macro), geralmente ignoramos isso para performance, 
@@ -262,7 +300,9 @@ class GlobalMap:
         h_z = dz * LEVEL_PENALTY
         return h_2d + h_z
 
-    def _get_neighbors_3d(self, x, y, z):
+    def _get_neighbors_3d(self, x, y, z, _walkable=None):
+        if _walkable is None:
+            _walkable = self.is_walkable
         neighbors = []
         # 8 direções no mesmo andar
         for dx, dy, cost in (
@@ -272,11 +312,11 @@ class GlobalMap:
             (-1, 1, COST_DIAGONAL), (-1, -1, COST_DIAGONAL),
         ):
             nx, ny = x + dx, y + dy
-            if not self.is_walkable(nx, ny, z, ignore_transitions=True):
+            if not _walkable(nx, ny, z, ignore_transitions=True):
                 continue
             # Diagonal: checar corner-cutting
             if dx != 0 and dy != 0:
-                if not self.is_walkable(x + dx, y, z, ignore_transitions=True) or not self.is_walkable(x, y + dy, z, ignore_transitions=True):
+                if not _walkable(x + dx, y, z, ignore_transitions=True) or not _walkable(x, y + dy, z, ignore_transitions=True):
                     continue
             neighbors.append(((nx, ny, z), cost))
 
@@ -286,9 +326,10 @@ class GlobalMap:
 
         return neighbors
 
-    def get_path_multilevel(self, start_pos, end_pos, max_iter=150000, debug=False):
+    def get_path_multilevel(self, start_pos, end_pos, max_iter=150000, debug=False, offline=False):
         sx, sy, sz = start_pos
         ex, ey, ez = end_pos
+        _walkable = self.is_walkable_offline if offline else self.is_walkable
 
         def _dbg(msg):
             if debug:
@@ -297,14 +338,14 @@ class GlobalMap:
         _dbg(f"start=({sx},{sy},{sz}) end=({ex},{ey},{ez})")
 
         # Se destino não é walkable, buscar vizinho
-        if not self.is_walkable(ex, ey, ez):
+        if not _walkable(ex, ey, ez):
             _dbg(f"Destino nao walkable (cor={self.get_color_id(ex, ey, ez)}), buscando vizinho...")
             found = False
             for dx in range(-1, 2):
                 for dy in range(-1, 2):
                     if dx == 0 and dy == 0:
                         continue
-                    if self.is_walkable(ex + dx, ey + dy, ez):
+                    if _walkable(ex + dx, ey + dy, ez):
                         _dbg(f"Vizinho walkable: ({ex+dx},{ey+dy},{ez})")
                         ex, ey = ex + dx, ey + dy
                         found = True
@@ -366,7 +407,7 @@ class GlobalMap:
             if current_g is None:
                 continue
 
-            for neighbor, move_cost in self._get_neighbors_3d(cx, cy, cz):
+            for neighbor, move_cost in self._get_neighbors_3d(cx, cy, cz, _walkable=_walkable):
                 if debug and neighbor[2] != cz:
                     transitions_used += 1
                     if transitions_used <= 20:
@@ -390,6 +431,11 @@ class GlobalMap:
             _dbg(f"  Open list restante: {len(open_list)}")
             if closest_node[2] == sz:
                 _dbg(f"  !! Nunca mudou de andar - pode ser problema nas transicoes")
+            self._last_debug = {
+                'closest_node': closest_node,
+                'floors_visited': sorted(floors_visited),
+                'visited_count': len(g_score),
+            }
 
         return None
 

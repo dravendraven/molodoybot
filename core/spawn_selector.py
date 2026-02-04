@@ -83,9 +83,16 @@ class SpawnSelector:
 
         # Primeira execução: ir até o spawn mais próximo antes de usar o grafo
         if self._needs_initial_walk and self._initial_spawn:
-            if DEBUG_AUTO_EXPLORE:
-                print(f"[SpawnSelector] INITIAL: Indo até spawn mais próximo: {_make_key(self._initial_spawn)} [{_short_monsters(self._initial_spawn)}]")
-            return self._initial_spawn
+            # Verificar se initial_spawn está em cooldown (marcado como inalcançável)
+            if now - self._initial_spawn.last_visited < self.revisit_cooldown:
+                if DEBUG_AUTO_EXPLORE:
+                    print(f"[SpawnSelector] INITIAL: Spawn inicial em cooldown, desativando modo INITIAL")
+                self._needs_initial_walk = False
+                # Continuar para lógica normal do grafo/fallback
+            else:
+                if DEBUG_AUTO_EXPLORE:
+                    print(f"[SpawnSelector] INITIAL: Indo até spawn mais próximo: {_make_key(self._initial_spawn)} [{_short_monsters(self._initial_spawn)}]")
+                return self._initial_spawn
 
         # Se temos grafo, usar edges pré-computados
         if self.spawn_graph and self._current_spawn_key:
@@ -136,7 +143,7 @@ class SpawnSelector:
             elif now - spawn.last_visited < self.revisit_cooldown:
                 cd_left = self.revisit_cooldown - (now - spawn.last_visited)
                 reason = f"cooldown ({cd_left:.0f}s)"
-            elif spawn.cz == pz and self._is_occupied_by_closer_player(spawn, px, py, visible_players):
+            elif spawn.cz == pz and self.is_occupied_by_closer_player(spawn, px, py, visible_players):
                 reason = "ocupado por player"
 
             effective_cost = edge["cost"]
@@ -183,7 +190,7 @@ class SpawnSelector:
             if now - s.last_visited < self.revisit_cooldown:
                 cd_left = self.revisit_cooldown - (now - s.last_visited)
                 reason = f"cooldown ({cd_left:.0f}s)"
-            elif s.cz == pz and self._is_occupied_by_closer_player(s, px, py, visible_players):
+            elif s.cz == pz and self.is_occupied_by_closer_player(s, px, py, visible_players):
                 reason = "ocupado por player"
 
             if DEBUG_AUTO_EXPLORE and reason:
@@ -258,6 +265,64 @@ class SpawnSelector:
         if DEBUG_AUTO_EXPLORE:
             print(f"[SpawnSelector] Visitado: {key} [{_short_monsters(spawn)}] (origem: {old_key} → {self._current_spawn_key})")
 
+    def skip_spawn(self, spawn, reason="", player_pos=None):
+        """Marca spawn como pulado (cooldown) e reposiciona no grafo.
+
+        Usar quando spawn é inalcançável, ocupado, ou deve ser evitado.
+        Reposiciona para o spawn skipado (se tem edges) ou mais próximo do player.
+        """
+        spawn.last_visited = time.time()
+        key = _make_key(spawn)
+
+        # Desativar modo INITIAL se era o spawn inicial
+        if self._needs_initial_walk and self._initial_spawn and key == _make_key(self._initial_spawn):
+            self._needs_initial_walk = False
+            if DEBUG_AUTO_EXPLORE:
+                print(f"[SpawnSelector] INITIAL: Spawn inicial pulado, desativando modo INITIAL")
+
+        # Reposicionar no grafo para buscar vizinhos do spawn skipado
+        old_key = self._current_spawn_key
+        if self.spawn_graph:
+            edges = self.spawn_graph.get("edges", {})
+            if key in edges and edges[key]:
+                # Spawn skipado tem edges → usar como nova origem
+                self._current_spawn_key = key
+            elif player_pos:
+                # Spawn skipado sem edges → reposicionar baseado no player
+                px, py, pz = player_pos
+                new_key = self._find_nearest_spawn_key_with_edges(px, py, pz)
+                if new_key:
+                    self._current_spawn_key = new_key
+
+        if DEBUG_AUTO_EXPLORE:
+            reason_str = f" - {reason}" if reason else ""
+            print(f"[SpawnSelector] Pulado: {key} [{_short_monsters(spawn)}]{reason_str} (origem: {old_key} → {self._current_spawn_key})")
+
+    def reset_cooldowns(self):
+        """Reseta cooldowns de todos os spawns ativos."""
+        for s in self.active_spawns:
+            s.last_visited = 0
+        if DEBUG_AUTO_EXPLORE:
+            print(f"[SpawnSelector] Cooldowns resetados para {len(self.active_spawns)} spawns")
+
+    def is_occupied_by_closer_player(self, spawn, px, py, visible_players):
+        """Retorna True se algum player visível está mais perto do spawn que nós."""
+        if not visible_players:
+            return False
+
+        my_dist = spawn.distance_to(px, py)
+        for p in visible_players:
+            try:
+                ppx, ppy, ppz = p.position.x, p.position.y, p.position.z
+            except AttributeError:
+                continue
+            if ppz != spawn.cz:
+                continue
+            player_dist = spawn.distance_to(ppx, ppy)
+            if player_dist <= my_dist and player_dist <= 7:
+                return True
+        return False
+
     def _find_nearest_spawn_key(self, px, py, pz):
         """Encontra o spawn mais próximo do player (Manhattan) entre os ativos."""
         best_key = None
@@ -283,21 +348,3 @@ class SpawnSelector:
                 best_dist = dist
                 best_key = key
         return best_key
-
-    def _is_occupied_by_closer_player(self, spawn, px, py, visible_players):
-        """Retorna True se algum player visível está mais perto do spawn que nós."""
-        if not visible_players:
-            return False
-
-        my_dist = spawn.distance_to(px, py)
-        for p in visible_players:
-            try:
-                ppx, ppy, ppz = p.position.x, p.position.y, p.position.z
-            except AttributeError:
-                continue
-            if ppz != spawn.cz:
-                continue
-            player_dist = spawn.distance_to(ppx, ppy)
-            if player_dist <= my_dist and player_dist <= 7:
-                return True
-        return False

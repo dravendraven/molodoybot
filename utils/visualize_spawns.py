@@ -33,7 +33,7 @@ def load_graph(maps_dir):
 
 def filter_nodes(graph, cx, cy, cz, radius):
     """Retorna nodes dentro do raio Manhattan do ponto central."""
-filtered = {}
+    filtered = {}
     for key, node in graph["nodes"].items():
         dist = abs(node["cx"] - cx) + abs(node["cy"] - cy)
         if dist <= radius:
@@ -187,22 +187,53 @@ def draw_floor(maps_dir, graph, filtered_keys, floor_z, center_x, center_y, radi
     return output_file
 
 
+def parse_position(args_str):
+    """Extrai x, y, z de vários formatos:
+    - {x = 32633, y = 31933, z = 10}
+    - {x=32633, y=31933, z=10}
+    - 32633 31933 10
+    """
+    # Tentar formato {x = valor, y = valor, z = valor}
+    x_match = re.search(r'x\s*=\s*(\d+)', args_str)
+    y_match = re.search(r'y\s*=\s*(\d+)', args_str)
+    z_match = re.search(r'z\s*=\s*(\d+)', args_str)
+
+    if x_match and y_match and z_match:
+        return int(x_match.group(1)), int(y_match.group(1)), int(z_match.group(1))
+
+    # Fallback: extrair apenas números na ordem
+    nums = [int(x) for x in re.findall(r'\d+', args_str) if len(x) >= 1]
+    if len(nums) >= 3:
+        return nums[0], nums[1], nums[2]
+
+    return None
+
+
 def main():
     if len(sys.argv) < 2:
-        print("Uso: python utils/visualize_spawns.py {x=33133, y=32432, z=8} [radius]")
+        print("Uso: python utils/visualize_spawns.py \"{x = 32633, y = 31933, z = 10}\" [radius]")
         print("  ou: python utils/visualize_spawns.py <x> <y> <z> [radius]")
         sys.exit(1)
 
-    # Extrair apenas números dos argumentos (ignora flags do PowerShell como -encodedCommand)
-    nums = [int(x) for x in re.findall(r'\d+', " ".join(sys.argv[1:])) if len(x) >= 1]
+    args_str = " ".join(sys.argv[1:])
+    position = parse_position(args_str)
 
-    if len(nums) >= 3:
-        cx, cy, cz = nums[0], nums[1], nums[2]
-        radius = nums[3] if len(nums) > 3 else 100
-    else:
-        print("Uso: python utils/visualize_spawns.py \"{x=33133, y=32432, z=8}\" [radius]")
-        print("  ou: python utils/visualize_spawns.py 33133 32432 8 [radius]")
+    if not position:
+        print("Uso: python utils/visualize_spawns.py \"{x = 32633, y = 31933, z = 10}\" [radius]")
+        print("  ou: python utils/visualize_spawns.py 32633 31933 10 [radius]")
         sys.exit(1)
+
+    cx, cy, cz = position
+
+    # Extrair radius (último número que não seja x, y ou z)
+    all_nums = [int(x) for x in re.findall(r'\d+', args_str)]
+    radius = 100
+    if len(all_nums) > 3:
+        # Pegar o último número se houver mais de 3
+        radius = all_nums[-1]
+        # Verificar se não é o z (caso seja igual)
+        if radius == cz and len(all_nums) == 4:
+            radius = all_nums[3]
 
     print(f"Centro: ({cx}, {cy}, {cz}), Raio: {radius}")
     print(f"Carregando grafo...")

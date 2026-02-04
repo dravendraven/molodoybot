@@ -15,7 +15,9 @@
       "Bash(while read f)",
       "Bash(do basename \"$f\")",
       "Bash(done)",
-      "Read(//c/Users/vitor/OneDrive/Documentos/cheat engine/**)"
+      "Read(//c/Users/vitor/OneDrive/Documentos/cheat engine/**)",
+      "Bash(pip install:*)",
+      "Bash(copy \"c:\\\\Users\\\\vitor\\\\Downloads\\\\amera-client-latest\\\\spawn_graph.json\" spawn_graph.json)"
     ]
   }
 }

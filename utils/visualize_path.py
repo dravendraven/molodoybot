@@ -10,6 +10,10 @@ from config import MAPS_DIRECTORY, WALKABLE_COLORS
 from core.global_map import GlobalMap
 from utils.color_palette import get_color
 
+# Arquivos de stone archways (tiles que aparecem como montanha mas são walkable)
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ARCHWAY_FILES = [os.path.join(_PROJECT_ROOT, f"archway{i}.txt") for i in range(1, 5)]
+
 def create_visualization(maps_dir, path_data, output_filename="debug_mapa.png", is_failure=False):
     """
     Gera a imagem.
@@ -137,7 +141,7 @@ def create_route_visualization(maps_dir, waypoints, output_prefix="mapa_rota"):
         return []
 
     # 1. Calcular os caminhos completos entre waypoints consecutivos
-    gm = GlobalMap(maps_dir, WALKABLE_COLORS)
+    gm = GlobalMap(maps_dir, WALKABLE_COLORS, archway_files=ARCHWAY_FILES)
     full_paths_by_floor = defaultdict(list)
     transitions = []
 
@@ -308,7 +312,7 @@ def _create_floor_visualization(maps_dir, path_coords, transitions, output_file,
 # EXECUÇÃO
 # ============================================================================
 if __name__ == "__main__":
-    gm = GlobalMap(MAPS_DIRECTORY, WALKABLE_COLORS)
+    gm = GlobalMap(MAPS_DIRECTORY, WALKABLE_COLORS, archway_files=ARCHWAY_FILES)
     
     # --- COORDENADAS DO SEU PROBLEMA ---
     start_pos = (32406, 31729, 8) 

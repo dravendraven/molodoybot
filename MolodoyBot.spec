@@ -1,7 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('world-spawn.xml', '.')]
+datas = [
+    ('world-spawn.xml', '.'),
+    ('archway1.txt', '.'),
+    ('archway2.txt', '.'),
+    ('archway3.txt', '.'),
+    ('archway4.txt', '.'),
+    ('floor_transitions.json', '.'),
+    ('spawn_graph.json', '.'),
+]
 binaries = []
 hiddenimports = []
 tmp_ret = collect_all('customtkinter')

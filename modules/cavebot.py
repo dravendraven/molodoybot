@@ -30,12 +30,22 @@ from core.global_map import GlobalMap
 from core.player_core import get_player_speed, is_player_moving, wait_until_stopped
 from core.advancement_tracker import AdvancementTracker
 from core.battlelist import BattleListScanner
+from core.models import Position
 from core.spawn_parser import parse_spawns, SpawnArea
 from core.spawn_selector import SpawnSelector
 from core.floor_connector import FloorConnector
 
 
-COOLDOWN_AFTER_COMBAT = random.uniform(2.5, 5)
+def _get_bundled_path(filename):
+    """Retorna caminho para arquivo bundled (PyInstaller) ou do projeto."""
+    import sys
+    if getattr(sys, 'frozen', False):
+        return os.path.join(sys._MEIPASS, filename)
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), filename)
+
+
+COOLDOWN_AFTER_COMBAT_MIN = 2.5
+COOLDOWN_AFTER_COMBAT_MAX = 5.0
 GLOBAL_RECALC_LIMIT = 5
 
 # Mapeamento de Delta (dx, dy) para Opcode do Packet
@@ -84,9 +94,12 @@ class Cavebot:
         # [NAVEGAÇÃO HIBRIDA] Inicializa o "GPS" (Global)
         # Usa maps_directory passado como parâmetro, ou fallback para config.py
         effective_maps_dir = maps_directory if maps_directory else MAPS_DIRECTORY
-        transitions_path = os.path.join(effective_maps_dir, "floor_transitions.json")
+        # Floor transitions e archways são bundled no .exe
+        transitions_path = _get_bundled_path("floor_transitions.json")
+        archway_files = [_get_bundled_path(f"archway{i}.txt") for i in range(1, 5)]
         self.global_map = GlobalMap(effective_maps_dir, WALKABLE_COLORS,
-                                    transitions_file=transitions_path)
+                                    transitions_file=transitions_path,
+                                    archway_files=archway_files)
         self.current_global_path = [] # Lista de nós [(x,y,z), ...] da rota atual
         self.last_lookahead_idx = -1
 
@@ -115,6 +128,7 @@ class Cavebot:
         self.last_speed_check = 0  # Timestamp da última leitura de speed
         self.last_floor_change_time = 0  # Timestamp do último floor change (subir/descer andar)
         self._last_floor_change_from_z = None  # Z de onde veio na última transição (yo-yo protection)
+        self._multifloor_full_path = None  # Rota multifloor completa (quando same-Z requer desvio por outro andar)
 
         # --- ESTADO PARA MINIMAP (NOVO) ---
         self.current_state = self.STATE_IDLE
@@ -134,6 +148,9 @@ class Cavebot:
         self._afk_pause_active = False       # True se estamos em pausa AFK
         self._afk_pause_until = 0            # Timestamp de quando a pausa termina
         self._afk_next_pause_time = 0        # Timestamp para próxima pausa
+
+        # --- COOLDOWN PÓS-COMBATE DINÂMICO ---
+        self._combat_cooldown_duration = 0.0  # Duração randomizada do cooldown atual
 
         # --- AUTO-EXPLORE ---
         self.auto_explore_enabled = False
@@ -350,18 +367,34 @@ class Cavebot:
                 print(f"[{_ts()}] [Cavebot] {self.state_message}")
             return
 
-        # NOVO: Cooldown de 1s após combate/loot para estabilização
-        # Evita race condition: matar criatura → delay 1s → abrir loot → próximo combate
-        if time.time() - state.last_combat_time < COOLDOWN_AFTER_COMBAT:
-            remaining = COOLDOWN_AFTER_COMBAT - (time.time() - state.last_combat_time)
+        # NOVO: Cooldown dinâmico após combate/loot/spear pickup
+        # Gera novo valor aleatório a cada transição (não fixo por sessão)
+        elapsed_since_combat = time.time() - state.last_combat_time
+
+        # Gera novo cooldown quando transição é detectada (elapsed < 0.5s = acabou de sair)
+        if self._combat_cooldown_duration == 0.0 and elapsed_since_combat < 0.5:
+            self._combat_cooldown_duration = random.uniform(
+                COOLDOWN_AFTER_COMBAT_MIN,
+                COOLDOWN_AFTER_COMBAT_MAX
+            )
+            if DEBUG_PATHFINDING:
+                print(f"[{_ts()}] [Cavebot] Novo cooldown gerado: {self._combat_cooldown_duration:.1f}s")
+
+        # Verifica se ainda está em cooldown
+        if elapsed_since_combat < self._combat_cooldown_duration:
+            remaining = self._combat_cooldown_duration - elapsed_since_combat
             self._was_paused = True  # Marcar que estávamos pausados
             self.current_state = self.STATE_COMBAT_COOLDOWN
             self.state_message = f"⏰ Cooldown pós-combate ({remaining:.1f}s)"
             if DEBUG_PATHFINDING and self._last_logged_pause != "combat_cooldown":
                 self._last_logged_pause = "combat_cooldown"
-                print(f"[{_ts()}] [Cavebot] ⏸️ Cooldown pós-combate: {remaining:.1f}s")
+                print(f"[{_ts()}] [Cavebot] ⏸️ Cooldown: {remaining:.1f}s")
             self.last_action_time = time.time()
             return
+
+        # Cooldown expirou - resetar para próximo evento
+        if self._combat_cooldown_duration > 0:
+            self._combat_cooldown_duration = 0.0
 
         # NOVO: Pausa durante coleta de spears pós-loot (somente se feature habilitada)
         if state.is_spear_pickup_pending and self._spear_picker_enabled_callback():
@@ -512,6 +545,46 @@ class Cavebot:
         # ======================================================================
         # 4. LÓGICA DE ANDARES (FLOOR CHANGE)
         # ======================================================================
+        # Multifloor same-Z: se temos rota multifloor e consumimos os tiles do andar atual,
+        # precisamos mudar de andar mesmo que wp['z'] == pz
+        if wp['z'] == pz and self._multifloor_full_path and not self.current_global_path:
+            # Encontrar o próximo Z na rota multifloor
+            next_z = None
+            for t in self._multifloor_full_path:
+                if t[2] != pz:
+                    next_z = t[2]
+                    break
+            if next_z is not None:
+                direction = "↑ SUBIR" if next_z < pz else "↓ DESCER"
+                if DEBUG_PATHFINDING:
+                    print(f"[{_ts()}] [🪜 MULTIFLOOR SAME-Z] Precisa {direction}: Z atual={pz} → Z intermediário={next_z}")
+                floor_target = self.analyzer.scan_for_floor_change(
+                    next_z, pz,
+                    player_abs_x=px, player_abs_y=py,
+                    transitions_by_floor=self.global_map._transitions_by_floor if hasattr(self, 'global_map') and self.global_map else None
+                )
+                if floor_target:
+                    fx, fy, ftype, fid = floor_target
+                    dist_obj = math.sqrt(fx**2 + fy**2)
+                    if DEBUG_PATHFINDING:
+                        print(f"[{_ts()}] [🪜 MULTIFLOOR SAME-Z] Encontrado {ftype} (ID:{fid}) em ({fx:+d}, {fy:+d}), dist={dist_obj:.1f}")
+                    if dist_obj <= 1.5:
+                        fc_success = self._handle_special_tile(fx, fy, ftype, fid, px, py, pz)
+                        self.current_global_path = []
+                        if fc_success:
+                            self.last_floor_change_time = time.time()
+                            self._last_floor_change_from_z = pz
+                            # Recalcular multifloor do novo andar
+                            self._multifloor_full_path = None
+                        return
+                    else:
+                        # Navegar até a transição
+                        abs_x = px + fx
+                        abs_y = py + fy
+                        self._navigate_hybrid(abs_x, abs_y, pz, px, py)
+                        self.last_action_time = time.time()
+                        return
+
         if wp['z'] != pz:
             direction = "↑ SUBIR" if wp['z'] < pz else "↓ DESCER"
             self.current_state = self.STATE_FLOOR_CHANGE
@@ -538,6 +611,8 @@ class Cavebot:
                         (px, py, pz), (wp['x'], wp['y'], wp['z'])
                     )
                     if full_path:
+                        # Inserir waypoints adjacentes às transições
+                        full_path = self._insert_transition_waypoints(full_path)
                         same_floor = [t for t in full_path if t[2] == pz]
                         if same_floor:
                             self.current_global_path = same_floor
@@ -641,6 +716,8 @@ class Cavebot:
                         )
                         if full_path:
                             print(f"[{_ts()}] [Cavebot]   ✅ Multifloor encontrou path: {len(full_path)} tiles")
+                            # Inserir waypoints adjacentes às transições
+                            full_path = self._insert_transition_waypoints(full_path)
                             # Extrair apenas tiles do andar atual (até a transição)
                             same_floor_path = []
                             for tile in full_path:
@@ -732,13 +809,13 @@ class Cavebot:
             max_floors = AUTO_EXPLORE_MAX_FLOORS
             floor_connector = None
             if max_floors > 0:
-                transitions_path = os.path.join(self.global_map.maps_dir, "floor_transitions.json")
+                transitions_path = _get_bundled_path("floor_transitions.json")
                 floor_connector = FloorConnector(self.global_map, transitions_file=transitions_path)
                 self._floor_connector = floor_connector
 
             # Carregar grafo pré-computado se disponível
             spawn_graph = None
-            graph_path = os.path.join(self.global_map.maps_dir, "spawn_graph.json")
+            graph_path = _get_bundled_path("spawn_graph.json")
             if os.path.isfile(graph_path):
                 try:
                     import json
@@ -834,11 +911,11 @@ class Cavebot:
         # 4. Player mais proximo do spawn? Pular (só no mesmo andar)
         if spawn.cz == pz:
             visible_players = self._get_visible_players(pz)
-            if self._spawn_selector._is_occupied_by_closer_player(spawn, px, py, visible_players):
+            if self._spawn_selector.is_occupied_by_closer_player(spawn, px, py, visible_players):
                 if DEBUG_AUTO_EXPLORE:
                     player_info = [(p.name, p.position.x, p.position.y, p.position.z) for p in visible_players[:3]]
                     print(f"[{_ts()}] [AutoExplore] Spawn ocupado por player, trocando destino. Players: {player_info}")
-                spawn.last_visited = time.time()
+                self._spawn_selector.skip_spawn(spawn, "ocupado por player", (px, py, pz))
                 self._current_spawn_target = None
                 self.current_global_path = []
                 self.advancement_tracker.reset()
@@ -907,12 +984,17 @@ class Cavebot:
                 else:
                     # Longe — navegar até tile adjacente ao tile especial
                     target_fx, target_fy = fx, fy
-                    if ftype in ('UP_USE', 'DOWN', 'DOWN_USE', 'SHOVEL'):
+                    if ftype in ('UP_USE', 'DOWN_USE', 'SHOVEL'):
                         target_fx, target_fy = self._get_adjacent_use_tile(fx, fy)
                     abs_x = px + target_fx
                     abs_y = py + target_fy
                     if DEBUG_AUTO_EXPLORE:
                         print(f"[{_ts()}] [AutoExplore] Navegando ate {ftype} em ({abs_x}, {abs_y})")
+                    # Bug 5 fix: Only clear path if target changed (prevents recalculation loop)
+                    if not self.current_global_path or self.current_global_path[-1][:2] != (abs_x, abs_y):
+                        if DEBUG_AUTO_EXPLORE:
+                            print(f"[{_ts()}] [AutoExplore] Limpando path - novo target: ({abs_x}, {abs_y})")
+                        self.current_global_path = []
                     self._navigate_hybrid(abs_x, abs_y, pz, px, py)
                     return
             else:
@@ -929,6 +1011,8 @@ class Cavebot:
                         print(f"[{_ts()}] [AutoExplore] Sem rota multilevel de Z={pz} para spawn Z={spawn.cz}")
                     self._current_spawn_target = None
                     return
+                # Inserir waypoints adjacentes às transições
+                full_path = self._insert_transition_waypoints(full_path)
                 # Extrair tiles do andar atual para navegar até a escada
                 same_floor = [t for t in full_path if t[2] == pz]
                 # Parar 2 tiles antes da transição para que scan_for_floor_change
@@ -959,7 +1043,7 @@ class Cavebot:
                 if self._nav_fail_count >= 3:
                     if DEBUG_AUTO_EXPLORE:
                         print(f"[{_ts()}] [AutoExplore] Spawn inalcançável após {self._nav_fail_count} tentativas, pulando")
-                    spawn.last_visited = time.time()
+                    self._spawn_selector.skip_spawn(spawn, "inalcançável", (px, py, pz))
                     self._current_spawn_target = None
                     self._nav_fail_count = 0
                 return
@@ -1028,6 +1112,8 @@ class Cavebot:
                 )
                 # Se o path cruza andares, extrair apenas tiles do andar atual
                 if path and any(t[2] != my_z for t in path):
+                    # Inserir waypoints adjacentes às transições
+                    path = self._insert_transition_waypoints(path)
                     same_floor = []
                     for t in path:
                         if t[2] == my_z:
@@ -1080,6 +1166,37 @@ class Cavebot:
                     (dest_x, dest_y, dest_z),
                     max_offset=2
                 )
+                if path:
+                    # Same-floor funcionou, limpar rota multifloor se existia
+                    self._multifloor_full_path = None
+
+            # Fallback: se same-floor falhou, tentar multifloor (barreira pode exigir desvio por outro andar)
+            if not path and USE_MULTIFLOOR_PATHFINDING:
+                ml_path = self.global_map.get_path_multilevel(
+                    (my_x, my_y, my_z),
+                    (dest_x, dest_y, dest_z)
+                )
+                if ml_path and any(t[2] != my_z for t in ml_path):
+                    # Salvar rota completa para o floor change handler usar
+                    self._multifloor_full_path = ml_path
+                    # Inserir waypoints adjacentes às transições para evitar oscilação
+                    ml_path = self._insert_transition_waypoints(ml_path)
+                    same_floor = []
+                    for t in ml_path:
+                        if t[2] == my_z:
+                            same_floor.append(t)
+                        else:
+                            break
+                    if len(same_floor) > 2:
+                        same_floor = same_floor[:-2]
+                    if same_floor:
+                        path = same_floor
+                        print(f"[{_ts()}] [Nav] 🔀 Same-floor falhou, usando rota multifloor ({len(path)} tiles ate transicao)")
+                    else:
+                        # Já estamos perto da transição — não cortar tiles
+                        path = None
+                elif ml_path:
+                    path = ml_path
 
             if path:
                 self.current_global_path = path
@@ -1097,6 +1214,9 @@ class Cavebot:
         target_local_x, target_local_y = dest_x, dest_y
 
         if self.current_global_path:
+            # Get player Z for lookahead validation (avoid jumping past floor transitions)
+            _, _, current_z = get_player_pos(self.pm, self.base_addr)
+
             # Sincroniza: Onde estou na rota?
             closest_idx = -1
             min_dist_path = 9999
@@ -1117,9 +1237,10 @@ class Cavebot:
                 lookahead = min(7, len(self.current_global_path) - 1)
 
                 # Reduz lookahead se sub-destino ficaria fora do range de memória (±7)
+                # ou se estiver em outro andar (evita pular transições de floor)
                 while lookahead > 1:
-                    lx, ly, _ = self.current_global_path[lookahead]
-                    if abs(lx - my_x) <= 7 and abs(ly - my_y) <= 7:
+                    lx, ly, lz = self.current_global_path[lookahead]
+                    if abs(lx - my_x) <= 7 and abs(ly - my_y) <= 7 and lz == current_z:
                         break
                     lookahead -= 1
 
@@ -1219,6 +1340,7 @@ class Cavebot:
                             if DEBUG_OBSTACLE_CLEARING:
                                 print(f"[{_ts()}] [ObstacleClear] REALTIME: Não conseguiu limpar, recalculando...")
                             self.global_recalc_counter += 1
+                            self.next_walk_time = time.time() + 0.1  # Prevent tight loop
                             return
 
                 with self._waypoints_lock:
@@ -1650,6 +1772,42 @@ class Cavebot:
         else:
             print(f"[{_ts()}] [Cavebot] Direção inválida: {dx}, {dy}")
 
+    def _insert_transition_waypoints(self, ml_path):
+        """
+        Insere waypoints adjacentes aos tiles de transição no path multifloor.
+        Isso garante que o bot tenha sub-destinos próximos antes/depois de cada transição,
+        evitando oscilação quando o A* retorna paths com gaps grandes após mudança de andar.
+        """
+        if not ml_path or len(ml_path) < 2:
+            return ml_path
+
+        enhanced_path = []
+
+        for i in range(len(ml_path)):
+            x, y, z = ml_path[i]
+            enhanced_path.append((x, y, z))
+
+            # Check if next node has Z change (transition point)
+            if i < len(ml_path) - 1:
+                next_x, next_y, next_z = ml_path[i + 1]
+
+                if next_z != z:  # Z changes - this is a transition!
+                    # Insert waypoint ADJACENT to transition tile
+                    for dx, dy in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
+                        adj_x, adj_y = x + dx, y + dy
+
+                        # Check if adjacent tile is walkable (ignore transition blocking)
+                        if self.global_map.is_walkable(adj_x, adj_y, z, ignore_transitions=True):
+                            # Avoid duplicates with recent nodes
+                            recent = enhanced_path[-2:] if len(enhanced_path) >= 2 else enhanced_path
+                            if (adj_x, adj_y, z) not in recent:
+                                enhanced_path.append((adj_x, adj_y, z))
+                                if DEBUG_PATHFINDING:
+                                    print(f"[{_ts()}] [Nav] 📍 Waypoint de transição inserido: ({adj_x}, {adj_y}, {z})")
+                            break
+
+        return enhanced_path
+
     def _handle_special_tile(self, rel_x, rel_y, ftype, special_id, px, py, pz):
         """Executa a ação correta para tiles especiais (escadas, buracos, rope)."""
         # Re-check combate antes de executar floor change (race condition com trainer)
@@ -1674,7 +1832,18 @@ class Cavebot:
             if rel_x != 0 or rel_y != 0:
                 # Se diagonal, primeiro alinha para cardinal-adjacente (evita step diagonal unreliable)
                 if rel_x != 0 and rel_y != 0:
-                    self._move_step(rel_x, 0)
+                    # Verificar qual direção cardinal está walkable
+                    tile_x = self.analyzer.get_tile_properties(rel_x, 0)
+                    tile_y = self.analyzer.get_tile_properties(0, rel_y)
+
+                    if tile_x.get('walkable', False):
+                        self._move_step(rel_x, 0)
+                    elif tile_y.get('walkable', False):
+                        self._move_step(0, rel_y)
+                    else:
+                        # Nenhum cardinal walkable, tentar diagonal direto
+                        self._move_step(rel_x, rel_y)
+
                     self.next_walk_time = time.time() + 0.8
                     return  # Próximo ciclo vai pisar no tile cardinalmente
                 self._move_step(rel_x, rel_y)
@@ -2274,8 +2443,8 @@ class Cavebot:
                     # Estratégia de recuperação: Pula spawn atual
                     self.state_message = f"🧱 Stuck! Pulando spawn"
                     print(f"[{_ts()}] [AutoExplore] ⚠️ STUCK! {stuck_time:.1f}s parado ({px}, {py}, {pz}). Pulando spawn.")
-                    if self._current_spawn_target:
-                        self._current_spawn_target.last_visited = time.time()
+                    if self._current_spawn_target and self._spawn_selector:
+                        self._spawn_selector.skip_spawn(self._current_spawn_target, "stuck", (px, py, pz))
                         self._current_spawn_target = None
                     if self.current_global_path:
                         print(f"[{_ts()}] [DEBUG] Path limpo em: check_stuck_explore (tinha {len(self.current_global_path)} nós)")
@@ -2404,21 +2573,22 @@ class Cavebot:
         if state.is_chat_paused:
             return False
 
-        # Verificar se há criaturas próximas (8 SQM)
+        # Verificar se há criaturas VIVAS E VISÍVEIS próximas (8 SQM)
         try:
             px, py, pz = get_player_pos(self.pm, self.base_addr)
-            player_id = self.pm.read_int(self.base_addr + OFFSET_PLAYER_ID)
+            player_pos = Position(px, py, pz)
 
             scanner = BattleListScanner(self.pm, self.base_addr)
-            creatures = scanner.get_creatures_in_range((px, py, pz), 8, player_z=pz)
+            # get_monsters() já filtra: is_alive (hp > 0 AND visible) e mesmo andar
+            monsters = scanner.get_monsters(player_z=pz)
 
-            # Filtra o próprio player
-            creatures = [c for c in creatures if c.id != player_id]
+            # Filtra apenas monstros dentro de 8 SQM (Chebyshev distance)
+            nearby_monsters = [m for m in monsters if m.is_in_range(player_pos, 8)]
 
-            if creatures:
+            if nearby_monsters:
                 if DEBUG_PATHFINDING:
-                    names = [c.name for c in creatures[:3]]
-                    print(f"[{_ts()}] [Cavebot] AFK adiado - criaturas próximas: {names}")
+                    names = [m.name for m in nearby_monsters[:3]]
+                    print(f"[{_ts()}] [Cavebot] AFK adiado - monstros vivos próximos: {names}")
                 return False
         except Exception as e:
             if DEBUG_PATHFINDING:
@@ -2630,7 +2800,7 @@ class Cavebot:
 
         elif response == 'SKIP':
             print(f"[{_ts()}] [AutoExplore] Pulando spawn devido a bloqueio por '{player.name}'")
-            spawn.last_visited = time.time()
+            self._spawn_selector.skip_spawn(spawn, f"bloqueado por {player.name}", (px, py, pz))
             self._current_spawn_target = None
             if self.current_global_path:
                 print(f"[{_ts()}] [DEBUG] Path limpo em: player_skip_explore (tinha {len(self.current_global_path)} nós)")

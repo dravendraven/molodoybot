@@ -51,7 +51,7 @@ SPEAR_ID = 3277          # ID da spear
 SPEAR_WEIGHT = 20.0      # Peso de cada spear em oz
 
 # Debug - ativa/desativa prints do modulo
-DEBUG_SPEAR = False
+DEBUG_SPEAR = True
 
 def _log(msg):
     """Log condicional baseado em DEBUG_SPEAR."""
@@ -59,7 +59,7 @@ def _log(msg):
         print(msg)
 
 # Decremento de probabilidade por spear na mao (15% por spear)
-PICK_CHANCE_DECREMENT = 0.10
+PICK_CHANCE_DECREMENT = 0.20
 
 # Tiles a escanear (proprio tile + adjacentes incluindo diagonais)
 ADJACENT_TILES = [
@@ -78,11 +78,11 @@ ROPE_SPOT_IDS = FLOOR_CHANGE.get('ROPE', set())
 # ========== DELAYS DE SCAN (RÁPIDOS, SEM HUMANIZAÇÃO) ==========
 # Estes delays controlam a velocidade dos loops de monitoramento
 SCAN_HAND_DELAY = 0.15         # Delay entre scans de spears na mao (monitoramento constante)
-SCAN_TILES_DELAY = 0.35         # Delay entre scans de tiles ao redor (procurando spears no chao)
+SCAN_TILES_DELAY = 0.4         # Delay entre scans de tiles ao redor (procurando spears no chao)
 
 # ========== DELAYS HUMANIZADOS (APLICADOS APENAS EM AÇÕES) ==========
 # Estes delays simulam tempo de reação humana e são aplicados APENAS em move_item
-REACTION_DELAY_MIN = 0.20      # Delay minimo de reacao ao detectar spear no chao (250ms base)
+REACTION_DELAY_MIN = 0.3      # Delay minimo de reacao ao detectar spear no chao (250ms base)
 MOVE_ITEM_DELAY_MIN = 0.5     # Delay minimo global apos QUALQUER move_item (250ms base)
 # Nota: Variacao gaussiana de ~30% sera aplicada sobre estes valores base
 
@@ -1166,6 +1166,13 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
                     state.set_spear_pickup_pending(False)  # Cleanup: libera cavebot
                     continue
                 # ================================================================================================
+
+            # Re-read map AFTER delay to get updated stack positions
+            if not mapper.read_full_map(player_id):
+                time.sleep(0.3)
+                state.set_spear_pickup_pending(False)
+                _log("[Spear Action] Falha ao re-ler mapa após delay de bloqueadores")
+                continue
 
             # === CALCULA STACK_POS (usando nova função utilitária) ===
             spear_stack_pos = analyzer.get_item_stackpos(rel_x, rel_y, SPEAR_ID)

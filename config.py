@@ -57,7 +57,7 @@ SNIFFER_SERVER_IP = "135.148.27.135"  # IP do servidor OT
 # ==============================================================================
 # GUI SETTINGS
 # ==============================================================================
-RELOAD_BUTTON = True  # Exibe botão de reload na interface (desabilitar para release)
+RELOAD_BUTTON = False  # Exibe botão de reload na interface (desabilitar para release)
 
 TARGET_MONSTERS = ["Rotworm", "Minotaur"]
 SAFE_CREATURES = ["Minotaur", "Rotworm", "Troll", "Wolf", "Deer", "Rabbit", "Spider", "Poison Spider", "Bug", "Rat", "Bear", "Wasp", "Orc"]
@@ -429,6 +429,14 @@ RESUME_DELAY_GM = (120, 300)
 # Intervalo entre alertas no Telegram (Segundos)
 TELEGRAM_INTERVAL_NORMAL = 60
 TELEGRAM_INTERVAL_GM = 10  # Alerta frenético se for GM
+
+# ==============================================================================
+# GM MANA MANIPULATION DETECTION
+# ==============================================================================
+# GMs test bots by artificially adding mana to trigger auto-runemaker
+# Normal mana regen: +1 per tick (4-12 seconds depending on vocation)
+# Suspicious: mana increases by more than this threshold in one reading
+MANA_GM_THRESHOLD = 10  # Trigger alarm if mana increases by more than 10
 
 # ==============================================================================
 # CONSTANTES DE DETECÇÃO (ALARM)

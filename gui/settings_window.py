@@ -600,30 +600,31 @@ class SettingsWindow:
 
         ctk.CTkLabel(frame_hp, text="Monitorar Vida (HP):", **self.UI['H1']).pack(anchor="w", padx=10, pady=(0, 5))
 
-        entry_hp_pct = None
+        # Frame horizontal para switch + entry na mesma linha
+        f_hp_row = ctk.CTkFrame(frame_hp, fg_color="transparent")
+        f_hp_row.pack(anchor="w", padx=self.UI['PAD_INDENT'])
 
-        def toggle_hp_alarm():
-            state = "normal" if switch_hp_alarm.get() else "disabled"
-            if entry_hp_pct:
-                entry_hp_pct.configure(state=state)
-
-        switch_hp_alarm = ctk.CTkSwitch(frame_hp, text="Alarme de HP Baixo",
-                                        command=toggle_hp_alarm,
+        switch_hp_alarm = ctk.CTkSwitch(f_hp_row, text="Alarme HP Baixo",
                                         progress_color="#FF5555", **self.UI['BODY'])
-        switch_hp_alarm.pack(anchor="w", padx=self.UI['PAD_INDENT'])
+        switch_hp_alarm.pack(side="left")
         if settings.get('alarm_hp_enabled', False):
             switch_hp_alarm.select()
 
-        f_hp_val = ctk.CTkFrame(frame_hp, fg_color="transparent")
-        f_hp_val.pack(fill="x", padx=self.UI['PAD_INDENT'], pady=2)
-
-        ctk.CTkLabel(f_hp_val, text="Disparar se <", **self.UI['BODY']).pack(side="left")
-        entry_hp_pct = ctk.CTkEntry(f_hp_val, **self.UI['INPUT'])
+        ctk.CTkLabel(f_hp_row, text="   dispara se <", **self.UI['BODY']).pack(side="left")
+        entry_hp_pct = ctk.CTkEntry(f_hp_row, **self.UI['INPUT'])
         entry_hp_pct.pack(side="left", padx=5)
         entry_hp_pct.insert(0, str(settings.get('alarm_hp_percent', 50)))
-        ctk.CTkLabel(f_hp_val, text="%", **self.UI['BODY']).pack(side="left")
+        ctk.CTkLabel(f_hp_row, text="%", **self.UI['BODY']).pack(side="left")
 
-        toggle_hp_alarm()
+        # Mana GM Detection
+        ctk.CTkLabel(tab, text="Detecção de Mana GM:", **self.UI['H1']).pack(anchor="w", padx=10, pady=(5, 5))
+
+        switch_mana_gm = ctk.CTkSwitch(tab, text="Detectar mana artificial (GM test)",
+                                       command=lambda: None,
+                                       progress_color="#AA55FF", **self.UI['BODY'])
+        switch_mana_gm.pack(anchor="w", padx=self.UI['PAD_INDENT'])
+        if settings.get('alarm_mana_gm_enabled', False):
+            switch_mana_gm.select()
 
         # Chat
         ctk.CTkLabel(tab, text="Mensagens (Chat):", **self.UI['H1']).pack(anchor="w", padx=10, pady=(0, 5))
@@ -666,6 +667,7 @@ class SettingsWindow:
                 s['alarm_chat_enabled'] = bool(switch_chat.get())
                 s['alarm_movement_enabled'] = bool(switch_movement.get())
                 s['alarm_keep_position'] = bool(switch_keep_pos.get())
+                s['alarm_mana_gm_enabled'] = bool(switch_mana_gm.get())
                 self.cb.save_config_file()
                 self.cb.log("🔔 Alarme salvo.")
             except:
@@ -734,6 +736,13 @@ class SettingsWindow:
         if settings.get('loot_drop_food', False):
             switch_drop_food.select()
 
+        switch_auto_eat = ctk.CTkSwitch(frame_loot_opts, text="Comer Food automaticamente",
+                                         command=lambda: None,
+                                         progress_color="#32CD32", **self.UI['BODY'])
+        switch_auto_eat.pack(anchor="center")
+        if settings.get('loot_auto_eat', True):
+            switch_auto_eat.select()
+
         # Sistema configurável de loot
         txt_loot_names = None
         txt_drop_names = None
@@ -767,6 +776,7 @@ class SettingsWindow:
                     s['loot_containers'] = int(entry_cont_count.get())
                 s['loot_dest'] = int(entry_dest_idx.get())
                 s['loot_drop_food'] = bool(switch_drop_food.get())
+                s['loot_auto_eat'] = bool(switch_auto_eat.get())
 
                 if self.cb.use_configurable_loot and txt_loot_names and txt_drop_names:
                     loot_lines = [line.strip() for line in txt_loot_names.get("0.0", "end").split('\n') if line.strip()]

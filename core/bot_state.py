@@ -479,9 +479,18 @@ class BotState:
 
         Args:
             pending: True para ativar ciclo prioritário, False para desativar
+
+        Nota: Quando pending=False (finalizando pickup), atualiza last_combat_time
+        para acionar cooldown pós-combate no cavebot, dando tempo para o trainer
+        selecionar novos alvos antes da navegação retomar.
         """
         with self._lock:
             self._is_spear_pickup_pending = pending
+
+            # Quando spear pickup FINALIZA, atualiza last_combat_time
+            # para acionar cooldown pós-combate no cavebot
+            if not pending:
+                self._last_combat_time = time.time()
 
     # =========================================================================
     # MÉTODOS DE CONVENIÊNCIA

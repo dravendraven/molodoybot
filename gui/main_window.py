@@ -57,6 +57,7 @@ class MainWindowCallbacks:
     toggle_xray: Callable[[], None]
     toggle_cavebot: Callable[[], None]
     on_fisher_toggle: Callable[[], None]
+    on_pause_toggle: Callable[[bool], None]  # Called with is_pausing=True/False
 
     # === Trackers ===
     get_sword_tracker: Callable[[], Any]
@@ -95,11 +96,15 @@ class MainWindow:
         # === Estado Interno ===
         self.is_graph_visible = False
         self.log_visible = False
+        self.is_paused = False
+        self.paused_switch_states = {}  # {switch_name: bool}
+        self.paused_settings_states = {}  # {setting_name: value}
 
         # === Widgets Expostos (threads precisam acessar) ===
         # Header
         self.btn_xray: ctk.CTkButton = None
         self.btn_settings: ctk.CTkButton = None
+        self.btn_pause: ctk.CTkButton = None
         self.btn_reload: ctk.CTkButton = None
         self.lbl_connection: ctk.CTkLabel = None
 
@@ -241,6 +246,16 @@ class MainWindow:
             font=("Verdana", 11, "bold")
         )
         self.btn_settings.pack(side="left")
+
+        # Pause/Resume Button
+        self.btn_pause = ctk.CTkButton(
+            frame_header, text="⏸️",
+            command=self.toggle_pause,
+            width=35, height=30,
+            fg_color="#303030", hover_color="#505050",
+            font=("Verdana", 14)
+        )
+        self.btn_pause.pack(side="left", padx=5)
 
         # Connection Label
         self.lbl_connection = ctk.CTkLabel(
@@ -595,6 +610,80 @@ class MainWindow:
             self.btn_graph.configure(text="Esconder Gráfico 📉")
             self.is_graph_visible = True
         self.auto_resize_window()
+
+    def toggle_pause(self):
+        """
+        Alterna entre pausar e resumir todos os módulos.
+        Ao pausar: salva estado atual, desliga tudo, mostra "Pausado".
+        Ao resumir: restaura estados anteriores.
+        """
+        if not self.is_paused:
+            # === PAUSANDO ===
+            # Salvar estado atual dos switches
+            self.paused_switch_states = {
+                'trainer': self.switch_trainer.get() if self.switch_trainer else False,
+                'loot': self.switch_loot.get() if self.switch_loot else False,
+                'alarm': self.switch_alarm.get() if self.switch_alarm else False,
+                'fisher': self.switch_fisher.get() if self.switch_fisher else False,
+                'runemaker': self.switch_runemaker.get() if self.switch_runemaker else False,
+                'cavebot': self.switch_cavebot_var.get() if self.switch_cavebot_var else 0,
+            }
+
+            # Chamar callback para salvar e desativar settings (light, spear, torch, ai)
+            if hasattr(self.callbacks, 'on_pause_toggle'):
+                self.callbacks.on_pause_toggle(True)
+
+            # Desligar todos os switches visualmente
+            if self.switch_trainer:
+                self.switch_trainer.deselect()
+            if self.switch_loot:
+                self.switch_loot.deselect()
+            if self.switch_alarm:
+                self.switch_alarm.deselect()
+            if self.switch_fisher:
+                self.switch_fisher.deselect()
+            if self.switch_runemaker:
+                self.switch_runemaker.deselect()
+
+            # Cavebot precisa chamar toggle se estava ligado
+            if self.paused_switch_states.get('cavebot', 0):
+                self.switch_cavebot_var.set(0)
+                if hasattr(self.callbacks, 'toggle_cavebot'):
+                    self.callbacks.toggle_cavebot()
+
+            # Atualizar UI
+            self.btn_pause.configure(text="▶️", fg_color="#FF6600")
+            self.set_connection_status("⏸️ Pausado", "#FFA500")
+            self.is_paused = True
+
+        else:
+            # === RESUMINDO ===
+            # Restaurar switches para estado anterior
+            if self.paused_switch_states.get('trainer', False) and self.switch_trainer:
+                self.switch_trainer.select()
+            if self.paused_switch_states.get('loot', False) and self.switch_loot:
+                self.switch_loot.select()
+            if self.paused_switch_states.get('alarm', False) and self.switch_alarm:
+                self.switch_alarm.select()
+            if self.paused_switch_states.get('fisher', False) and self.switch_fisher:
+                self.switch_fisher.select()
+            if self.paused_switch_states.get('runemaker', False) and self.switch_runemaker:
+                self.switch_runemaker.select()
+
+            # Cavebot precisa chamar toggle se estava ligado antes
+            if self.paused_switch_states.get('cavebot', 0):
+                self.switch_cavebot_var.set(1)
+                if hasattr(self.callbacks, 'toggle_cavebot'):
+                    self.callbacks.toggle_cavebot()
+
+            # Chamar callback para restaurar settings
+            if hasattr(self.callbacks, 'on_pause_toggle'):
+                self.callbacks.on_pause_toggle(False)
+
+            # Atualizar UI
+            self.btn_pause.configure(text="⏸️", fg_color="#303030")
+            # Connection status será atualizado pelo watchdog automaticamente
+            self.is_paused = False
 
     def update_stats_visibility(self):
         """

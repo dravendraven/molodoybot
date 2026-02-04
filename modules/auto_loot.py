@@ -15,6 +15,7 @@ from core.models import Item, Container
 # Imports condicionais do novo sistema de loot configurável
 if USE_CONFIGURABLE_LOOT_SYSTEM:
     from database import lootables_db
+    from database.lootables_db import is_stackable
 # NOTA: auto_stack_items e get_player_cap são importados LAZY dentro da função run_auto_loot()
 # para evitar circular import com stacker.py e fisher.py
 
@@ -151,6 +152,19 @@ def get_best_loot_destination(containers, my_containers_max_count, start_index=0
             
     return None, None
 
+def find_existing_stack(player_containers, item_id, max_stack=100):
+    """
+    Procura stack existente do mesmo item_id nos containers do player.
+    Prioriza stacks com mais espaço disponível.
+
+    Returns: (container_index, slot_index, current_count) ou (None, None, None)
+    """
+    for cont in player_containers:
+        for item in cont.items:
+            if item.id == item_id and item.count < max_stack:
+                return cont.index, item.slot_index, item.count
+    return None, None, None
+
 # ==============================================================================
 # EXECUÇÃO DO AUTO LOOT
 # ==============================================================================
@@ -178,6 +192,7 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
         # Lê as configs atuais
         dest_container_index = get_cfg('loot_dest', 0)
         drop_food_if_full = get_cfg('loot_drop_food', False)
+        auto_eat_food = get_cfg('loot_auto_eat', True)
 
         # NOVO: Ler listas configuráveis OU usar hardcoded (depende da flag)
         if USE_CONFIGURABLE_LOOT_SYSTEM:
@@ -249,7 +264,7 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
             for item in reversed(cont.items):
 
                 # --- AUTO EAT ---
-                if item.id in FOOD_IDS:
+                if item.id in FOOD_IDS and auto_eat_food:
                     if is_player_full(pm, base_addr) and not drop_food_if_full:
                         # Se não for dropar, apenas ignora e continua o loop para o próximo item
                         continue
@@ -278,7 +293,7 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
 
                 # --- AUTO LOOT ---
                 if item.id in loot_ids:
-                    # NOVO: Weight check antes de lotar (só se sistema configurável ativo)
+                    # Weight check antes de lotar (só se sistema configurável ativo)
                     if USE_CONFIGURABLE_LOOT_SYSTEM:
                         # Import lazy para evitar circular import
                         from modules.fisher import get_player_cap
@@ -292,19 +307,39 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
                             print(f"⚠️ LOOT IGNORADO: {item_name} ({item_weight:.1f}oz) > Cap ({current_cap:.1f}oz)")
                             continue  # Pula este item, vai para o próximo
 
+                    pos_from = get_container_pos(cont.index, item.slot_index)
+
+                    # Para itens stackáveis, SEMPRE tentar stack existente primeiro
+                    if USE_CONFIGURABLE_LOOT_SYSTEM and is_stackable(item.id):
+                        stack_cont_idx, stack_slot, stack_count = find_existing_stack(
+                            player_containers, item.id
+                        )
+                        if stack_cont_idx is not None:
+                            # Calcular quantidade que cabe no stack (max 100)
+                            space_in_stack = 100 - stack_count
+                            qty_to_move = min(item.count, space_in_stack)
+
+                            print(f"💰 Loot (stack): ID {item.id} x{qty_to_move} -> BP {stack_cont_idx} Slot {stack_slot}")
+
+                            pos_to = get_container_pos(stack_cont_idx, stack_slot)
+                            packet.move_item(pos_from, pos_to, item.id, qty_to_move)
+                            gauss_wait(*LOOT_DELAY_MOVE_ITEM)
+
+                            # Se não moveu tudo (stack encheu), o resto fica no corpo para próximo ciclo
+                            return ("LOOT", item.id, qty_to_move)
+
+                    # Fallback: usar slot vazio (não é stackável OU não tem stack existente)
                     if is_backpack_full:
                         print(f"⚠️ BACKPACK CHEIA! Não consigo pegar {item.id}")
                         return "FULL_BP_ALARM"
 
                     print(f"💰 Loot: ID {item.id} -> BP {dest_idx} Slot {dest_slot}")
-
-                    pos_from = get_container_pos(cont.index, item.slot_index)
                     pos_to = get_container_pos(dest_idx, dest_slot)
 
                     packet.move_item(pos_from, pos_to, item.id, item.count)
                     gauss_wait(*LOOT_DELAY_MOVE_ITEM)
 
-                    # Stack imediatamente após lotar
+                    # Stack apenas para itens não-stackáveis (fallback)
                     # Import lazy para evitar circular import
                     from modules.stacker import auto_stack_items
                     auto_stack_items(pm, base_addr, hwnd,

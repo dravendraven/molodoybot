@@ -37,6 +37,10 @@ except ImportError:
     from core.global_map import GlobalMap
     from utils.color_palette import get_color
 
+# Arquivos de stone archways (tiles que aparecem como montanha mas são walkable)
+_PROJECT_ROOT = Path(__file__).parent.parent
+ARCHWAY_FILES = [str(_PROJECT_ROOT / f"archway{i}.txt") for i in range(1, 5)]
+
 
 class WaypointEditorWindow:
     """
@@ -65,7 +69,7 @@ class WaypointEditorWindow:
         self.current_pos = current_pos or (32082, 32153, 7)
 
         # Initialize map system
-        self.global_map = GlobalMap(maps_directory, WALKABLE_COLORS)
+        self.global_map = GlobalMap(maps_directory, WALKABLE_COLORS, archway_files=ARCHWAY_FILES)
 
         # Waypoint data
         self.waypoints = []
