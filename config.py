@@ -567,3 +567,10 @@ TORCH_UNLIT_IDS = [2920, 2922, 2924]   # Tochas apagadas (diferentes estágios)
 TORCH_LIT_IDS = [2921, 2923, 2925]     # Tochas acesas (diferentes estágios)
 TORCH_BURNT_ID = 2926                   # Tocha queimada (sem combustível)
 TORCH_ALL_IDS = TORCH_UNLIT_IDS + TORCH_LIT_IDS + [TORCH_BURNT_ID]
+
+# ==============================================================================
+# AIMBOT CONFIG (Hotkey-Based Rune Usage)
+# ==============================================================================
+AIMBOT_ENABLED = False           # Ativa/desativa aimbot
+AIMBOT_HOTKEY = "F5"             # Hotkey para disparar ("F5", "MOUSE4", "MOUSE5", etc)
+AIMBOT_RUNE_TYPE = "SD"          # Tipo de runa: "SD", "HMM", "GFB", "EXPLO"

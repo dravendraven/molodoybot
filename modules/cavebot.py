@@ -44,8 +44,8 @@ def _get_bundled_path(filename):
     return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), filename)
 
 
-COOLDOWN_AFTER_COMBAT_MIN = 2.5
-COOLDOWN_AFTER_COMBAT_MAX = 5.0
+COOLDOWN_AFTER_COMBAT_BASE = 3.0    # Média de 3 segundos
+COOLDOWN_AFTER_COMBAT_VARIANCE = 30  # ±30% variação gaussiana
 GLOBAL_RECALC_LIMIT = 5
 
 # Mapeamento de Delta (dx, dy) para Opcode do Packet
@@ -373,10 +373,8 @@ class Cavebot:
 
         # Gera novo cooldown quando transição é detectada (elapsed < 0.5s = acabou de sair)
         if self._combat_cooldown_duration == 0.0 and elapsed_since_combat < 0.5:
-            self._combat_cooldown_duration = random.uniform(
-                COOLDOWN_AFTER_COMBAT_MIN,
-                COOLDOWN_AFTER_COMBAT_MAX
-            )
+            sigma = COOLDOWN_AFTER_COMBAT_BASE * (COOLDOWN_AFTER_COMBAT_VARIANCE / 100)
+            self._combat_cooldown_duration = max(0.5, random.gauss(COOLDOWN_AFTER_COMBAT_BASE, sigma))
             if DEBUG_PATHFINDING:
                 print(f"[{_ts()}] [Cavebot] Novo cooldown gerado: {self._combat_cooldown_duration:.1f}s")
 

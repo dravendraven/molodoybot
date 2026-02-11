@@ -393,6 +393,10 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
                 suspicious_spawns = spawn_tracker.update(all_creatures, my_x, my_y, my_z, self_id=state.char_id)
 
                 if suspicious_spawns:
+                    # Popula blacklist compartilhada (redundância com trainer inline detection)
+                    for c in suspicious_spawns:
+                        state.add_suspicious_creature(c.id)
+
                     names = ", ".join(f"{c.name} (dist:{max(abs(my_x - c.position.x), abs(my_y - c.position.y))})" for c in suspicious_spawns)
                     log_msg(f"👮 SPAWN SUSPEITO (possível GM): {names}")
                     set_status(f"👮 Spawn suspeito: {names}")

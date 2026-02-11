@@ -97,7 +97,8 @@ def main():
         print(f"Diretorio nao encontrado: {maps_dir}")
         sys.exit(1)
 
-    existing_file = os.path.join(maps_dir, "floor_transitions.json")
+    project_root = os.path.join(os.path.dirname(__file__), '..')
+    existing_file = os.path.join(project_root, "floor_transitions.json")
 
     # Carregar existente
     existing_transitions = []

@@ -73,6 +73,12 @@ class BotState:
 
         # ===== Alarm Movement Detection =====
         self._alarm_origin_pos: tuple = None  # (x, y, z) posição de origem ao ligar alarme
+
+        # ===== Spawn Protection (Race Condition Prevention) =====
+        # Blacklist de criaturas suspeitas (possível GM summon)
+        # Trainer e Alarm populam; safe_attack() verifica antes de atacar
+        self._suspicious_creature_ids: set = set()
+        self._suspicious_creature_lock = threading.Lock()
     
     # =========================================================================
     # CONEXÃO
@@ -546,6 +552,7 @@ class BotState:
                 'is_following': self._is_following,
                 'follow_target_id': self._follow_target_id,
                 'is_spear_pickup_pending': self._is_spear_pickup_pending,
+                'suspicious_creature_count': self.get_suspicious_creature_count(),
             }
     
     def reset(self):
@@ -576,6 +583,9 @@ class BotState:
             self._alarm_origin_pos = None
             # NÃO reseta _bot_running
 
+        # Limpa blacklist de criaturas suspeitas (lock separado)
+        self.clear_suspicious_creatures()
+
     # =========================================================================
     # ALARM MOVEMENT DETECTION
     # =========================================================================
@@ -590,6 +600,45 @@ class BotState:
     def alarm_origin_pos(self, value: tuple):
         with self._lock:
             self._alarm_origin_pos = value
+
+    # =========================================================================
+    # SPAWN PROTECTION - Prevenção de Race Condition GM Summon
+    # =========================================================================
+
+    def add_suspicious_creature(self, creature_id: int, reason: str = ""):
+        """
+        Marca criatura como suspeita (possível summon de GM).
+        Thread-safe via lock dedicado para alta frequência de acesso.
+
+        Chamado por:
+        - Trainer (detecção inline) - proteção primária
+        - Alarm (SpawnTracker) - proteção backup
+        """
+        with self._suspicious_creature_lock:
+            self._suspicious_creature_ids.add(creature_id)
+
+    def is_suspicious_creature(self, creature_id: int) -> bool:
+        """
+        Verifica se criatura está na blacklist de suspeitos.
+        DEVE ser chamado antes de CADA packet.attack() via safe_attack().
+        """
+        with self._suspicious_creature_lock:
+            return creature_id in self._suspicious_creature_ids
+
+    def remove_suspicious_creature(self, creature_id: int):
+        """Remove criatura da blacklist (quando morre ou despawna)."""
+        with self._suspicious_creature_lock:
+            self._suspicious_creature_ids.discard(creature_id)
+
+    def clear_suspicious_creatures(self):
+        """Limpa blacklist (ao mudar de andar ou resetar sessão)."""
+        with self._suspicious_creature_lock:
+            self._suspicious_creature_ids.clear()
+
+    def get_suspicious_creature_count(self) -> int:
+        """Retorna quantidade de criaturas na blacklist."""
+        with self._suspicious_creature_lock:
+            return len(self._suspicious_creature_ids)
 
 
 # =============================================================================

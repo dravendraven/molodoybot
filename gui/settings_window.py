@@ -533,6 +533,39 @@ class SettingsWindow:
         ctk.CTkLabel(frame_tr_ks, text="↳ Evita atacar criaturas mais próximas de outros players.",
                     **self.UI['HINT']).pack(anchor="w", padx=40)
 
+        # === AIMBOT ===
+        ctk.CTkLabel(frame_tr, text="Aimbot (Runas):", **self.UI['H1']).pack(anchor="w", padx=10, pady=(15, 0))
+
+        frame_aimbot = ctk.CTkFrame(tab, fg_color="transparent")
+        frame_aimbot.pack(fill="x", padx=10, pady=5)
+
+        switch_aimbot = ctk.CTkSwitch(frame_aimbot, text="Ativar Aimbot",
+                                      command=lambda: None,
+                                      progress_color="#E74C3C", **self.UI['BODY'])
+        switch_aimbot.pack(anchor="w")
+        if settings.get('aimbot_enabled', False):
+            switch_aimbot.select()
+
+        ctk.CTkLabel(frame_aimbot, text="↳ Usa runa no alvo atual ao pressionar a hotkey.",
+                    **self.UI['HINT']).pack(anchor="w", padx=40)
+
+        # Aimbot Rune + Hotkey
+        f_aimbot_opts = ctk.CTkFrame(tab, fg_color="transparent")
+        f_aimbot_opts.pack(fill="x", padx=20, pady=5)
+
+        ctk.CTkLabel(f_aimbot_opts, text="Runa:", **self.UI['BODY']).pack(side="left")
+        combo_aimbot_rune = ctk.CTkComboBox(f_aimbot_opts, values=["SD", "HMM", "GFB", "EXPLO"],
+                                            width=70, **self.UI['BODY'])
+        combo_aimbot_rune.pack(side="left", padx=5)
+        combo_aimbot_rune.set(settings.get('aimbot_rune_type', 'SD'))
+
+        ctk.CTkLabel(f_aimbot_opts, text="Hotkey:", **self.UI['BODY']).pack(side="left", padx=(15, 0))
+        combo_aimbot_hotkey = ctk.CTkComboBox(f_aimbot_opts,
+                                              values=["F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12", "MOUSE4", "MOUSE5"],
+                                              width=90, **self.UI['BODY'])
+        combo_aimbot_hotkey.pack(side="left", padx=5)
+        combo_aimbot_hotkey.set(settings.get('aimbot_hotkey', 'F5'))
+
         # Botão Salvar
         def save_trainer():
             try:
@@ -540,6 +573,10 @@ class SettingsWindow:
                 s['trainer_min_delay'] = float(entry_tr_min.get().replace(',', '.'))
                 s['trainer_max_delay'] = float(entry_tr_max.get().replace(',', '.'))
                 s['trainer_range'] = int(entry_tr_range.get())
+                # Aimbot settings
+                s['aimbot_enabled'] = bool(switch_aimbot.get())
+                s['aimbot_rune_type'] = combo_aimbot_rune.get()
+                s['aimbot_hotkey'] = combo_aimbot_hotkey.get()
                 self.cb.save_config_file()
                 self.cb.log("⚔️ Trainer salvo!")
                 # DEBUG: Confirma que o valor foi gravado no dict correto

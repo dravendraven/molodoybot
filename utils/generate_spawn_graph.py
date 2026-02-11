@@ -150,7 +150,7 @@ def main():
         sys.exit(1)
 
     # Localizar floor_transitions.json
-    transitions_file = os.path.join(maps_dir, "floor_transitions.json")
+    transitions_file = os.path.join(project_root, "floor_transitions.json")
 
     # Arquivos de stone archways (tiles que aparecem como montanha mas são walkable)
     archway_files = [os.path.join(project_root, f"archway{i}.txt") for i in range(1, 5)]
@@ -170,7 +170,7 @@ def main():
     print("Gerando grafo de spawns...")
     graph = build_spawn_graph(spawns, maps_dir, WALKABLE_COLORS, transitions_file, archway_files)
 
-    output_path = os.path.join(maps_dir, "spawn_graph.json")
+    output_path = os.path.join(project_root, "spawn_graph.json")
     with open(output_path, 'w') as f:
         json.dump(graph, f)
 

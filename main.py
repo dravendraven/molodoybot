@@ -52,6 +52,7 @@ from modules.trainer import trainer_loop
 from modules.alarm import alarm_loop
 from modules.cavebot import Cavebot
 from modules.spear_picker import spear_picker_loop
+from modules.aimbot import AimbotModule
 from modules.debug_monitor import init_debug_monitor, show_debug_monitor
 from core.player_core import get_connected_char_name
 from core.bot_state import state
@@ -990,6 +991,12 @@ def toggle_cavebot_func():
         return
 
     if switch_cavebot_var.get() == 1:
+        # Restaurar auto-explore de BOT_SETTINGS se estava salvo
+        if BOT_SETTINGS.get('auto_explore_enabled', False) and not cavebot_instance.auto_explore_enabled:
+            search_radius = BOT_SETTINGS.get('auto_explore_radius', 50)
+            revisit_cooldown = BOT_SETTINGS.get('auto_explore_cooldown', 600)
+            on_auto_explore_toggle(True, search_radius, revisit_cooldown)
+
         if not current_waypoints_ui and not cavebot_instance.auto_explore_enabled:
             log("⚠️ AVISO: Carregue waypoints ou ative Auto-Explore antes de ativar!")
             switch_cavebot_var.set(0)
@@ -1181,6 +1188,52 @@ def start_spear_picker_thread():
             import traceback
             traceback.print_exc()
             time.sleep(1)
+
+
+def start_aimbot_thread():
+    """
+    Thread para o Aimbot.
+    Usa runas via hotkey (F5 por padrao) no alvo atual.
+    """
+    global pm, base_addr
+
+    print("[Aimbot] Thread iniciada.")
+
+    # Config getter que le do config.py ou BOT_SETTINGS
+    def aimbot_config(key, default=None):
+        # Primeiro tenta BOT_SETTINGS (GUI), depois config.py
+        if key == "AIMBOT_ENABLED":
+            return BOT_SETTINGS.get('aimbot_enabled', getattr(config, 'AIMBOT_ENABLED', False))
+        elif key == "AIMBOT_HOTKEY":
+            return BOT_SETTINGS.get('aimbot_hotkey', getattr(config, 'AIMBOT_HOTKEY', 'F5'))
+        elif key == "AIMBOT_RUNE_TYPE":
+            return BOT_SETTINGS.get('aimbot_rune_type', getattr(config, 'AIMBOT_RUNE_TYPE', 'SD'))
+        return default
+
+    aimbot = None
+
+    while state.is_running:
+        if pm is None or not state.is_connected:
+            time.sleep(1)
+            continue
+
+        try:
+            # Cria instancia se ainda nao existe
+            if aimbot is None:
+                aimbot = AimbotModule(pm, base_addr, aimbot_config, log)
+                aimbot.start()
+
+            time.sleep(1)  # Loop de monitoramento
+
+        except Exception as e:
+            print(f"[Aimbot] Erro: {e}")
+            import traceback
+            traceback.print_exc()
+            time.sleep(1)
+
+    # Cleanup ao sair
+    if aimbot:
+        aimbot.stop()
 
 
 def auto_torch_thread():
@@ -4216,6 +4269,7 @@ if __name__ == "__main__":
     threading.Thread(target=lookid_monitor_loop, daemon=True).start()
     threading.Thread(target=start_chat_handler_thread, daemon=True).start()
     threading.Thread(target=start_spear_picker_thread, daemon=True).start()
+    threading.Thread(target=start_aimbot_thread, daemon=True).start()
     threading.Thread(target=auto_torch_thread, daemon=True).start()
 
     # Atualiza visibilidade baseada na vocação

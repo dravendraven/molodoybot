@@ -126,7 +126,8 @@ def test_route(gm, x1, y1, z1, x2, y2, z2):
 
 
 def load_map():
-    transitions_file = os.path.join(MAPS_DIRECTORY, "floor_transitions.json")
+    project_root = os.path.join(os.path.dirname(__file__), '..')
+    transitions_file = os.path.join(project_root, "floor_transitions.json")
     print(f"Carregando mapa de: {MAPS_DIRECTORY}")
     gm = GlobalMap(MAPS_DIRECTORY, WALKABLE_COLORS, transitions_file=transitions_file,
                    archway_files=ARCHWAY_FILES)

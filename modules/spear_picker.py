@@ -1024,11 +1024,22 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
             pre_abs_x, pre_abs_y, _, _, pre_rel_x, pre_rel_y, _ = spear_location
             #print(f"[Spear Action] Detectou spear em tile ({pre_abs_x},{pre_abs_y}) rel=({pre_rel_x},{pre_rel_y})")
 
+            # ========== VERIFICAÇÃO DE PAUSE ANTES DE INICIAR PICKUP ==========
+            if not get_enabled():
+                _log("[Spear Action] Módulo desativado - abortando antes do pickup")
+                continue
+
             # ========== ATIVA FLAG: PICKUP ATIVO ==========
             # Encontrou spear e vai pegar - pausa cavebot durante o processo
             if not state.is_spear_pickup_pending:
                 state.set_spear_pickup_pending(True)
                 _log("[Spear Action] PICKUP ATIVO - cavebot pausado")
+
+            # ========== VERIFICAÇÃO DE PAUSE ANTES DO DELAY ==========
+            if not get_enabled():
+                _log("[Spear Action] Módulo desativado durante pickup - abortando")
+                state.set_spear_pickup_pending(False)
+                continue
 
             # ========== DELAY DE REAÇÃO HUMANIZADO ==========
             # Simula tempo para "perceber" que tem spear no chão (min 250ms + variacao)
@@ -1121,6 +1132,12 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
                 #print(f"[Spear Action] Movendo {len(items_above)} items bloqueadores para tile drop=({drop_x}, {drop_y}, {drop_z})")
 
                 for idx_move, (item_id, list_idx) in enumerate(items_above):
+                    # ===== VERIFICAÇÃO DE PAUSE =====
+                    if not get_enabled():
+                        _log("[Spear Action] Módulo desativado durante move de bloqueadores - abortando")
+                        state.set_spear_pickup_pending(False)
+                        break
+
                     # ===== VERIFICAÇÃO CRÍTICA: Loot pode abrir durante delays entre moves =====
                     if state.is_processing_loot:
                         _log(f"[Spear Action] Loot foi aberto durante move #{idx_move} de bloqueadores - abortando")
@@ -1182,6 +1199,17 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
                 continue
             _log(f"[Spear Action] Stack_pos da spear: {spear_stack_pos}")
 
+            # === RE-LÊ ESTADO ATUALIZADO (permite mudança on-the-fly de max_spears) ===
+            state_data = shared_state.get_action_state()
+            current_spears = state_data['current_spears']
+            max_spears = state_data['max_spears']
+
+            # Verifica se ainda precisa de spears após possível mudança de config
+            if current_spears >= max_spears:
+                _log(f"[Spear Action] Já tem {current_spears}/{max_spears} spears - config mudou")
+                state.set_spear_pickup_pending(False)
+                continue
+
             # === CALCULA QUANTIDADE A PEGAR ===
             # Obtém tile atualizado para ler o count corretamente
             fresh_tile = mapper.get_tile_visible(rel_x, rel_y)
@@ -1197,6 +1225,12 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
             #print(f"[Spear Action] Pegando count={count_to_pick} spear(s) com stack_pos={spear_stack_pos}")
 
             # === MOVE SPEAR PARA MÃO ===
+            # ===== VERIFICAÇÃO DE PAUSE ANTES DE PEGAR SPEAR =====
+            if not get_enabled():
+                _log("[Spear Action] Módulo desativado antes de pegar spear - abortando")
+                state.set_spear_pickup_pending(False)
+                continue
+
             # ===== VERIFICAÇÃO FINAL: Loot pode ter sido aberto durante moves de bloqueadores =====
             if state.is_processing_loot:
                 _log("[Spear Action] Loot foi aberto - abortando antes de pegar spear")

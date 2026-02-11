@@ -13,7 +13,7 @@ from config import (
     OFFSET_SLOT_AMMO, TORCH_UNLIT_IDS, TORCH_LIT_IDS, TORCH_BURNT_ID,
     TORCH_ALL_IDS, OFFSET_CONTAINER_START, STEP_CONTAINER, MAX_CONTAINERS,
     OFFSET_CNT_IS_OPEN, OFFSET_CNT_AMOUNT, OFFSET_CNT_ITEM_ID,
-    OFFSET_CNT_ITEM_COUNT, OFFSET_CNT_HAS_PARENT, STEP_SLOT
+    OFFSET_CNT_ITEM_COUNT, OFFSET_CNT_NAME, STEP_SLOT
 )
 from core.packet import PacketManager, get_inventory_pos, get_container_pos, get_ground_pos
 from core.packet_mutex import PacketMutex
@@ -56,9 +56,12 @@ def _find_torch_in_containers(pm, base_addr):
             if is_open != 1:
                 continue
 
-            # Pula containers de loot (has_parent = corpo aberto)
-            has_parent = pm.read_int(cnt_addr + OFFSET_CNT_HAS_PARENT)
-            if has_parent == 1:
+            # Lê o nome do container para identificar se é loot
+            name_bytes = pm.read_bytes(cnt_addr + OFFSET_CNT_NAME, 32)
+            name = name_bytes.split(b'\x00')[0].decode('latin-1', errors='ignore')
+
+            # Pula apenas containers de loot (corpos de monstros)
+            if name.startswith("Dead ") or name.startswith("Slain "):
                 continue
 
             amount = pm.read_int(cnt_addr + OFFSET_CNT_AMOUNT)

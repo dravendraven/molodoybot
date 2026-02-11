@@ -19,7 +19,7 @@ from core.bot_state import state
 from core.config_utils import make_config_getter
 from core.map_analyzer import MapAnalyzer
 from core.astar_walker import AStarWalker
-from core.battlelist import BattleListScanner
+from core.battlelist import BattleListScanner, SpawnTracker
 from core.models import Position
 from core.overlay_renderer import renderer as overlay_renderer
 
@@ -536,6 +536,33 @@ class EngagementDetector:
 
         return (False, None)
 
+
+def safe_attack(packet, creature_id, log_func=print):
+    """
+    Wrapper para packet.attack() com verificações de segurança.
+
+    Previne ataques a:
+    1. Criaturas na blacklist de suspeitos (possível summon de GM)
+    2. Quando alarme está ativo (is_safe=False)
+
+    Returns:
+        True se ataque foi enviado, False se bloqueado
+    """
+    # Check 1: Criatura suspeita? (possível GM summon)
+    if state.is_suspicious_creature(creature_id):
+        log_func(f"🛑 BLOQUEADO: Criatura {creature_id} é suspeita (possível GM summon)!")
+        return False
+
+    # Check 2: Alarme ativo? (pode ter sido disparado entre decisão e ataque)
+    if not state.is_safe():
+        log_func(f"🛑 BLOQUEADO: Alarme ativo no momento do ataque!")
+        return False
+
+    # Tudo OK - envia ataque
+    packet.attack(creature_id)
+    return True
+
+
 def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_callback=None):
     """
     Loop principal do trainer.
@@ -592,6 +619,10 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
 
     # Scanner centralizado do battlelist
     scanner = BattleListScanner(pm, base_addr)
+
+    # SpawnTracker INLINE - detecta spawns ANTES do ataque (previne race condition com alarm)
+    # Proteção primária: trainer detecta spawn suspeito antes de decidir atacar
+    trainer_spawn_tracker = SpawnTracker(suspicious_range=5, floor_change_cooldown=3.0)
 
     # Anti Kill-Steal Detection
     engagement_detector = EngagementDetector()
@@ -735,6 +766,27 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
 
             # Atualiza overlay de debug (se XRAY_TRAINER_DEBUG ativo)
             update_trainer_overlay(all_creatures, my_x, my_y, my_z, current_target_id, current_name)
+
+            # ==============================================================================
+            # SPAWN PROTECTION: Detecta spawns suspeitos ANTES de decidir atacar
+            # Previne race condition onde trainer ataca antes do alarm detectar GM summon
+            # ==============================================================================
+            suspicious_spawns = trainer_spawn_tracker.update(
+                all_creatures, my_x, my_y, my_z, self_id=state.char_id
+            )
+
+            # Marca spawns suspeitos na blacklist compartilhada
+            if suspicious_spawns:
+                for creature in suspicious_spawns:
+                    state.add_suspicious_creature(creature.id)
+                    log(f"👮 [TRAINER] Spawn suspeito: {creature.name} (ID:{creature.id})")
+
+                # Dispara alarme e aborta este ciclo
+                state.trigger_alarm(is_gm=True, reason="SPAWN_SUSPICIOUS")
+                log_decision(f"🚨 {len(suspicious_spawns)} spawn(s) suspeito(s)! Abortando ataque.")
+                set_status(f"👮 Spawn suspeito detectado!")
+                time.sleep(0.5)
+                continue
 
             # Filtra APENAS PLAYERS visíveis no mesmo andar (para KS detection)
             # CORREÇÃO: Usa c.is_player em vez de filtrar por nome depois
@@ -1046,7 +1098,9 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                                     else:
                                         log(f"⚔️ RETARGET: {nearest['name']} (custo: {cost})")
                                         log_decision(f"🔄 RETARGET: alvo inacessível → {nearest['name']} (attack)")
-                                        packet.attack(nearest["id"])
+                                        if not safe_attack(packet, nearest["id"], log):
+                                            time.sleep(0.5)
+                                            continue
                                         if is_currently_following:
                                             state.stop_follow()
                                             is_currently_following = False
@@ -1094,7 +1148,9 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                             log(f"⚔️ TRANSIÇÃO: Follow → Attack ({target_data['name']})")
                             set_status(f"atacando {target_data['name']}")
                             log_decision(f"🔄 Follow → Attack: {target_data['name']} (chegou dist:{dist_now})")
-                            packet.attack(current_target_id)
+                            if not safe_attack(packet, current_target_id, log):
+                                time.sleep(0.5)
+                                continue
 
                             # Para estado de follow
                             state.stop_follow()
@@ -1206,7 +1262,9 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                                             else:
                                                 log(f"⚔️ RETARGET: {nearest['name']} (custo: {cost})")
                                                 log_decision(f"🔄 RETARGET: alvo inacessível → {nearest['name']} (attack)")
-                                                packet.attack(nearest["id"])
+                                                if not safe_attack(packet, nearest["id"], log):
+                                                    time.sleep(0.5)
+                                                    continue
                                                 if is_currently_following:
                                                     state.stop_follow()
                                                     is_currently_following = False
@@ -1389,6 +1447,10 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                         death_state = DeathState.ALIVE
                         dying_creature_data = None
                         death_timestamp = None
+
+                        # Limpa criatura da blacklist de suspeitos (se estava lá)
+                        if last_target_data:
+                            state.remove_suspicious_creature(last_target_data["id"])
 
                         monitor.stop_and_report()
                         current_monitored_id = 0
@@ -1602,7 +1664,9 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                                 set_status(f"atacando {best['name']}")
                                 ks_status = "KS: bypass (atacando)" if best.get('is_attacking_me') else "KS: pass"
                                 log_decision(f"⚔️ ATACANDO: {best['name']} (HP:{best['hp']}%, dist:{dist_to_target}) | {ks_status}")
-                                packet.attack(best["id"])
+                                if not safe_attack(packet, best["id"], log):
+                                    time.sleep(0.5)
+                                    continue
 
                                 # Para follow se estava seguindo
                                 if is_currently_following:

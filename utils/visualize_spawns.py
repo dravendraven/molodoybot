@@ -22,11 +22,8 @@ SPAWN_RADIUS = 5
 SCALE = 3  # pixels por tile para melhor legibilidade
 
 
-def load_graph(maps_dir):
-    path = os.path.join(maps_dir, "spawn_graph.json")
-    if not os.path.isfile(path):
-        # Tentar na raiz do projeto
-        path = os.path.join(os.path.dirname(__file__), '..', 'spawn_graph.json')
+def load_graph():
+    path = os.path.join(os.path.dirname(__file__), '..', 'spawn_graph.json')
     with open(path) as f:
         return json.load(f)
 
@@ -238,7 +235,7 @@ def main():
     print(f"Centro: ({cx}, {cy}, {cz}), Raio: {radius}")
     print(f"Carregando grafo...")
 
-    graph = load_graph(MAPS_DIRECTORY)
+    graph = load_graph()
     print(f"Nodes: {len(graph['nodes'])}, Edge keys: {len(graph.get('edges', {}))}")
 
     filtered_keys = set(filter_nodes(graph, cx, cy, cz, radius).keys())

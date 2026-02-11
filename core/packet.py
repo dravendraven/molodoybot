@@ -32,6 +32,7 @@ OP_FOLLOW = 0xA2
 OP_MOVE   = 0x78
 OP_USE    = 0x82
 OP_USE_ON = 0x83
+OP_USE_ON_CREATURE = 0x84  # Use item on creature by ID (aimbot)
 OP_EQUIP  = 0x77
 OP_LOOK   = 0x8C
 OP_CLOSE_CONTAINER = 0x87
@@ -497,6 +498,38 @@ class PacketManager:
         pb.add_byte(to_pos['z'])
         pb.add_u16(to_id)
         pb.add_byte(to_stack)
+
+        pb.add_call(FUNC_SEND_PACKET, 1)
+
+        self.send_packet(pb.get_code(), PacketType.MOUSE)
+
+    def use_on_creature(self, from_pos, item_id, stack_pos, creature_id):
+        """
+        Envia pacote 'Use on Creature' (0x84).
+        Diferente de use_with (0x83) que usa em posicao.
+
+        Usado para: SD, HMM, UH em alvo, etc.
+
+        Args:
+            from_pos: Posicao do item (dict com x, y, z) - get_container_pos()
+            item_id: ID do item/runa sendo usado
+            stack_pos: Stack position do item (geralmente 0)
+            creature_id: ID da criatura alvo (32-bit)
+        """
+        pb = PacketBuilder()
+        pb.add_call(FUNC_CREATE_PACKET, OP_USE_ON_CREATURE)
+
+        # Origem do item (container/inventario)
+        pb.add_u16(from_pos['x'])
+        pb.add_u16(from_pos['y'])
+        pb.add_byte(from_pos['z'])
+
+        # Item sendo usado
+        pb.add_u16(item_id)
+        pb.add_byte(stack_pos)
+
+        # Criatura alvo (mesmo formato do attack())
+        pb.add_u32(creature_id)
 
         pb.add_call(FUNC_SEND_PACKET, 1)
 

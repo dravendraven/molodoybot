@@ -17,7 +17,14 @@
       "Bash(done)",
       "Read(//c/Users/vitor/OneDrive/Documentos/cheat engine/**)",
       "Bash(pip install:*)",
-      "Bash(copy \"c:\\\\Users\\\\vitor\\\\Downloads\\\\amera-client-latest\\\\spawn_graph.json\" spawn_graph.json)"
+      "Bash(copy \"c:\\\\Users\\\\vitor\\\\Downloads\\\\amera-client-latest\\\\spawn_graph.json\" spawn_graph.json)",
+      "Bash(unzip:*)",
+      "Bash(for f in *.json)",
+      "Bash(do grep -q \"320\\\\|319\" \"$f\")",
+      "Bash(echo:*)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\vitor\\OneDrive\\Documentos\\cheat engine"
     ]
   }
 }

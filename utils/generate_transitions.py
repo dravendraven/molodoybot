@@ -126,7 +126,8 @@ def main():
         direction = "UP" if zt < zf else "DOWN"
         print(f"  Z{zf} -> Z{zt} ({direction}): {count} transicoes")
 
-    output_path = os.path.join(maps_dir, "floor_transitions.json")
+    project_root = os.path.join(os.path.dirname(__file__), '..')
+    output_path = os.path.join(project_root, "floor_transitions.json")
     with open(output_path, 'w') as f:
         json.dump({"transitions": transitions}, f)
 

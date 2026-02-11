@@ -389,12 +389,13 @@ class MapAnalyzer:
         # Validar cada escada contra transitions_by_floor e/ou distância ao destino
         best_option = None
         best_score = float('inf')
+        unregistered_candidates = []
 
         for x, y, ftype, fid in candidates:
             abs_x = player_abs_x + x
             abs_y = player_abs_y + y
 
-            # Se temos transitions_by_floor, APENAS aceitar escadas registradas
+            # Se temos transitions_by_floor, preferir escadas registradas
             if transitions_by_floor:
                 transitions = transitions_by_floor.get(current_z, [])
                 matched = False
@@ -408,8 +409,8 @@ class MapAnalyzer:
                         matched = True
                         break
                 if not matched:
-                    # Escada não registrada nas transições - ignorar (provavelmente casa/dead end)
-                    print(f"[FloorChange] Escada em ({abs_x}, {abs_y}) ignorada: não registrada em transitions")
+                    # Escada não registrada - guardar como fallback (memory_map confiável)
+                    unregistered_candidates.append((x, y, ftype, fid, abs_x, abs_y))
                 continue
 
             # Sem transitions: fallback por distância XY da escada ao waypoint destino
@@ -418,5 +419,17 @@ class MapAnalyzer:
                 best_score = score
                 best_option = (x, y, ftype, fid)
 
-        # best_option pode ser None se nenhuma escada visível é válida
+        # Se nenhuma escada registrada foi encontrada, confiar no memory_map
+        if best_option is None and unregistered_candidates:
+            best_unreg_score = float('inf')
+            for x, y, ftype, fid, abs_x, abs_y in unregistered_candidates:
+                score = abs(abs_x - dest_x) + abs(abs_y - dest_y)
+                if score < best_unreg_score:
+                    best_unreg_score = score
+                    best_option = (x, y, ftype, fid)
+            if best_option:
+                fb_abs_x = player_abs_x + best_option[0]
+                fb_abs_y = player_abs_y + best_option[1]
+                print(f"[FloorChange] ✅ Usando escada não registrada em ({fb_abs_x}, {fb_abs_y}) via memory_map (fallback)")
+
         return best_option
