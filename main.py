@@ -2572,16 +2572,14 @@ def create_settings_callbacks() -> SettingsCallbacks:
     def set_rune_pos_callback(type_pos: str):
         if pm:
             try:
-                x = pm.read_int(base_addr + OFFSET_PLAYER_X)
-                y = pm.read_int(base_addr + OFFSET_PLAYER_Y)
-                z = pm.read_int(base_addr + OFFSET_PLAYER_Z)
+                x, y, z = get_player_pos(pm, base_addr)
                 key = 'rune_work_pos' if type_pos == "WORK" else 'rune_safe_pos'
                 BOT_SETTINGS[key] = (x, y, z)
                 if settings_window:
                     settings_window.update_rune_pos_labels_ui()
                 log(f"📍 {type_pos} definido: {x}, {y}, {z}")
-            except:
-                log("❌ Logue no char.")
+            except Exception as e:
+                log(f"❌ Erro ao definir posicao: {e}")
 
     def refresh_scripts_callback(selected=None):
         scripts = list_cavebot_scripts()
