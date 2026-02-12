@@ -1325,7 +1325,7 @@ def start_trainer_thread():
             'targets': BOT_SETTINGS['targets'],
             'ignore_first': BOT_SETTINGS['ignore_first'],
             'debug_mode': BOT_SETTINGS['debug_mode'],
-            'debug_mode_decisions_only': BOT_SETTINGS.get('debug_mode_decisions_only', False),
+            'debug_mode_decisions_only': BOT_SETTINGS.get('debug_mode_decisions_only', TRAINER_DEBUG_DECISIONS_ONLY),
 
             # Lê o botão de loot para saber se deve abrir corpos
             'loot_enabled': switch_loot.get(),
@@ -2507,6 +2507,28 @@ def update_status_panel():
 # SETTINGS WINDOW - CALLBACKS E INTEGRAÇÃO
 # ==============================================================================
 
+# === Utility Toggle Functions (usadas por MainWindow e SettingsWindow) ===
+
+def on_light_toggle(enabled: bool):
+    """Toggle Full Light hack."""
+    global full_light_enabled
+    full_light_enabled = enabled
+    apply_full_light(enabled)
+    log(f"💡 Full Light: {enabled}")
+
+def on_spear_picker_toggle(enabled: bool):
+    """Toggle Spear Picker."""
+    BOT_SETTINGS['spear_picker_enabled'] = enabled
+    status = "ativado" if enabled else "desativado"
+    log(f"🎯 Pegar Spear: {status}")
+
+def on_auto_torch_toggle(enabled: bool):
+    """Toggle Auto Torch."""
+    BOT_SETTINGS['auto_torch_enabled'] = enabled
+    status = "ativado" if enabled else "desativado"
+    log(f"🔦 Auto Torch: {status}")
+
+
 def create_settings_callbacks() -> SettingsCallbacks:
     """
     Cria o objeto de callbacks para a janela de Settings.
@@ -2514,26 +2536,10 @@ def create_settings_callbacks() -> SettingsCallbacks:
     """
     global full_light_enabled, log_visible, txt_log, frame_status_panel, chat_handler
 
-    def on_light_toggle(enabled: bool):
-        global full_light_enabled
-        full_light_enabled = enabled
-        apply_full_light(enabled)
-        log(f"💡 Full Light: {enabled}")
-
     def on_lookid_toggle(enabled: bool):
         BOT_SETTINGS['lookid_enabled'] = enabled
         status = "ativado" if enabled else "desativado"
         log(f"🔍 Look ID: {status}")
-
-    def on_spear_picker_toggle(enabled: bool):
-        BOT_SETTINGS['spear_picker_enabled'] = enabled
-        status = "ativado" if enabled else "desativado"
-        log(f"🎯 Pegar Spear: {status}")
-
-    def on_auto_torch_toggle(enabled: bool):
-        BOT_SETTINGS['auto_torch_enabled'] = enabled
-        status = "ativado" if enabled else "desativado"
-        log(f"🔦 Auto Torch: {status}")
 
     def on_ai_chat_toggle(enabled: bool):
         BOT_SETTINGS['ai_chat_enabled'] = enabled
@@ -2691,6 +2697,11 @@ def create_main_window_callbacks() -> MainWindowCallbacks:
         toggle_cavebot=toggle_cavebot_func,
         on_fisher_toggle=on_fisher_toggle,
         on_pause_toggle=on_pause_toggle,
+
+        # Utility Toggles
+        on_light_toggle=on_light_toggle,
+        on_spear_picker_toggle=on_spear_picker_toggle,
+        on_auto_torch_toggle=on_auto_torch_toggle,
 
         # Trackers
         get_sword_tracker=lambda: sword_tracker,
@@ -4009,7 +4020,7 @@ def hide_minimap_panel():
 
 def update_minimap_loop():
     """Auto-scheduled loop to update minimap every 3 seconds."""
-    global minimap_label, minimap_image_ref, minimap_visualizer, cavebot_instance
+    global minimap_label, minimap_image_ref, minimap_visualizer, cavebot_instance, main_window
 
     # Check if widget exists
     if not minimap_label or not minimap_label.winfo_exists():
@@ -4018,6 +4029,17 @@ def update_minimap_loop():
     try:
         # Check if Cavebot is active (panel is hidden when inactive, just reschedule)
         if not cavebot_instance or not switch_cavebot.get():
+            app.after(1000, update_minimap_loop)
+            return
+
+        # Lazy load: obter minimap_visualizer de main_window se ainda não disponível
+        if minimap_visualizer is None and main_window is not None:
+            if main_window.minimap_visualizer is None:
+                main_window._init_minimap_visualizer()
+            minimap_visualizer = main_window.minimap_visualizer
+
+        # Se ainda não conseguiu inicializar, reagendar
+        if minimap_visualizer is None:
             app.after(1000, update_minimap_loop)
             return
 

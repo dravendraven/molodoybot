@@ -96,6 +96,11 @@ class SettingsWindow:
         self.lbl_work_pos: Optional[ctk.CTkLabel] = None
         self.lbl_safe_pos: Optional[ctk.CTkLabel] = None
 
+        # === Lazy Tab Building (performance) ===
+        self._tabs: Dict[str, ctk.CTkFrame] = {}  # nome -> frame da tab
+        self._tabs_built: set = set()  # tabs já construídas
+        self._tabview: Optional[ctk.CTkTabview] = None
+
         # === Estilos UI (CSS-like) ===
         self.UI = {
             'H1': {
@@ -246,7 +251,7 @@ class SettingsWindow:
     # === CRIAÇÃO DA JANELA ===
 
     def _create_window(self) -> None:
-        """Cria a janela principal e todas as tabs."""
+        """Cria a janela principal com lazy tab building para performance."""
         self.window = ctk.CTkToplevel(self.parent)
         self.window.title("Configurações")
         self._min_height = 520
@@ -257,37 +262,65 @@ class SettingsWindow:
 
         tabview = ctk.CTkTabview(self.window)
         tabview.pack(fill="both", expand=True, padx=10, pady=10)
-
-        # Cria todas as tabs
-        tab_geral = tabview.add("Geral")
-        tab_trainer = tabview.add("Trainer")
-        tab_alarm = tabview.add("Alarme")
-        tab_alvos = tabview.add("Alvos")
-        tab_loot = tabview.add("Loot")
-        tab_fisher = tabview.add("Fisher")
-        tab_rune = tabview.add("Rune")
-        tab_cavebot = tabview.add("Cavebot")
-
-        # Constrói cada tab
-        self._build_tab_geral(tab_geral)
-        self._build_tab_trainer(tab_trainer)
-        self._build_tab_alarm(tab_alarm)
-        self._build_tab_alvos(tab_alvos)
-        self._build_tab_loot(tab_loot)
-        self._build_tab_fisher(tab_fisher)
-        self._build_tab_rune(tab_rune)
-        self._build_tab_cavebot(tab_cavebot)
-
-        # Auto-resize ao trocar de aba
         self._tabview = tabview
-        tabview.configure(command=lambda: self._adjust_window_height(tabview))
+
+        # Cria tabs vazias (lazy loading - conteúdo construído sob demanda)
+        self._tabs = {}
+        self._tabs_built = set()
+        tab_names = ["Geral", "Trainer", "Alarme", "Alvos", "Loot", "Fisher", "Rune", "Cavebot"]
+        for name in tab_names:
+            self._tabs[name] = tabview.add(name)
+
+        # Constrói apenas a primeira tab (Geral) imediatamente
+        self._build_tab("Geral")
+
+        # Lazy build: constrói outras tabs quando selecionadas
+        tabview.configure(command=self._on_tab_change)
         self.window.after(100, lambda: self._adjust_window_height(tabview))
+
+    def _on_tab_change(self) -> None:
+        """Callback quando usuário muda de tab - faz lazy build se necessário."""
+        if not self._tabview:
+            return
+        tab_name = self._tabview.get()
+        if tab_name not in self._tabs_built:
+            self._build_tab(tab_name)
+        self._adjust_window_height(self._tabview)
+
+    def _build_tab(self, name: str) -> None:
+        """Constrói o conteúdo de uma tab específica (lazy loading)."""
+        if name in self._tabs_built:
+            return
+
+        tab_frame = self._tabs.get(name)
+        if not tab_frame:
+            return
+
+        builders = {
+            "Geral": self._build_tab_geral,
+            "Trainer": self._build_tab_trainer,
+            "Alarme": self._build_tab_alarm,
+            "Alvos": self._build_tab_alvos,
+            "Loot": self._build_tab_loot,
+            "Fisher": self._build_tab_fisher,
+            "Rune": self._build_tab_rune,
+            "Cavebot": self._build_tab_cavebot,
+        }
+
+        builder = builders.get(name)
+        if builder:
+            builder(tab_frame)
+            self._tabs_built.add(name)
 
     def _on_close(self) -> None:
         """Handler de fechamento da janela."""
         if self.window:
             self.window.destroy()
         self.window = None
+        # Limpar estado de lazy building para próxima abertura
+        self._tabs = {}
+        self._tabs_built = set()
+        self._tabview = None
 
     def _adjust_window_height(self, tabview) -> None:
         """Ajusta a altura da janela para caber o conteúdo da aba ativa, sem diminuir abaixo do mínimo."""
@@ -370,17 +403,7 @@ class SettingsWindow:
         frame_switches = ctk.CTkFrame(tab, fg_color="transparent")
         frame_switches.pack(pady=(5, 10))
 
-        ctk.CTkLabel(frame_switches, text="Hack", **self.UI['H1']).pack(anchor="w", pady=(0, 2))
-
-        # Full Light
-        switch_light = ctk.CTkSwitch(frame_switches, text="Full Light",
-                                     command=lambda: self.cb.on_light_toggle(bool(switch_light.get())),
-                                     progress_color="#FFA500", **self.UI['BODY'])
-        switch_light.pack(anchor="w", pady=self.UI['PAD_ITEM'])
-        if self.cb.get_full_light_enabled():
-            switch_light.select()
-
-        ctk.CTkLabel(frame_switches, text="Opções", **self.UI['H1']).pack(anchor="w", pady=(10, 2))
+        ctk.CTkLabel(frame_switches, text="Opções", **self.UI['H1']).pack(anchor="w", pady=(0, 2))
 
         # Look ID
         switch_lookid = ctk.CTkSwitch(frame_switches, text="Exibir ID ao dar Look",
@@ -390,17 +413,9 @@ class SettingsWindow:
         if settings.get('lookid_enabled', False):
             switch_lookid.select()
 
-        # Spear Picker
-        switch_spear_picker = ctk.CTkSwitch(frame_switches, text="Pegar Spear do Chao",
-                                            command=lambda: self.cb.on_spear_picker_toggle(bool(switch_spear_picker.get())),
-                                            progress_color="#E67E22", **self.UI['BODY'])
-        switch_spear_picker.pack(anchor="w", pady=self.UI['PAD_ITEM'])
-        if settings.get('spear_picker_enabled', False):
-            switch_spear_picker.select()
-
         # Max Spears
         f_spear_max = ctk.CTkFrame(frame_switches, fg_color="transparent")
-        f_spear_max.pack(anchor="w", padx=20, pady=(0, 5))
+        f_spear_max.pack(anchor="w", pady=(5, 5))
         ctk.CTkLabel(f_spear_max, text="Max Spears:", **self.UI['BODY']).pack(side="left")
         entry_spear_max = ctk.CTkEntry(f_spear_max, width=50)
         entry_spear_max.pack(side="left", padx=5)
@@ -416,14 +431,6 @@ class SettingsWindow:
 
         entry_spear_max.bind("<FocusOut>", on_spear_max_change)
         entry_spear_max.bind("<Return>", on_spear_max_change)
-
-        # Auto Torch
-        switch_auto_torch = ctk.CTkSwitch(frame_switches, text="Auto Torch",
-                                           command=lambda: self.cb.on_auto_torch_toggle(bool(switch_auto_torch.get())),
-                                           progress_color="#F39C12", **self.UI['BODY'])
-        switch_auto_torch.pack(anchor="w", pady=self.UI['PAD_ITEM'])
-        if settings.get('auto_torch_enabled', False):
-            switch_auto_torch.select()
 
         # AI Chat
         switch_ai_chat = ctk.CTkSwitch(frame_switches, text="Responder via IA",
@@ -450,8 +457,6 @@ class SettingsWindow:
             s['client_path'] = entry_client_path.get()
             entry_client_path.configure(state="disabled")
             s['ai_chat_enabled'] = bool(switch_ai_chat.get())
-            s['spear_picker_enabled'] = bool(switch_spear_picker.get())
-            s['auto_torch_enabled'] = bool(switch_auto_torch.get())
             try:
                 s['spear_max_count'] = int(entry_spear_max.get())
             except:

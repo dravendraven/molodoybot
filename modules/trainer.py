@@ -643,6 +643,27 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
             hwnd = win32gui.FindWindow("TibiaClient", None) or win32gui.FindWindow(None, "Tibia")
             
         if not get_cfg('is_safe', True):
+            # Cleanup follow/combat state when alarm triggers
+            if is_currently_following:
+                state.stop_follow()
+                is_currently_following = False
+                follow_target_id = 0
+                print("[TRAINER] 🛑 Alarm: Follow cancelado")
+
+            # Clear target (remove red square) and stop monitor
+            if current_target_id != 0 or current_monitored_id != 0:
+                try:
+                    pm.write_int(base_addr + TARGET_ID_PTR, 0)
+                except:
+                    pass
+                if current_monitored_id != 0:
+                    monitor.stop_and_report()
+                current_target_id = 0
+                current_monitored_id = 0
+                last_target_data = None
+                became_unreachable_time = None
+                print("[TRAINER] 🛑 Alarm: Target/Monitor limpos")
+
             time.sleep(0.5)
             continue
 
@@ -1145,9 +1166,51 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                             print(f"[FOLLOW-DEBUG]   Transição para attack em: dist <= 1")
 
                         if dist_now <= 1:
+                            # === KS FAIL-SAFE: Verifica engagement antes de atacar ===
+                            # Se criatura NÃO está nos atacando, pode ter sido pega por outro player
+                            # durante nosso trajeto de follow
+                            is_attacking_me = target_data.get("is_attacking_me", False)
+
+                            if not is_attacking_me and ks_enabled:
+                                # Re-verifica KS antes de atacar
+                                is_engaged, ks_reason = engagement_detector.is_engaged_with_other(
+                                    {'id': target_data["id"], 'abs_x': target_data["abs_x"],
+                                     'abs_y': target_data["abs_y"], 'hp': target_data["hp"]},
+                                    current_name,
+                                    (my_x, my_y),
+                                    all_visible_entities,
+                                    current_target_id,
+                                    targets_list,
+                                    walker=walker,
+                                    attack_range=MELEE_RANGE,
+                                    debug=debug_mode,
+                                    log_func=print
+                                )
+
+                                if is_engaged:
+                                    log(f"⚠️ [KS FAIL-SAFE] {target_data['name']} engajada ao chegar - cancelando ataque")
+                                    log_decision(f"🛑 KS FAIL-SAFE: {target_data['name']} engajada ({ks_reason}) - buscando novo alvo")
+
+                                    # Cancela follow e limpa estado
+                                    state.stop_follow()
+                                    is_currently_following = False
+                                    follow_target_id = 0
+                                    pm.write_int(target_addr, 0)  # Remove red square
+                                    if current_monitored_id != 0:
+                                        monitor.stop_and_report()
+                                    current_target_id = 0
+                                    current_monitored_id = 0
+                                    should_attack_new = True
+                                    time.sleep(SCAN_DELAY_COMBAT)
+                                    continue
+
+                                if debug_mode:
+                                    print(f"[KS FAIL-SAFE] ✅ Criatura livre - pode atacar")
+
+                            # Criatura está nos atacando OU passou no KS check - pode atacar
                             log(f"⚔️ TRANSIÇÃO: Follow → Attack ({target_data['name']})")
                             set_status(f"atacando {target_data['name']}")
-                            log_decision(f"🔄 Follow → Attack: {target_data['name']} (chegou dist:{dist_now})")
+                            log_decision(f"🔄 Follow → Attack: {target_data['name']} (dist:{dist_now}, attacking:{is_attacking_me})")
                             if not safe_attack(packet, current_target_id, log):
                                 time.sleep(0.5)
                                 continue

@@ -59,6 +59,11 @@ class MainWindowCallbacks:
     on_fisher_toggle: Callable[[], None]
     on_pause_toggle: Callable[[bool], None]  # Called with is_pausing=True/False
 
+    # === Utility Toggles ===
+    on_light_toggle: Callable[[bool], None]
+    on_spear_picker_toggle: Callable[[bool], None]
+    on_auto_torch_toggle: Callable[[bool], None]
+
     # === Trackers ===
     get_sword_tracker: Callable[[], Any]
     get_shield_tracker: Callable[[], Any]
@@ -100,6 +105,11 @@ class MainWindow:
         self.paused_switch_states = {}  # {switch_name: bool}
         self.paused_settings_states = {}  # {setting_name: value}
 
+        # === Performance Optimization State ===
+        self._graph_initialized = False  # Lazy load matplotlib
+        self._resize_job = None  # Debounce para auto_resize
+        self._last_status_hash = None  # Cache para update_status_panel
+
         # === Widgets Expostos (threads precisam acessar) ===
         # Header
         self.btn_xray: ctk.CTkButton = None
@@ -116,6 +126,11 @@ class MainWindow:
         self.switch_runemaker: ctk.CTkSwitch = None
         self.switch_cavebot: ctk.CTkSwitch = None
         self.switch_cavebot_var: ctk.IntVar = None
+
+        # Utility Toggles
+        self.switch_torch: ctk.CTkSwitch = None
+        self.switch_light: ctk.CTkSwitch = None
+        self.switch_spear: ctk.CTkSwitch = None
 
         # Stats Labels
         self.lbl_exp_left: ctk.CTkLabel = None
@@ -195,6 +210,7 @@ class MainWindow:
         # Criar componentes
         self._create_header()
         self._create_controls()
+        self._create_utility_toggles()
         self._create_stats()
         self._create_graph()
         self._create_minimap_panel()
@@ -222,7 +238,7 @@ class MainWindow:
             frame_header, text="Raio-X",
             command=self.callbacks.toggle_xray,
             width=25, height=25, fg_color="#303030",
-            font=("Verdana", 10)
+            font=("Verdana", 11)
         )
         self.btn_xray.pack(side="right", padx=5)
 
@@ -233,7 +249,7 @@ class MainWindow:
                 command=self.callbacks.on_reload,
                 width=35, height=25,
                 fg_color="#303030", hover_color="#505050",
-                font=("Verdana", 10)
+                font=("Verdana", 11)
             )
             self.btn_reload.pack(side="right", padx=5)
 
@@ -241,7 +257,7 @@ class MainWindow:
         self.btn_settings = ctk.CTkButton(
             frame_header, text="⚙️ Config.",
             command=self.callbacks.open_settings,
-            width=100, height=30,
+            width=70, height=30,
             fg_color="#303030", hover_color="#505050",
             font=("Verdana", 11, "bold")
         )
@@ -249,18 +265,18 @@ class MainWindow:
 
         # Pause/Resume Button
         self.btn_pause = ctk.CTkButton(
-            frame_header, text="⏸️",
+            frame_header, text="⏸️ Pausar",
             command=self.toggle_pause,
-            width=35, height=30,
+            width=65, height=30,
             fg_color="#303030", hover_color="#505050",
-            font=("Verdana", 14)
+            font=("Verdana", 11)
         )
         self.btn_pause.pack(side="left", padx=5)
 
         # Connection Label
         self.lbl_connection = ctk.CTkLabel(
             frame_header, text="🔌 Procurando...",
-            font=("Verdana", 11, "bold"),
+            font=("Verdana", 11),
             text_color="#FFA500"
         )
         self.lbl_connection.pack(side="right", padx=5)
@@ -320,6 +336,48 @@ class MainWindow:
         )
         self.switch_cavebot.grid(row=2, column=1, sticky="w", padx=(10, 0), pady=5)
 
+    def _create_utility_toggles(self):
+        """Cria a linha de toggles utilitários (Tocha, Light, Spear)."""
+        settings = self.callbacks.get_bot_settings()
+
+        frame_utils = ctk.CTkFrame(
+            self.main_frame, fg_color="#252525", corner_radius=6
+        )
+        frame_utils.pack(padx=10, pady=(0, 5), fill="x")
+        frame_utils.grid_columnconfigure(0, weight=1)
+        frame_utils.grid_columnconfigure(1, weight=1)
+        frame_utils.grid_columnconfigure(2, weight=1)
+
+        # Auto Torch
+        self.switch_torch = ctk.CTkSwitch(
+            frame_utils, text="Tocha",
+            command=lambda: self.callbacks.on_auto_torch_toggle(bool(self.switch_torch.get())),
+            progress_color="#F39C12", font=("Verdana", 11)
+        )
+        self.switch_torch.grid(row=0, column=0, sticky="w", padx=(15, 0), pady=4)
+        if settings.get('auto_torch_enabled', False):
+            self.switch_torch.select()
+
+        # Full Light
+        self.switch_light = ctk.CTkSwitch(
+            frame_utils, text="Light",
+            command=lambda: self.callbacks.on_light_toggle(bool(self.switch_light.get())),
+            progress_color="#FFA500", font=("Verdana", 11)
+        )
+        self.switch_light.grid(row=0, column=1, sticky="w", padx=(10, 0), pady=4)
+        if settings.get('full_light_enabled', False):
+            self.switch_light.select()
+
+        # Spear Picker
+        self.switch_spear = ctk.CTkSwitch(
+            frame_utils, text="Spear",
+            command=lambda: self.callbacks.on_spear_picker_toggle(bool(self.switch_spear.get())),
+            progress_color="#E67E22", font=("Verdana", 11)
+        )
+        self.switch_spear.grid(row=0, column=2, sticky="w", padx=(10, 0), pady=4)
+        if settings.get('spear_picker_enabled', False):
+            self.switch_spear.select()
+
     def _create_stats(self):
         """Cria o painel de estatísticas."""
         self.frame_stats = ctk.CTkFrame(
@@ -335,19 +393,19 @@ class MainWindow:
 
         self.lbl_exp_left = ctk.CTkLabel(
             frame_exp_det, text="--",
-            font=("Verdana", 10), text_color="gray"
+            font=("Verdana", 11), text_color="gray"
         )
         self.lbl_exp_left.pack(side="left", padx=5)
 
         self.lbl_exp_rate = ctk.CTkLabel(
             frame_exp_det, text="-- xp/h",
-            font=("Verdana", 10), text_color="gray"
+            font=("Verdana", 11), text_color="gray"
         )
         self.lbl_exp_rate.pack(side="left", padx=5)
 
         self.lbl_exp_eta = ctk.CTkLabel(
             frame_exp_det, text="--",
-            font=("Verdana", 10), text_color="gray"
+            font=("Verdana", 11), text_color="gray"
         )
         self.lbl_exp_eta.pack(side="left")
 
@@ -358,7 +416,7 @@ class MainWindow:
         # LINHA 2 REGEN
         self.lbl_regen = ctk.CTkLabel(
             self.frame_stats, text="🍖 --:--",
-            font=("Verdana", 10, "bold"), text_color="gray"
+            font=("Verdana", 11, "bold"), text_color="gray"
         )
         self.lbl_regen.grid(row=2, column=0, padx=10, pady=2, sticky="w")
 
@@ -368,19 +426,19 @@ class MainWindow:
 
         self.lbl_regen_stock = ctk.CTkLabel(
             frame_resources, text="🍖 --",
-            font=("Verdana", 10)
+            font=("Verdana", 11)
         )
         self.lbl_regen_stock.pack(side="left", padx=(0, 10))
 
         self.lbl_gold_rate = ctk.CTkLabel(
             frame_resources, text="0 gp/h",
-            font=("Verdana", 10), text_color="gray"
+            font=("Verdana", 11), text_color="gray"
         )
         self.lbl_gold_rate.pack(side="right")
 
         self.lbl_gold_total = ctk.CTkLabel(
             frame_resources, text="🪙 0 gp",
-            font=("Verdana", 10), text_color="#FFD700"
+            font=("Verdana", 11), text_color="#FFD700"
         )
         self.lbl_gold_total.pack(side="right", padx=(10, 10))
 
@@ -404,13 +462,13 @@ class MainWindow:
 
         self.lbl_sword_rate = ctk.CTkLabel(
             self.frame_sw_det, text="--m/%",
-            font=("Verdana", 10), text_color="gray"
+            font=("Verdana", 11), text_color="gray"
         )
         self.lbl_sword_rate.pack(side="left", padx=5)
 
         self.lbl_sword_time = ctk.CTkLabel(
             self.frame_sw_det, text="ETA: --",
-            font=("Verdana", 10), text_color="gray"
+            font=("Verdana", 11), text_color="gray"
         )
         self.lbl_sword_time.pack(side="left")
 
@@ -434,13 +492,13 @@ class MainWindow:
 
         self.lbl_shield_rate = ctk.CTkLabel(
             self.frame_sh_det, text="--m/%",
-            font=("Verdana", 10), text_color="gray"
+            font=("Verdana", 11), text_color="gray"
         )
         self.lbl_shield_rate.pack(side="left", padx=5)
 
         self.lbl_shield_time = ctk.CTkLabel(
             self.frame_sh_det, text="ETA: --",
-            font=("Verdana", 10), text_color="gray"
+            font=("Verdana", 11), text_color="gray"
         )
         self.lbl_shield_time.pack(side="left")
 
@@ -464,18 +522,18 @@ class MainWindow:
 
         self.lbl_magic_rate = ctk.CTkLabel(
             frame_ml_det, text="--m/%",
-            font=("Verdana", 10), text_color="gray"
+            font=("Verdana", 11), text_color="gray"
         )
         self.lbl_magic_rate.pack(side="left", padx=5)
 
         self.lbl_magic_time = ctk.CTkLabel(
             frame_ml_det, text="ETA: --",
-            font=("Verdana", 10), text_color="gray"
+            font=("Verdana", 11), text_color="gray"
         )
         self.lbl_magic_time.pack(side="left")
 
     def _create_graph(self):
-        """Cria o container do gráfico de eficiência."""
+        """Cria o container do gráfico - matplotlib carregado sob demanda."""
         self.frame_graphs_container = ctk.CTkFrame(
             self.main_frame, fg_color="transparent",
             border_width=0, border_color="#303030", corner_radius=0
@@ -494,8 +552,13 @@ class MainWindow:
         self.frame_graph = ctk.CTkFrame(
             self.frame_graphs_container, fg_color="transparent", corner_radius=6
         )
+        # matplotlib será carregado em _init_graph() na primeira vez que o gráfico for aberto
 
-        # Lazy load matplotlib
+    def _init_graph(self):
+        """Inicializa matplotlib sob demanda (lazy loading)."""
+        if self._graph_initialized:
+            return
+
         plt_mod, Canvas = setup_matplotlib()
         plt_mod.style.use('dark_background')
 
@@ -513,6 +576,8 @@ class MainWindow:
         self.canvas = Canvas(self.fig, master=self.frame_graph)
         widget = self.canvas.get_tk_widget()
         widget.pack(fill="both", expand=True, padx=1, pady=2)
+
+        self._graph_initialized = True
 
     def _create_minimap_panel(self):
         """Cria o painel do minimap (mostrado quando cavebot está ativo)."""
@@ -539,13 +604,11 @@ class MainWindow:
         self.minimap_label = ctk.CTkLabel(
             self.minimap_container,
             text="⏳ Aguardando Cavebot...",
-            font=("Verdana", 9),
+            font=("Verdana", 11),
             text_color="#888888"
         )
         self.minimap_label.pack(padx=10, pady=5)
-
-        # Initialize visualizer (lazy)
-        self._init_minimap_visualizer()
+        # minimap_visualizer será inicializado em show_minimap_panel() (lazy loading)
 
     def _init_minimap_visualizer(self):
         """Inicializa o visualizador de minimap."""
@@ -579,7 +642,7 @@ class MainWindow:
             self.status_labels[module] = ctk.CTkLabel(
                 self.frame_status_panel,
                 text="",
-                font=("Consolas", 10),
+                font=("Consolas", 11),
                 text_color="#AAAAAA",
                 anchor="w"
             )
@@ -606,6 +669,8 @@ class MainWindow:
             self.btn_graph.configure(text="Mostrar Gráfico 📈")
             self.is_graph_visible = False
         else:
+            # Lazy load matplotlib na primeira vez
+            self._init_graph()
             self.frame_graph.pack(side="top", fill="both", expand=True, pady=(0, 5))
             self.btn_graph.configure(text="Esconder Gráfico 📉")
             self.is_graph_visible = True
@@ -652,7 +717,7 @@ class MainWindow:
                     self.callbacks.toggle_cavebot()
 
             # Atualizar UI
-            self.btn_pause.configure(text="▶️", fg_color="#FF6600")
+            self.btn_pause.configure(text="▶️ Retomar", fg_color="#FF6600")
             self.set_connection_status("⏸️ Pausado", "#FFA500")
             self.is_paused = True
 
@@ -681,7 +746,7 @@ class MainWindow:
                 self.callbacks.on_pause_toggle(False)
 
             # Atualizar UI
-            self.btn_pause.configure(text="⏸️", fg_color="#303030")
+            self.btn_pause.configure(text="⏸️ Pausar", fg_color="#303030")
             # Connection status será atualizado pelo watchdog automaticamente
             self.is_paused = False
 
@@ -726,6 +791,7 @@ class MainWindow:
         """
         Atualiza os labels do Status Panel baseado nos módulos ativos.
         Chamada periodicamente pelo gui_updater_loop.
+        Usa cache hash para evitar atualizações desnecessárias.
         """
         # Se console log está ativo ou status panel não existe, não atualiza
         if self.log_visible or not self.frame_status_panel:
@@ -754,6 +820,13 @@ class MainWindow:
                 active_modules.append('alarm')
         except:
             pass
+
+        # Cache: só atualiza se estado mudou
+        status_tuple = tuple((m, module_status.get(m, "")) for m in active_modules)
+        current_hash = hash((tuple(active_modules), status_tuple))
+        if current_hash == self._last_status_hash:
+            return  # Nada mudou, skip update
+        self._last_status_hash = current_hash
 
         # Esconder todos os labels primeiro
         for module, label in self.status_labels.items():
@@ -807,13 +880,18 @@ class MainWindow:
                 self.txt_log.pack_forget()
             if self.frame_status_panel:
                 self.frame_status_panel.pack(side="bottom", fill="x", padx=8, pady=3)
-                self.update_status_panel()
+                # Usar after() para garantir que o pack seja processado antes de atualizar
+                self.app.after(20, self.update_status_panel)
+                return  # auto_resize será chamado por update_status_panel
 
         self.auto_resize_window()
 
     def show_minimap_panel(self):
         """Mostra o painel do minimap e redimensiona a GUI."""
         if self.minimap_container and not self.minimap_container.winfo_ismapped():
+            # Lazy load do visualizer na primeira vez
+            if self.minimap_visualizer is None:
+                self._init_minimap_visualizer()
             self.minimap_container.pack(fill="x", padx=10, pady=5)
             self.app.after(100, self.auto_resize_window)
 
@@ -826,14 +904,22 @@ class MainWindow:
     def auto_resize_window(self):
         """
         Calcula o tamanho necessário para o conteúdo e ajusta a janela.
-        Mantém a largura fixa em 320.
+        Mantém a largura fixa em 320. Usa debounce para evitar múltiplas execuções.
         """
+        # Cancelar job pendente (debounce)
+        if self._resize_job:
+            try:
+                self.app.after_cancel(self._resize_job)
+            except:
+                pass
+
         def do_resize():
+            self._resize_job = None
             self.app.update_idletasks()
             h = self.main_frame.winfo_reqheight() + 12
             self.app.geometry(f"320x{h}")
 
-        self.app.after(10, do_resize)
+        self._resize_job = self.app.after(50, do_resize)  # 50ms debounce
 
     def log(self, msg: str):
         """Adiciona mensagem ao log."""

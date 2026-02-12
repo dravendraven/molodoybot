@@ -511,6 +511,23 @@ CLEAR_ATTEMPT_COOLDOWN = 2.0
 STACK_CLEARING_ENABLED = True     # Master toggle - mover parcels/boxes do caminho
 
 # ==============================================================================
+# OSCILLATION DETECTION CONFIG (Detecção de movimento "vai e volta")
+# ==============================================================================
+OSCILLATION_DETECTION_ENABLED = True  # Master toggle - detectar e resolver oscilação
+OSCILLATION_THRESHOLD = 3             # Quantos passos alternantes = oscilação
+OSCILLATION_MAX_ATTEMPTS = 3          # Após N tentativas, skip waypoint/spawn
+DEBUG_OSCILLATION = False             # Logs detalhados de detecção de oscilação
+
+# ==============================================================================
+# DIRECTION CHANGE HUMANIZATION (Humanização de mudança de direção)
+# ==============================================================================
+# Delay extra quando o bot muda para direção oposta (ex: Norte→Sul)
+# Simula o tempo de reação humano para inverter movimento
+DIRECTION_CHANGE_DELAY_ENABLED = True   # Habilitar delay ao inverter direção
+DIRECTION_CHANGE_DELAY_MIN_MS = 80      # Delay mínimo (ms)
+DIRECTION_CHANGE_DELAY_MAX_MS = 200     # Delay máximo (ms)
+
+# ==============================================================================
 # HUMANIZAÇÃO - DETECÇÃO DE FALTA DE PROGRESSO
 # ==============================================================================
 # Detecta quando o bot está andando mas não avançando ao waypoint (ping-pong, etc)

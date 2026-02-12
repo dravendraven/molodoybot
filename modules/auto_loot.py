@@ -165,6 +165,19 @@ def find_existing_stack(player_containers, item_id, max_stack=100):
                 return cont.index, item.slot_index, item.count
     return None, None, None
 
+def find_container_with_item(player_containers, item_id):
+    """
+    Encontra qual container do player contém o item especificado.
+    Retorna o container, independente da quantidade no stack.
+
+    Returns: Container ou None se não encontrado
+    """
+    for cont in player_containers:
+        for item in cont.items:
+            if item.id == item_id:
+                return cont
+    return None
+
 # ==============================================================================
 # EXECUÇÃO DO AUTO LOOT
 # ==============================================================================
@@ -327,6 +340,16 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
 
                             # Se não moveu tudo (stack encheu), o resto fica no corpo para próximo ciclo
                             return ("LOOT", item.id, qty_to_move)
+
+                        # CORREÇÃO: Se não há stack com espaço, procurar container que já tem o item
+                        existing_container = find_container_with_item(player_containers, item.id)
+                        if existing_container is not None:
+                            # Encontrar slot vazio nesse container específico
+                            if existing_container.amount < existing_container.volume:
+                                # Tem espaço no container - usar próximo slot disponível
+                                dest_idx = existing_container.index
+                                dest_slot = existing_container.amount
+                                is_backpack_full = False
 
                     # Fallback: usar slot vazio (não é stackável OU não tem stack existente)
                     if is_backpack_full:

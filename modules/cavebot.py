@@ -169,6 +169,13 @@ class Cavebot:
         self._precompute_done = False        # True se já tentou precomputar neste ciclo de wait
         self._precompute_last_used_pos = None  # Pos quando último passo pré-calculado foi enviado (detecção de falha)
 
+        # --- OSCILLATION DETECTION (detecção de vai-volta) ---
+        self._step_history = []              # Lista de (dx, dy) dos últimos N passos
+        self._step_history_max = 10          # Tamanho máximo do histórico
+        self._oscillation_skip_count = 0     # Contador de tentativas de resolução
+        self._cached_spawn_target_pos = None # Cache do último alvo (auto-explore)
+        self._last_closest_idx = -1          # Último índice de sincronização na rota
+
     def load_waypoints(self, waypoints_list):
         """
         Carrega lista de waypoints com validação thread-safe.
@@ -671,10 +678,15 @@ class Cavebot:
                             self.last_action_time = time.time()
                             return
                 else:
-                    # Para escadas de USE, prefira parar em um tile cardinal adjacente e usar à distância.
+                    # Para tiles de USE, prefira parar em um tile cardinal adjacente e usar à distância.
+                    # Para DOWN/UP_WALK, navegar para tile adjacente (A* não pode pathing para non-walkable)
                     target_fx, target_fy = fx, fy
-                    if ftype == 'UP_USE':
+                    if ftype in ('UP_USE', 'DOWN_USE', 'SHOVEL'):
                         target_fx, target_fy = self._get_adjacent_use_tile(fx, fy)
+                    elif ftype in ('DOWN', 'UP_WALK'):
+                        adj = self._get_walkable_adjacent_tile(fx, fy)
+                        if adj:
+                            target_fx, target_fy = adj
 
                     if DEBUG_PATHFINDING:
                         print(f"[{_ts()}] [🪜 FLOOR CHANGE] Longe do {ftype}, calculando caminho para ({target_fx:+d}, {target_fy:+d})...")
@@ -984,6 +996,12 @@ class Cavebot:
                     target_fx, target_fy = fx, fy
                     if ftype in ('UP_USE', 'DOWN_USE', 'SHOVEL'):
                         target_fx, target_fy = self._get_adjacent_use_tile(fx, fy)
+                    elif ftype in ('DOWN', 'UP_WALK'):
+                        # DOWN/UP_WALK: navegar para tile ADJACENTE (não para o buraco/escada)
+                        # porque A* não pode pathing para tiles non-walkable
+                        adj = self._get_walkable_adjacent_tile(fx, fy)
+                        if adj:
+                            target_fx, target_fy = adj
                     abs_x = px + target_fx
                     abs_y = py + target_fy
                     if DEBUG_AUTO_EXPLORE:
@@ -1000,7 +1018,10 @@ class Cavebot:
                 target_pos = spawn.nearest_walkable_target(self.global_map)
                 if not target_pos:
                     self._current_spawn_target = None
+                    self._cached_spawn_target_pos = None
                     return
+                # Atualiza cache (multifloor usa mesmo cache)
+                self._cached_spawn_target_pos = target_pos
                 full_path = self.global_map.get_path_multilevel(
                     (px, py, pz), target_pos
                 )
@@ -1028,7 +1049,21 @@ class Cavebot:
             if DEBUG_AUTO_EXPLORE:
                 print(f"[{_ts()}] [AutoExplore] Nenhum tile walkable no spawn, pulando")
             self._current_spawn_target = None
+            self._cached_spawn_target_pos = None
             return
+
+        # CACHE DE TARGET: Detectar mudança significativa (pode causar oscilação)
+        if self._cached_spawn_target_pos and target_pos != self._cached_spawn_target_pos:
+            dist_change = math.sqrt(
+                (target_pos[0] - self._cached_spawn_target_pos[0])**2 +
+                (target_pos[1] - self._cached_spawn_target_pos[1])**2
+            )
+            if dist_change > 3:  # Mudança significativa (> 3 SQM)
+                if DEBUG_AUTO_EXPLORE or DEBUG_OSCILLATION:
+                    print(f"[{_ts()}] [AutoExplore] ⚠️ Target mudou: {self._cached_spawn_target_pos} → {target_pos} (Δ={dist_change:.1f})")
+                # Limpa histórico de passos para evitar falso-positivo de oscilação
+                self._step_history.clear()
+        self._cached_spawn_target_pos = target_pos
 
         # Verificar se rota existe antes de navegar (só quando não tem rota ativa)
         if not self.current_global_path:
@@ -1233,14 +1268,18 @@ class Cavebot:
                 self.current_global_path = self.current_global_path[closest_idx:]
                 # Lookahead: Pega o nó X passos à frente
                 lookahead = min(7, len(self.current_global_path) - 1)
+                MIN_LOOKAHEAD = 3  # Evita sub-destino muito próximo (causa oscilação)
 
                 # Reduz lookahead se sub-destino ficaria fora do range de memória (±7)
                 # ou se estiver em outro andar (evita pular transições de floor)
-                while lookahead > 1:
+                while lookahead > MIN_LOOKAHEAD:
                     lx, ly, lz = self.current_global_path[lookahead]
                     if abs(lx - my_x) <= 7 and abs(ly - my_y) <= 7 and lz == current_z:
                         break
                     lookahead -= 1
+
+                # Garante lookahead mínimo (se path for muito curto, usa o que tem)
+                lookahead = max(min(MIN_LOOKAHEAD, len(self.current_global_path) - 1), lookahead)
 
                 if lookahead != self.last_lookahead_idx:
                     print(f"[{_ts()}] [Nav] 🚶 Seguindo Global: Nó {lookahead}/{len(self.current_global_path)}")
@@ -1569,11 +1608,16 @@ class Cavebot:
 
             path_remaining = self.current_global_path[closest_idx:]
             lookahead = min(7, len(path_remaining) - 1)
-            while lookahead > 1:
+            MIN_LOOKAHEAD = 3  # Evita sub-destino muito próximo (causa oscilação)
+
+            while lookahead > MIN_LOOKAHEAD:
                 lx, ly, _ = path_remaining[lookahead]
                 if abs(lx - px) <= 7 and abs(ly - py) <= 7:
                     break
                 lookahead -= 1
+
+            # Garante mínimo (mas não exceder tamanho do path)
+            lookahead = max(min(MIN_LOOKAHEAD, len(path_remaining) - 1), lookahead)
 
             tx, ty, _ = path_remaining[lookahead]
             rel_x = tx - px
@@ -1596,8 +1640,18 @@ class Cavebot:
         Executa um passo com delay dinâmico baseado no ground speed do tile destino
         e variação humana natural (jitter + micro-pausas).
         """
+        # 0. OSCILLATION DETECTION: Verificar se criaria oscilação
+        if self._detect_oscillation(dx, dy):
+            if DEBUG_OSCILLATION:
+                print(f"[{_ts()}] [Oscillation] Detectada oscilação para passo ({dx}, {dy})")
+            self._handle_oscillation(dx, dy)
+            return  # Não executa o passo original
+
         # 1. Envia o pacote de movimento
         self._move_step(dx, dy)
+
+        # 1.1 Registra passo no histórico (para detecção de oscilação)
+        self._record_step(dx, dy)
 
         # 2. Atualiza cache de velocidade (a cada 2s)
         if time.time() - self.last_speed_check > 2.0:
@@ -1626,6 +1680,18 @@ class Cavebot:
         # 5. Fórmula de Tempo Base (ms) = (1000 * effective_speed) / player_speed
         base_ms = (1000.0 * effective_speed) / player_speed
 
+        # 5.1 HUMANIZAÇÃO: Delay adicional se mudança de direção oposta
+        # Simula tempo de reação humano ao inverter movimento (ex: Norte→Sul)
+        direction_change_delay = 0
+        if DIRECTION_CHANGE_DELAY_ENABLED and self._is_opposite_direction(dx, dy):
+            direction_change_delay = random.uniform(
+                DIRECTION_CHANGE_DELAY_MIN_MS,
+                DIRECTION_CHANGE_DELAY_MAX_MS
+            )
+            if DEBUG_PATHFINDING:
+                last_dx, last_dy = self._step_history[-1]
+                print(f"[{_ts()}] [Nav] 🔄 Mudança de direção: ({last_dx},{last_dy})→({dx},{dy}) +{direction_change_delay:.0f}ms")
+
         # 6. NOVO: Adiciona jitter gaussiano (±4% de variação)
         # Simula variação natural de timing humano
         jitter_std = base_ms * 0.04  # Desvio padrão = 4% do base
@@ -1636,8 +1702,8 @@ class Cavebot:
         if random.random() < 0.02:
             jitter += random.uniform(30, 100)
 
-        # 8. Calcula delay final com jitter
-        total_ms = base_ms + jitter
+        # 8. Calcula delay final com jitter e delay de mudança de direção
+        total_ms = base_ms + jitter + direction_change_delay
 
         # 9. Buffer de Pre-Move (Antecipação)
         # Enviamos o próximo comando X ms antes de terminar o passo atual
@@ -2055,6 +2121,60 @@ class Cavebot:
                 best = (ox, oy)
         return best
 
+    def _get_walkable_adjacent_tile(self, special_rel_x, special_rel_y):
+        """
+        Encontra um tile WALKABLE adjacente a um tile especial (buraco/escada).
+        Usado para navegação: A* não pode pathing para tiles non-walkable,
+        então navegamos até um tile adjacente e depois pisamos no especial.
+
+        Prioriza:
+        1. Tiles cardeais (mais fácil pisar no especial depois)
+        2. Tiles mais próximos do player
+        3. Tiles diagonais como fallback
+
+        Returns: (rel_x, rel_y) do tile adjacente ou None se nenhum walkable.
+        """
+        # Cardeais primeiro (preferência para pisar em buracos)
+        cardinal = [
+            (special_rel_x + 1, special_rel_y),
+            (special_rel_x - 1, special_rel_y),
+            (special_rel_x, special_rel_y + 1),
+            (special_rel_x, special_rel_y - 1),
+        ]
+        # Diagonais como fallback
+        diagonal = [
+            (special_rel_x + 1, special_rel_y + 1),
+            (special_rel_x + 1, special_rel_y - 1),
+            (special_rel_x - 1, special_rel_y + 1),
+            (special_rel_x - 1, special_rel_y - 1),
+        ]
+
+        best = None
+        best_dist = 999
+
+        # Prioridade 1: Cardeais walkable
+        for ox, oy in cardinal:
+            props = self.analyzer.get_tile_properties(ox, oy)
+            if not props['walkable']:
+                continue
+            dist = abs(ox) + abs(oy)
+            if dist < best_dist:
+                best_dist = dist
+                best = (ox, oy)
+
+        # Prioridade 2: Diagonais walkable (se nenhum cardinal disponível)
+        if best is None:
+            for ox, oy in diagonal:
+                props = self.analyzer.get_tile_properties(ox, oy)
+                if not props['walkable']:
+                    continue
+                dist = abs(ox) + abs(oy)
+                if dist < best_dist:
+                    best_dist = dist
+                    best = (ox, oy)
+
+        return best
+
     def _ensure_cardinal_adjacent(self, rel_x, rel_y, label="rope"):
         """
         Verifica se está adjacente (Chebyshev = 1, inclui diagonal e cardinal).
@@ -2464,6 +2584,171 @@ class Cavebot:
             # Posição mudou (mesmo que is_moving=False agora) - não está stuck
             self.stuck_counter = 0
             self.last_known_pos = current_pos
+
+    # =========================================================================
+    # OSCILLATION DETECTION: Detecção de movimento "vai e volta"
+    # =========================================================================
+
+    def _detect_oscillation(self, dx, dy) -> bool:
+        """
+        Detecta padrão de oscilação nos últimos passos.
+        Retorna True se o passo atual criaria oscilação.
+
+        Padrão detectado (threshold=3):
+        - [+1, -1, +1] no eixo X ou Y
+        - Ou seja, 3 alternâncias consecutivas
+        """
+        if not OSCILLATION_DETECTION_ENABLED:
+            return False
+
+        threshold = OSCILLATION_THRESHOLD
+        if len(self._step_history) < threshold - 1:
+            return False
+
+        # Verifica eixo X
+        x_pattern = [s[0] for s in self._step_history[-(threshold-1):]] + [dx]
+        if self._is_alternating(x_pattern, threshold):
+            return True
+
+        # Verifica eixo Y
+        y_pattern = [s[1] for s in self._step_history[-(threshold-1):]] + [dy]
+        if self._is_alternating(y_pattern, threshold):
+            return True
+
+        return False
+
+    def _is_alternating(self, values, threshold=3) -> bool:
+        """Verifica se valores alternam entre positivo e negativo."""
+        if len(values) < threshold:
+            return False
+
+        # Remove zeros (passos que não são nesse eixo)
+        non_zero = [v for v in values if v != 0]
+        if len(non_zero) < threshold:
+            return False
+
+        # Verifica alternância: sign muda a cada passo
+        for i in range(1, len(non_zero)):
+            if non_zero[i] * non_zero[i-1] >= 0:  # Mesmo sinal ou zero
+                return False
+
+        return True
+
+    def _handle_oscillation(self, dx, dy):
+        """
+        Chamado quando oscilação é detectada.
+        Aplica estratégia de recuperação em 3 níveis:
+        1. Passo perpendicular
+        2. Bloqueio temporário + recalc
+        3. Skip waypoint/spawn (última opção)
+        """
+        self._oscillation_skip_count += 1
+        print(f"[{_ts()}] [Cavebot] ⚠️ OSCILAÇÃO DETECTADA! (tentativa {self._oscillation_skip_count}/{OSCILLATION_MAX_ATTEMPTS})")
+        print(f"[{_ts()}] [Cavebot]    Últimos passos: {self._step_history[-3:]}")
+
+        # Estratégia 3: Após N tentativas, SKIP para próximo waypoint/spawn
+        if self._oscillation_skip_count >= OSCILLATION_MAX_ATTEMPTS:
+            print(f"[{_ts()}] [Cavebot] ⏭️ Oscilação persistente! Pulando para próximo destino.")
+            self._oscillation_skip_count = 0
+            self._step_history.clear()
+            self.current_global_path = []
+            self.local_path_cache = []
+
+            if self.auto_explore_enabled and self._current_spawn_target:
+                # Skip spawn no auto-explore
+                if self._spawn_selector:
+                    px, py, pz = get_player_pos(self.pm, self.base_addr)
+                    self._spawn_selector.skip_spawn(
+                        self._current_spawn_target,
+                        "oscilação persistente",
+                        (px, py, pz)
+                    )
+                self._current_spawn_target = None
+                print(f"[{_ts()}] [Cavebot] ⏭️ Spawn pulado, selecionando próximo...")
+            else:
+                # Skip waypoint no modo normal
+                with self._waypoints_lock:
+                    if len(self._waypoints) > 1:
+                        old_idx = self._current_index
+                        self._advance_waypoint()
+                        print(f"[{_ts()}] [Cavebot] ⏭️ Waypoint #{old_idx} → #{self._current_index}")
+            return
+
+        # Estratégia 1: Tentar passo perpendicular
+        perpendicular_steps = self._get_perpendicular_steps(dx, dy)
+        for perp_dx, perp_dy in perpendicular_steps:
+            props = self.analyzer.get_tile_properties(perp_dx, perp_dy)
+            if props['walkable']:
+                print(f"[{_ts()}] [Cavebot] 🔄 Tentando passo perpendicular: ({perp_dx}, {perp_dy})")
+                self._step_history.clear()  # Limpa histórico
+                self._move_step(perp_dx, perp_dy)
+                self.next_walk_time = time.time() + 0.5  # Delay para estabilizar
+                return
+
+        # Estratégia 2: Se não há perpendicular, aplicar bloqueio e recalcular
+        print(f"[{_ts()}] [Cavebot] 🔄 Forçando recálculo com bloqueio temporário")
+
+        # Bloqueia o tile na direção oposta ao último passo
+        if self._step_history:
+            last_dx, last_dy = self._step_history[-1]
+            px, py, pz = get_player_pos(self.pm, self.base_addr)
+            block_x = px - last_dx  # Tile de onde veio
+            block_y = py - last_dy
+            self.global_map.add_temp_block(block_x, block_y, pz, duration=30)
+            print(f"[{_ts()}] [Cavebot] 🧱 Bloqueio temporário em ({block_x}, {block_y}) por 30s")
+
+        # Limpa tudo para forçar nova rota
+        self._step_history.clear()
+        self.current_global_path = []
+        self.local_path_cache = []
+        self.global_recalc_counter = 0
+
+    def _get_perpendicular_steps(self, dx, dy):
+        """Retorna passos perpendiculares ao movimento atual."""
+        if dx != 0:  # Movimento horizontal → tenta vertical
+            return [(0, 1), (0, -1)]
+        elif dy != 0:  # Movimento vertical → tenta horizontal
+            return [(1, 0), (-1, 0)]
+        return []
+
+    def _is_opposite_direction(self, dx, dy) -> bool:
+        """
+        Verifica se o passo atual é na direção oposta ao último passo.
+        Usado para humanização: adicionar delay extra ao inverter direção.
+
+        Exemplos de direções opostas:
+        - (0, -1) Norte → (0, +1) Sul = OPOSTO
+        - (+1, 0) Leste → (-1, 0) Oeste = OPOSTO
+        - (+1, -1) NE → (-1, +1) SW = OPOSTO (diagonal inversa)
+
+        NÃO são opostas (apenas 90° ou similar):
+        - (0, -1) Norte → (+1, 0) Leste
+        - (+1, 0) Leste → (+1, -1) NE
+        """
+        if not self._step_history:
+            return False
+
+        last_dx, last_dy = self._step_history[-1]
+
+        # Direção oposta: sinais invertidos em AMBOS os eixos (ou zero em um)
+        # Para cardinal: um eixo é 0, o outro inverte
+        # Para diagonal: ambos invertem
+
+        x_opposite = (last_dx != 0 and dx == -last_dx) or (last_dx == 0 and dx == 0)
+        y_opposite = (last_dy != 0 and dy == -last_dy) or (last_dy == 0 and dy == 0)
+
+        # Pelo menos um eixo deve ter invertido (não apenas zeros)
+        has_inversion = (last_dx != 0 and dx == -last_dx) or (last_dy != 0 and dy == -last_dy)
+
+        return x_opposite and y_opposite and has_inversion
+
+    def _record_step(self, dx, dy):
+        """Registra um passo no histórico de oscilação."""
+        self._step_history.append((dx, dy))
+        if len(self._step_history) > self._step_history_max:
+            self._step_history.pop(0)
+        # Reset contador de skip se passo foi bem sucedido
+        self._oscillation_skip_count = 0
 
     # =========================================================================
     # AFK HUMANIZATION: Pausas Aleatórias
