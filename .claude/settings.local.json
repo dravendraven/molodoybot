@@ -21,7 +21,8 @@
       "Bash(unzip:*)",
       "Bash(for f in *.json)",
       "Bash(do grep -q \"320\\\\|319\" \"$f\")",
-      "Bash(echo:*)"
+      "Bash(echo:*)",
+      "Bash(powershell -Command \"Get-ChildItem -Recurse -File | Where-Object { $_Extension -in ''.json'',''.xml'',''.pickle'',''.pkl'' } | Sort-Object Length -Descending | Select-Object -First 10 @{N=''Size\\(MB\\)'';E={[math]::Round\\($_Length/1MB,2\\)}}, FullName\")"
     ],
     "additionalDirectories": [
       "c:\\Users\\vitor\\OneDrive\\Documentos\\cheat engine"

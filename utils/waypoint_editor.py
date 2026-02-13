@@ -23,6 +23,7 @@ from PIL import Image, ImageDraw
 import sys
 import threading
 import time
+import xml.etree.ElementTree as ET
 
 # Import config and game map
 try:
@@ -122,6 +123,11 @@ class WaypointEditorWindow:
 
         # Insert mode (inserir waypoint após selecionado)
         self._insert_after_idx = None
+
+        # Spawn overlay settings
+        self._show_spawns = True
+        self._spawn_cache = {}  # z -> [(abs_x, abs_y, monster_name), ...]
+        self._spawn_data_loaded = False
 
         # Undo/Redo stacks
         self._undo_stack = []  # Lista de (waypoints_snapshot, description)
@@ -261,6 +267,19 @@ class WaypointEditorWindow:
         # Down button
         ttk.Button(floor_controls, text="▼", width=3, command=self._floor_down).pack(side=tk.LEFT, padx=2)
 
+        # Spawn overlay toggle
+        spawn_frame = ttk.LabelFrame(right_frame, text="Visualização")
+        spawn_frame.pack(fill=tk.X, pady=5)
+
+        self._show_spawns_var = tk.BooleanVar(value=True)
+        spawn_check = ttk.Checkbutton(
+            spawn_frame,
+            text="Mostrar Spawns",
+            variable=self._show_spawns_var,
+            command=self._toggle_spawns
+        )
+        spawn_check.pack(padx=5, pady=5, anchor=tk.W)
+
         # File operations
         file_frame = ttk.LabelFrame(right_frame, text="Operações de Arquivo")
         file_frame.pack(fill=tk.X, pady=5)
@@ -388,6 +407,50 @@ class WaypointEditorWindow:
     def _color_id_to_rgb(self, color_id):
         """Convert Tibia color ID to RGB tuple."""
         return get_color(color_id)
+
+    def _load_spawn_data(self):
+        """Load spawn data from world-spawn.xml (lazy loading).
+
+        Groups monsters by spawn center and counts them.
+        Result: one point per spawn center with monster name and count.
+        """
+        if self._spawn_data_loaded:
+            return
+
+        spawn_file = _PROJECT_ROOT / "world-spawn.xml"
+        if not spawn_file.exists():
+            self._spawn_data_loaded = True
+            return
+
+        try:
+            tree = ET.parse(spawn_file)
+            root = tree.getroot()
+
+            for spawn_elem in root.findall('spawn'):
+                center_x = int(spawn_elem.get('centerx', 0))
+                center_y = int(spawn_elem.get('centery', 0))
+                center_z = int(spawn_elem.get('centerz', 7))
+
+                # Count monsters by name in this spawn
+                monster_counts = {}
+                for monster_elem in spawn_elem.findall('monster'):
+                    name = monster_elem.get('name', 'unknown')
+                    monster_counts[name] = monster_counts.get(name, 0) + 1
+
+                if monster_counts:
+                    # Get the most common monster name for display
+                    main_monster = max(monster_counts, key=monster_counts.get)
+                    total_count = sum(monster_counts.values())
+
+                    # Store in cache by floor: (center_x, center_y, name, count)
+                    if center_z not in self._spawn_cache:
+                        self._spawn_cache[center_z] = []
+                    self._spawn_cache[center_z].append((center_x, center_y, main_monster, total_count))
+
+            self._spawn_data_loaded = True
+        except Exception as e:
+            print(f"Error loading spawn data: {e}")
+            self._spawn_data_loaded = True
 
     def _game_to_canvas_coords(self, abs_x, abs_y):
         """Convert game coordinates to canvas pixel coordinates."""
@@ -719,6 +782,11 @@ class WaypointEditorWindow:
         self._update_display()
         self._show_status("↪️ Refeito")
 
+    def _toggle_spawns(self):
+        """Toggle spawn overlay visibility."""
+        self._show_spawns = self._show_spawns_var.get()
+        self._update_display()
+
     def _floor_up(self):
         """Increase floor level."""
         if self.current_floor < 15:
@@ -830,7 +898,10 @@ class WaypointEditorWindow:
             self.canvas.delete('all')
             self.canvas.create_image(self.canvas_width // 2, self.canvas_height // 2, image=self.canvas_photo)
 
-        # Draw waypoints and route
+        # Draw spawn indicators (below waypoints)
+        self._draw_spawns_overlay()
+
+        # Draw waypoints and route (on top of spawns)
         self._draw_waypoints_overlay()
 
         # Only rebuild waypoint list if the count changed (avoid resetting scroll position)
@@ -920,6 +991,62 @@ class WaypointEditorWindow:
                 fill=text_color,
                 font=('Arial', 9, 'bold'),
                 tags='waypoint'
+            )
+
+    def _draw_spawns_overlay(self):
+        """Draw spawn point indicators on the canvas."""
+        if not self._show_spawns:
+            return
+
+        # Lazy load spawn data
+        self._load_spawn_data()
+
+        # Delete previous spawn markers
+        self.canvas.delete('spawn')
+
+        # Get spawns for current floor
+        floor_spawns = self._spawn_cache.get(self.current_floor, [])
+        if not floor_spawns:
+            return
+
+        # Calculate viewport bounds for filtering (account for image crop offset)
+        view_min_x = self.viewport_min_x + (self.image_crop_offset_x / self.pixels_per_tile)
+        view_max_x = view_min_x + (self.canvas_width / self.pixels_per_tile)
+        view_min_y = self.viewport_min_y + (self.image_crop_offset_y / self.pixels_per_tile)
+        view_max_y = view_min_y + (self.canvas_height / self.pixels_per_tile)
+
+        # Draw each spawn in viewport
+        for abs_x, abs_y, monster_name, count in floor_spawns:
+            # Skip if outside viewport
+            if not (view_min_x <= abs_x <= view_max_x and view_min_y <= abs_y <= view_max_y):
+                continue
+
+            cx, cy = self._game_to_canvas_coords(abs_x, abs_y)
+
+            # Skip if outside canvas bounds
+            if not (0 <= cx <= self.canvas_width and 0 <= cy <= self.canvas_height):
+                continue
+
+            # Draw small green dot
+            radius = 3
+            self.canvas.create_oval(
+                cx - radius, cy - radius,
+                cx + radius, cy + radius,
+                fill='#90EE90',
+                outline='',
+                tags='spawn'
+            )
+
+            # Draw monster name with count (truncate if too long)
+            display_name = monster_name[:10] if len(monster_name) > 10 else monster_name
+            label = f"{display_name} ({count})"
+            self.canvas.create_text(
+                cx + 5, cy - 2,
+                text=label,
+                fill='#AAFFAA',
+                font=('Arial', 7),
+                anchor='w',
+                tags='spawn'
             )
 
     def _load_waypoints(self):
