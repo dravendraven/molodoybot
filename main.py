@@ -2128,26 +2128,6 @@ def lookid_monitor_loop():
 
         time.sleep(0.1)
 
-def skill_monitor_loop():
-    """
-    Thread RÁPIDA: Apenas lê memória e atualiza a lógica matemática.
-    """
-    while state.is_running:
-        if pm is not None:
-            try:
-                sw_pct = pm.read_int(base_addr + OFFSET_SKILL_SWORD_PCT)
-                sh_pct = pm.read_int(base_addr + OFFSET_SKILL_SHIELD_PCT)
-                ml_pct = pm.read_int(base_addr + OFFSET_MAGIC_PCT)
-                ml_lvl = pm.read_int(base_addr + OFFSET_MAGIC_LEVEL)
-                
-                sword_tracker.update(sw_pct)
-                shield_tracker.update(sh_pct)
-                magic_tracker.update(ml_pct)
-
-            except:
-                pass
-        time.sleep(1)
-
 def resource_monitor_loop():
     """Thread que monitora e loga consumo de CPU e RAM."""
     if not RESOURCE_LOG_ENABLED:
@@ -2177,7 +2157,16 @@ def gui_updater_loop():
             lbl_shield_val.configure(text="--")
             time.sleep(1)
             continue
-    
+
+        # --- Update skill trackers from game_state (replaces skill_monitor_loop) ---
+        try:
+            player = game_state.get_player_state()
+            sword_tracker.update(player.sword_skill_pct)
+            shield_tracker.update(player.shield_skill_pct)
+            magic_tracker.update(player.magic_level_pct)
+        except Exception:
+            pass
+
         sw_data = sword_tracker.get_display_data()
         sh_data = shield_tracker.get_display_data()
         ml_stats = magic_tracker.get_display_data()
@@ -3375,7 +3364,6 @@ if __name__ == "__main__":
     threading.Thread(target=start_trainer_thread, daemon=True).start()
     threading.Thread(target=start_alarm_thread, daemon=True).start()
     threading.Thread(target=auto_loot_thread, daemon=True).start()
-    threading.Thread(target=skill_monitor_loop, daemon=True).start()
     threading.Thread(target=gui_updater_loop, daemon=True).start()
     threading.Thread(target=regen_monitor_loop, daemon=True).start()
     threading.Thread(target=auto_fisher_thread, daemon=True).start()
