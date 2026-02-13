@@ -25,7 +25,7 @@ from core.models import Creature, Position
 
 
 # Scan Adaptativo (Early-Exit)
-INVALID_SLOT_THRESHOLD = 15  # Slots inválidos consecutivos para parar scan
+INVALID_SLOT_THRESHOLD = 5  # Slots inválidos consecutivos para parar scan (battlelist é contíguo)
 
 
 class BattleListScanner:
