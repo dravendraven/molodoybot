@@ -87,6 +87,10 @@ class SettingsWindow:
         self.cb = callbacks
         self.window: Optional[ctk.CTkToplevel] = None
 
+        # === Variáveis de toggle (expostas para main.py) ===
+        self._auto_explore_var: Optional[ctk.IntVar] = None
+        self._afk_pause_var: Optional[ctk.IntVar] = None
+
         # === Widget references que main.py precisa acessar ===
         self.waypoint_listbox: Optional[tk.Listbox] = None
         self.lbl_wp_header: Optional[ctk.CTkLabel] = None
@@ -1151,13 +1155,13 @@ class SettingsWindow:
 
         # Seção Waypoints
         frame_waypoints = ctk.CTkFrame(frame_cb_root, fg_color="#3a3a3a")
-        frame_waypoints.pack(fill="both", expand=True, pady=(0, 8))
+        frame_waypoints.pack(fill="x", expand=True, pady=(0, 2))
 
         self.lbl_wp_header = ctk.CTkLabel(frame_waypoints, text="Waypoints (0)", **self.UI['H1'])
         self.lbl_wp_header.pack(anchor="w", padx=10, pady=5)
 
         frame_wp_content = ctk.CTkFrame(frame_waypoints, fg_color="transparent")
-        frame_wp_content.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        frame_wp_content.pack(fill="x", expand=True, padx=10, pady=(0, 10))
 
         # Coluna Botões
         frame_buttons = ctk.CTkFrame(frame_wp_content, fg_color="transparent")
@@ -1194,7 +1198,7 @@ class SettingsWindow:
             selectforeground="#ffffff",
             highlightthickness=0,
             borderwidth=0,
-            height=4,
+            height=1,
             yscrollcommand=scrollbar_wp.set
         )
         self.waypoint_listbox.pack(side="left", fill="both", expand=True)
@@ -1204,28 +1208,18 @@ class SettingsWindow:
         ctk.CTkButton(frame_waypoints, text="🗺️ Editor Visual",
                      fg_color="#2E8B57", hover_color="#228B45",
                      command=self.cb.open_waypoint_editor,
-                     **self.UI['BUTTON_SM']).pack(fill="x", padx=10, pady=(0, 8))
+                     **self.UI['BUTTON_SM']).pack(fill="x", padx=10, pady=(0, 5))
 
-        # === AUTO-EXPLORE ===
-        frame_explore = ctk.CTkFrame(frame_cb_root, fg_color="#3a3a3a")
-        frame_explore.pack(fill="x", pady=(0, 8))
-
-        ctk.CTkLabel(frame_explore, text="Auto-Explore", **self.UI['H1']).pack(anchor="w", padx=10, pady=5)
-
-        # Toggle
-        frame_explore_toggle = ctk.CTkFrame(frame_explore, fg_color="transparent")
-        frame_explore_toggle.pack(fill="x", padx=10, pady=(0, 5))
+        # === OPÇÕES (Auto-Explore + AFK) ===
+        frame_options = ctk.CTkFrame(frame_cb_root, fg_color="#3a3a3a")
+        frame_options.pack(fill="x", pady=(0, 5))
 
         self._auto_explore_var = ctk.IntVar(value=1 if settings.get('auto_explore_enabled', False) else 0)
+        self._afk_pause_var = ctk.IntVar(value=1 if settings.get('afk_pause_enabled', False) else 0)
 
-        # Raio
-        frame_explore_params = ctk.CTkFrame(frame_explore, fg_color="transparent")
-        frame_explore_params.pack(fill="x", padx=10, pady=(0, 5))
-
-        ctk.CTkLabel(frame_explore_params, text="Raio:", width=40, **self.UI['BODY']).pack(side="left")
-        self._entry_explore_radius = ctk.CTkEntry(frame_explore_params, width=45, **self.UI['BODY'])
-        self._entry_explore_radius.pack(side="left", padx=(0, 10))
-        self._entry_explore_radius.insert(0, str(settings.get('auto_explore_radius', 50)))
+        # Linha 1: Auto-explore + Raio
+        frame_row1 = ctk.CTkFrame(frame_options, fg_color="transparent")
+        frame_row1.pack(fill="x", padx=10, pady=5)
 
         def toggle_auto_explore():
             enabled = self._auto_explore_var.get() == 1
@@ -1235,33 +1229,25 @@ class SettingsWindow:
                 radius = 50
             self.cb.on_auto_explore_toggle(enabled, radius, 600)
 
-        switch_auto_explore = ctk.CTkSwitch(frame_explore_toggle, text="Explorar spawns automaticamente",
+        switch_auto_explore = ctk.CTkSwitch(frame_row1, text="Auto-Explore",
                                             variable=self._auto_explore_var, command=toggle_auto_explore,
                                             **self.UI['BODY'])
         switch_auto_explore.pack(side="left")
 
-        # (salvo pelo botão geral "Salvar Cavebot")
+        ctk.CTkLabel(frame_row1, text="Raio:", **self.UI['BODY']).pack(side="left", padx=(15, 5))
+        self._entry_explore_radius = ctk.CTkEntry(frame_row1, width=45, **self.UI['BODY'])
+        self._entry_explore_radius.pack(side="left")
+        self._entry_explore_radius.insert(0, str(settings.get('auto_explore_radius', 50)))
 
-        # === AFK HUMANIZATION ===
-        frame_afk = ctk.CTkFrame(frame_cb_root, fg_color="#3a3a3a")
-        frame_afk.pack(fill="x", pady=(0, 8))
-
-        ctk.CTkLabel(frame_afk, text="AFK Humanization", **self.UI['H1']).pack(anchor="w", padx=10, pady=5)
-
-        # Toggle AFK
-        frame_afk_toggle = ctk.CTkFrame(frame_afk, fg_color="transparent")
-        frame_afk_toggle.pack(fill="x", padx=10, pady=5)
-
-        self._afk_pause_var = ctk.IntVar(value=1 if settings.get('afk_pause_enabled', False) else 0)
-
+        # Linha 2: Pausas AFK
         def toggle_afk_pause():
             s = self.cb.get_bot_settings()
             s['afk_pause_enabled'] = (self._afk_pause_var.get() == 1)
             self.cb.save_config_file()
 
-        ctk.CTkSwitch(frame_afk_toggle, text="Pausas AFK aleatórias",
-                       variable=self._afk_pause_var, command=toggle_afk_pause,
-                       **self.UI['BODY']).pack(side="left")
+        ctk.CTkSwitch(frame_options, text="Pausas AFK aleatórias",
+                      variable=self._afk_pause_var, command=toggle_afk_pause,
+                      **self.UI['BODY']).pack(anchor="w", padx=10, pady=5)
 
         # === BOTÃO SALVAR CAVEBOT (salva tudo) ===
         def save_cavebot():

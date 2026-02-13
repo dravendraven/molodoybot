@@ -697,7 +697,7 @@ class Cavebot:
                     # Para tiles de USE, prefira parar em um tile cardinal adjacente e usar à distância.
                     # Para DOWN/UP_WALK, navegar para tile adjacente (A* não pode pathing para non-walkable)
                     target_fx, target_fy = fx, fy
-                    if ftype in ('UP_USE', 'DOWN_USE', 'SHOVEL'):
+                    if ftype in ('UP_USE', 'DOWN_USE', 'SHOVEL', 'ROPE'):
                         target_fx, target_fy = self._get_adjacent_use_tile(fx, fy)
                     elif ftype in ('DOWN', 'UP_WALK'):
                         adj = self._get_walkable_adjacent_tile(fx, fy)
@@ -1019,7 +1019,7 @@ class Cavebot:
                 else:
                     # Longe — navegar até tile adjacente ao tile especial
                     target_fx, target_fy = fx, fy
-                    if ftype in ('UP_USE', 'DOWN_USE', 'SHOVEL'):
+                    if ftype in ('UP_USE', 'DOWN_USE', 'SHOVEL', 'ROPE'):
                         target_fx, target_fy = self._get_adjacent_use_tile(fx, fy)
                     elif ftype in ('DOWN', 'UP_WALK'):
                         # DOWN/UP_WALK: navegar para tile ADJACENTE (não para o buraco/escada)

@@ -90,6 +90,7 @@ class WaypointEditorWindow:
         self.selected_waypoint_idx = None
         self.map_image = None
         self.canvas_image_ref = None  # Keep reference to avoid GC
+        self.canvas_photo = None  # PhotoImage reference
         self._should_scroll_to_selection = False  # Flag to control listbox auto-scroll
         self._last_waypoint_count = 0  # Track waypoint list changes to avoid unnecessary rebuilds
 
@@ -359,10 +360,18 @@ class WaypointEditorWindow:
         return 'break'  # Stop event propagation
 
     def _on_window_close(self):
-        """Handle window close - cleanup threads."""
+        """Handle window close - cleanup threads and images."""
         self._stop_render_thread = True
         if self._render_thread and self._render_thread.is_alive():
             self._render_thread.join(timeout=1.0)
+
+        # === MEMORY OPTIMIZATION: Limpar recursos de imagem ===
+        if self.map_image:
+            self.map_image.close()
+            self.map_image = None
+        self.canvas_photo = None
+        self.canvas_image_ref = None
+
         self.window.destroy()
 
     def _schedule_display_update(self):
@@ -812,6 +821,11 @@ class WaypointEditorWindow:
 
             # Use ImageTk for display
             from PIL import ImageTk
+
+            # === MEMORY OPTIMIZATION: Limpar PhotoImage anterior ===
+            if self.canvas_photo is not None:
+                del self.canvas_photo
+
             self.canvas_photo = ImageTk.PhotoImage(img_to_display)
             self.canvas.delete('all')
             self.canvas.create_image(self.canvas_width // 2, self.canvas_height // 2, image=self.canvas_photo)

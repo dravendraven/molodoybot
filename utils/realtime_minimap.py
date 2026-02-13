@@ -5,7 +5,7 @@ Generates minimap images with optimized caching for high-frequency updates
 
 import os
 from PIL import Image
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 
 
 class RealtimeMinimapVisualizer:
@@ -32,13 +32,16 @@ class RealtimeMinimapVisualizer:
         self.default_color = (80, 80, 80)
         self.fixed_size = fixed_size  # Fixed image size (always 150x150)
 
+        # === MEMORY OPTIMIZATION: LRU caches com limite ===
         # Cache of rendered base maps (terrain layer only)
         # Key: (floor_z, min_x, min_y, max_x, max_y) -> PIL.Image
-        self.base_map_cache = {}
+        self.base_map_cache = OrderedDict()
+        self._base_map_cache_max = 20  # ~3 MB max (150x150 RGB = ~68 KB each)
 
         # Cache of raw chunk data from disk
         # Key: (cx, cy, z) -> bytes
-        self.chunk_cache = {}
+        self.chunk_cache = OrderedDict()
+        self._chunk_cache_max = 50  # ~3.2 MB max (64 KB each)
 
     def generate_minimap(self, player_pos, target_wp, all_waypoints,
                         global_route=None, local_cache=None, current_wp_index=None,
@@ -100,16 +103,23 @@ class RealtimeMinimapVisualizer:
     def _get_base_map(self, floor_z, bbox):
         """
         Get cached base map or render new one.
+        Uses LRU eviction to limit memory usage.
 
         Returns tuple: (image_copy, pixels_per_tile)
         """
         cache_key = (floor_z, *bbox)
 
-        if cache_key not in self.base_map_cache:
+        if cache_key in self.base_map_cache:
+            # Move to end (most recently used)
+            self.base_map_cache.move_to_end(cache_key)
+            img, ppt = self.base_map_cache[cache_key]
+        else:
             img, ppt = self._render_base_terrain(floor_z, bbox)
             self.base_map_cache[cache_key] = (img, ppt)
-        else:
-            img, ppt = self.base_map_cache[cache_key]
+
+            # LRU eviction: remove oldest entries if over limit
+            while len(self.base_map_cache) > self._base_map_cache_max:
+                self.base_map_cache.popitem(last=False)
 
         return img.copy(), ppt
 
@@ -153,10 +163,12 @@ class RealtimeMinimapVisualizer:
         return img, pixels_per_tile
 
     def _load_chunk(self, cx, cy, z):
-        """Load chunk from disk (with cache)."""
+        """Load chunk from disk (with LRU cache)."""
         cache_key = (cx, cy, z)
 
         if cache_key in self.chunk_cache:
+            # Move to end (most recently used)
+            self.chunk_cache.move_to_end(cache_key)
             return self.chunk_cache[cache_key]
 
         # Try both filename formats
@@ -169,6 +181,11 @@ class RealtimeMinimapVisualizer:
                     with open(path, "rb") as f:
                         data = f.read()
                     self.chunk_cache[cache_key] = data
+
+                    # LRU eviction: remove oldest entries if over limit
+                    while len(self.chunk_cache) > self._chunk_cache_max:
+                        self.chunk_cache.popitem(last=False)
+
                     return data
                 except Exception as e:
                     print(f"[Minimap] Error loading chunk {fname}: {e}")

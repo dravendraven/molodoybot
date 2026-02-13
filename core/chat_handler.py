@@ -59,7 +59,8 @@ class ChatHandler:
         # Componentes
         self.chat_scanner = ChatScanner(pm, base_addr)
         self.analyzer = MessageAnalyzer(pm, base_addr, my_name=self.my_name)
-        self.conversation_mgr = ConversationManager(max_history=10, timeout_seconds=300)
+        # === MEMORY OPTIMIZATION: Reduzido de 300s para 120s para limpeza mais agressiva ===
+        self.conversation_mgr = ConversationManager(max_history=10, timeout_seconds=120)
         self.ai_responder = AIResponder(model=AI_MODEL)
         self.battlelist = BattleListScanner(pm, base_addr)
         self.enabled = True  # Controlado externamente via enable()/disable()

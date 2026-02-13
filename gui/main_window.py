@@ -665,6 +665,8 @@ class MainWindow:
     def toggle_graph(self):
         """Alterna visibilidade do gráfico de eficiência."""
         if self.is_graph_visible:
+            # === MEMORY OPTIMIZATION: Liberar recursos do matplotlib ===
+            self._cleanup_graph()
             self.frame_graph.pack_forget()
             self.btn_graph.configure(text="Mostrar Gráfico 📈")
             self.is_graph_visible = False
@@ -675,6 +677,27 @@ class MainWindow:
             self.btn_graph.configure(text="Esconder Gráfico 📉")
             self.is_graph_visible = True
         self.auto_resize_window()
+
+    def _cleanup_graph(self):
+        """Libera recursos do matplotlib para economizar memória (~5-10 MB)."""
+        if self.fig is not None:
+            try:
+                # Destroi o canvas widget primeiro
+                if self.canvas is not None:
+                    widget = self.canvas.get_tk_widget()
+                    widget.destroy()
+                    self.canvas = None
+
+                # Fecha a figura matplotlib (libera memória)
+                plt_mod, _ = setup_matplotlib()
+                plt_mod.close(self.fig)
+                self.fig = None
+                self.ax = None
+
+                # Reset flag para permitir reinicialização
+                self._graph_initialized = False
+            except Exception as e:
+                print(f"[MainWindow] Erro ao limpar gráfico: {e}")
 
     def toggle_pause(self):
         """

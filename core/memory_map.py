@@ -56,15 +56,19 @@ class MemoryMap:
 
     def _parse_map_data(self, raw_data, player_id):
         self.center_index = -1
-        
+
+        # === MEMORY OPTIMIZATION: Só armazena debug info se DEBUG_MEMORY_MAP=True ===
+        # Economia de ~800 KB quando desativado
+        store_debug = DEBUG_MEMORY_MAP
+
         for i in range(TOTAL_TILES):
             offset = i * TILE_SIZE
             count = struct.unpack_from('<I', raw_data, offset)[0]
-            
+
             if count > 10: count = 10
-            
+
             items = []
-            items_debug = []  # DEBUG: armazena info completa
+            items_debug = [] if store_debug else None  # DEBUG: armazena info completa
             player_found_in_tile = False
 
             for j in range(count):
@@ -78,8 +82,9 @@ class MemoryMap:
                 real_id = raw_id_block & 0xFFFF
 
                 items.append(real_id)
-                items_debug.append((real_id, data1, data2, raw_id_block))
-                
+                if store_debug:
+                    items_debug.append((real_id, data1, data2, raw_id_block))
+
                 # ID 99 (0x63) é o padrão para criaturas
                 if real_id == 99 and data1 == player_id:
                     player_found_in_tile = True

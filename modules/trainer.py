@@ -933,7 +933,7 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                     continue
 
                 # ===== CALCULA is_attacking_me CEDO para bypass de filtros =====
-                is_attacking_me = creature.is_attacking_player(BLACKSQUARE_THRESHOLD_MS, debug=(debug_decisions or debug_mode))
+                is_attacking_me = creature.is_attacking_player(BLACKSQUARE_THRESHOLD_MS, debug=debug_mode)
 
                 # Extrai dados
                 c_id = creature.id

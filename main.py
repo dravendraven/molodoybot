@@ -436,37 +436,41 @@ def update_waypoint_display():
     def _refresh_ui():
         global waypoint_listbox, lbl_wp_header
 
+        # Usa referência direta do settings_window (lazy loading compatível)
+        listbox = settings_window.waypoint_listbox if settings_window else waypoint_listbox
+        header = settings_window.lbl_wp_header if settings_window else lbl_wp_header
+
         # === NOVO: Usa Listbox se disponível ===
-        if waypoint_listbox is not None:
+        if listbox is not None:
             try:
-                if not waypoint_listbox.winfo_exists():
+                if not listbox.winfo_exists():
                     return
             except:
                 return
 
             # Salva seleção atual para restaurar depois
-            current_selection = waypoint_listbox.curselection()
+            current_selection = listbox.curselection()
             saved_idx = current_selection[0] if current_selection else None
 
             # Limpa e repopula o listbox
-            waypoint_listbox.delete(0, tk.END)
+            listbox.delete(0, tk.END)
 
             for idx, wp in enumerate(current_waypoints_ui):
                 act = wp.get('action', 'WALK').upper()
                 line = f"{idx+1}. [{act}] {wp['x']}, {wp['y']}, {wp['z']}"
-                waypoint_listbox.insert(tk.END, line)
+                listbox.insert(tk.END, line)
 
             # Atualiza header com contador
-            if lbl_wp_header is not None:
+            if header is not None:
                 try:
-                    if lbl_wp_header.winfo_exists():
-                        lbl_wp_header.configure(text=f"Waypoints ({len(current_waypoints_ui)})")
+                    if header.winfo_exists():
+                        header.configure(text=f"Waypoints ({len(current_waypoints_ui)})")
                 except:
                     pass
 
             # Restaura seleção se ainda válida
             if saved_idx is not None and saved_idx < len(current_waypoints_ui):
-                waypoint_listbox.selection_set(saved_idx)
+                listbox.selection_set(saved_idx)
             return
 
         # === FALLBACK: Textbox antigo (compatibilidade) ===
@@ -503,12 +507,14 @@ def update_waypoint_display():
 
 def _set_waypoint_name_field(name):
     """Atualiza o campo de nome do arquivo e o estado global do nome atual."""
-    global current_waypoints_filename, entry_waypoint_name
+    global current_waypoints_filename
     current_waypoints_filename = name or ""
-    if entry_waypoint_name and entry_waypoint_name.winfo_exists():
-        entry_waypoint_name.delete(0, "end")
+    # Usa referência direta do settings_window (lazy loading compatível)
+    entry = settings_window.entry_waypoint_name if settings_window else entry_waypoint_name
+    if entry and entry.winfo_exists():
+        entry.delete(0, "end")
         if name:
-            entry_waypoint_name.insert(0, name)
+            entry.insert(0, name)
 
 def list_cavebot_scripts():
     """Retorna nomes (sem .json) dos scripts em /cavebot_scripts."""
@@ -519,16 +525,18 @@ def list_cavebot_scripts():
 
 def refresh_cavebot_scripts_combo(selected=None):
     """Atualiza a combo de scripts salvos."""
-    if combo_cavebot_scripts is None or not combo_cavebot_scripts.winfo_exists():
+    # Usa referência direta do settings_window (lazy loading compatível)
+    combo = settings_window.combo_cavebot_scripts if settings_window else combo_cavebot_scripts
+    if combo is None or not combo.winfo_exists():
         return
     names = list_cavebot_scripts()
-    combo_cavebot_scripts.configure(values=names)
+    combo.configure(values=names)
     if selected and selected in names:
-        combo_cavebot_scripts.set(selected)
+        combo.set(selected)
     elif names:
-        combo_cavebot_scripts.set(names[0])
+        combo.set(names[0])
     else:
-        combo_cavebot_scripts.set("")
+        combo.set("")
 
 def add_waypoint_entry(action, x, y, z):
     """Função central para adicionar waypoint e atualizar UI e Backend."""
@@ -919,7 +927,9 @@ def save_waypoints_file():
 def load_waypoints_file():
     """Carrega um script selecionado na combo de /cavebot_scripts."""
     global current_waypoints_ui, cavebot_instance
-    name = combo_cavebot_scripts.get().strip() if combo_cavebot_scripts else ""
+    # Usa referência direta do settings_window (lazy loading compatível)
+    combo = settings_window.combo_cavebot_scripts if settings_window else combo_cavebot_scripts
+    name = combo.get().strip() if combo else ""
     if not name:
         log("⚠️ Selecione um script na lista para carregar.")
         return
@@ -939,6 +949,17 @@ def load_waypoints_file():
                 refresh_cavebot_scripts_combo(selected=name)
                 update_waypoint_display()
                 log(f"📂 Carregados {len(loaded_data)} waypoints de {filename.name}.")
+
+                # Desativa auto-explore (waypoints têm prioridade)
+                BOT_SETTINGS['auto_explore_enabled'] = False
+                if cavebot_instance:
+                    cavebot_instance.auto_explore_enabled = False
+                    cavebot_instance._current_spawn_target = None
+                    cavebot_instance._explore_initialized = False
+
+                # Atualiza UI do toggle
+                if settings_window and settings_window._auto_explore_var:
+                    settings_window._auto_explore_var.set(0)
             else:
                 log("Erro: Formato de arquivo inválido.")
     except Exception as e:
@@ -955,11 +976,17 @@ def clear_waypoints():
 
 def on_auto_explore_toggle(enabled, search_radius, revisit_cooldown):
     """Callback do toggle de auto-explore na GUI."""
-    global cavebot_instance
+    global cavebot_instance, current_waypoints_ui
     if not cavebot_instance:
         log("Aguarde a conexao com o Tibia...")
         return
     if enabled:
+        # Limpa waypoints (auto-explore assume controle)
+        current_waypoints_ui = []
+        cavebot_instance.load_waypoints([])
+        update_waypoint_display()
+        _set_waypoint_name_field("")
+
         # XML embutido na pasta do bot
         import os, sys
         if getattr(sys, 'frozen', False):
