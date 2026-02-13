@@ -69,8 +69,7 @@ class SpawnSelector:
                 print(f"[SpawnSelector]   Z={z}: {len(floors[z])} spawns")
             print(f"[SpawnSelector]   Origem no grafo: {self._current_spawn_key}")
             if self.spawn_graph:
-                edges = self.spawn_graph.get("edges", {})
-                n_edges = len(edges.get(self._current_spawn_key, []))
+                n_edges = len(self.spawn_graph.get(self._current_spawn_key, []))
                 print(f"[SpawnSelector]   Edges da origem: {n_edges}")
 
         return len(self.active_spawns)
@@ -105,8 +104,7 @@ class SpawnSelector:
 
     def _select_from_graph(self, px, py, pz, now, visible_players):
         """Seleção via grafo pré-computado — O(n) lookup, sem A*."""
-        edges = self.spawn_graph.get("edges", {})
-        neighbors = edges.get(self._current_spawn_key, [])
+        neighbors = self.spawn_graph.get(self._current_spawn_key, [])
 
         if DEBUG_AUTO_EXPLORE:
             print(f"[SpawnSelector] GRAPH: Origem={self._current_spawn_key} ({len(neighbors)} vizinhos)")
@@ -116,7 +114,7 @@ class SpawnSelector:
             new_key = self._find_nearest_spawn_key_with_edges(px, py, pz)
             if new_key:
                 self._current_spawn_key = new_key
-                neighbors = edges.get(new_key, [])
+                neighbors = self.spawn_graph.get(new_key, [])
                 if DEBUG_AUTO_EXPLORE:
                     print(f"[SpawnSelector] GRAPH: Sem edges, reposicionou para {new_key} ({len(neighbors)} vizinhos)")
             if not neighbors:
@@ -131,7 +129,7 @@ class SpawnSelector:
         if DEBUG_AUTO_EXPLORE:
             print(f"[SpawnSelector] GRAPH: Avaliando vizinhos:")
         for edge in neighbors:
-            to_key = edge["to"]
+            to_key = edge[0]
             spawn = self._spawn_by_key.get(to_key)
             if not spawn:
                 continue
@@ -146,7 +144,7 @@ class SpawnSelector:
             elif spawn.cz == pz and self.is_occupied_by_closer_player(spawn, px, py, visible_players):
                 reason = "ocupado por player"
 
-            effective_cost = edge["cost"]
+            effective_cost = edge[1]
 
             if DEBUG_AUTO_EXPLORE:
                 monsters = _short_monsters(spawn)
@@ -260,18 +258,26 @@ class SpawnSelector:
             if DEBUG_AUTO_EXPLORE:
                 print(f"[SpawnSelector] INITIAL: Chegou ao spawn inicial, ativando lógica de grafo")
         old_key = self._current_spawn_key
-        if self.spawn_graph and key in self.spawn_graph.get("edges", {}):
+        if self.spawn_graph and key in self.spawn_graph:
             self._current_spawn_key = key
         if DEBUG_AUTO_EXPLORE:
             print(f"[SpawnSelector] Visitado: {key} [{_short_monsters(spawn)}] (origem: {old_key} → {self._current_spawn_key})")
 
-    def skip_spawn(self, spawn, reason="", player_pos=None):
+    def skip_spawn(self, spawn, reason="", player_pos=None, cooldown_override=None):
         """Marca spawn como pulado (cooldown) e reposiciona no grafo.
 
         Usar quando spawn é inalcançável, ocupado, ou deve ser evitado.
         Reposiciona para o spawn skipado (se tem edges) ou mais próximo do player.
+
+        Args:
+            cooldown_override: Cooldown customizado em segundos (ex: 600 para 10 min).
+                               Se None, usa revisit_cooldown padrão.
         """
-        spawn.last_visited = time.time()
+        if cooldown_override and cooldown_override > self.revisit_cooldown:
+            # Ajusta last_visited para estender cooldown além do padrão
+            spawn.last_visited = time.time() + (cooldown_override - self.revisit_cooldown)
+        else:
+            spawn.last_visited = time.time()
         key = _make_key(spawn)
 
         # Desativar modo INITIAL se era o spawn inicial
@@ -283,8 +289,7 @@ class SpawnSelector:
         # Reposicionar no grafo para buscar vizinhos do spawn skipado
         old_key = self._current_spawn_key
         if self.spawn_graph:
-            edges = self.spawn_graph.get("edges", {})
-            if key in edges and edges[key]:
+            if key in self.spawn_graph and self.spawn_graph[key]:
                 # Spawn skipado tem edges → usar como nova origem
                 self._current_spawn_key = key
             elif player_pos:
@@ -336,7 +341,7 @@ class SpawnSelector:
 
     def _find_nearest_spawn_key_with_edges(self, px, py, pz):
         """Encontra o spawn ativo mais próximo que tem edges no grafo."""
-        edges = self.spawn_graph.get("edges", {}) if self.spawn_graph else {}
+        edges = self.spawn_graph if self.spawn_graph else {}
         best_key = None
         best_dist = float('inf')
         for s in self.active_spawns:

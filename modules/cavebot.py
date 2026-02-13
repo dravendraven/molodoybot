@@ -846,7 +846,16 @@ class Cavebot:
                 try:
                     import json
                     with open(graph_path, 'r') as f:
-                        spawn_graph = json.load(f)
+                        raw = json.load(f)
+                    # Extract only edges, discard nodes (~4.2 MB savings)
+                    raw_edges = raw.get("edges", {})
+                    del raw
+                    # Convert {"to": str, "cost": int} -> (str, int) (~27 MB savings)
+                    spawn_graph = {
+                        key: [(e["to"], e["cost"]) for e in edge_list]
+                        for key, edge_list in raw_edges.items()
+                    }
+                    del raw_edges
                     if DEBUG_AUTO_EXPLORE:
                         print(f"[{_ts()}] [AutoExplore] Grafo de spawns carregado: {graph_path}")
                 except Exception as e:
@@ -941,7 +950,7 @@ class Cavebot:
                 if DEBUG_AUTO_EXPLORE:
                     player_info = [(p.name, p.position.x, p.position.y, p.position.z) for p in visible_players[:3]]
                     print(f"[{_ts()}] [AutoExplore] Spawn ocupado por player, trocando destino. Players: {player_info}")
-                self._spawn_selector.skip_spawn(spawn, "ocupado por player", (px, py, pz))
+                self._spawn_selector.skip_spawn(spawn, "ocupado por player", (px, py, pz), cooldown_override=600)
                 self._current_spawn_target = None
                 self.current_global_path = []
                 self.advancement_tracker.reset()
@@ -1036,27 +1045,40 @@ class Cavebot:
                     self._current_spawn_target = None
                     self._cached_spawn_target_pos = None
                     return
-                # Atualiza cache (multifloor usa mesmo cache)
-                self._cached_spawn_target_pos = target_pos
-                full_path = self.global_map.get_path_multilevel(
-                    (px, py, pz), target_pos
-                )
-                if not full_path:
-                    if DEBUG_AUTO_EXPLORE:
-                        print(f"[{_ts()}] [AutoExplore] Sem rota multilevel de Z={pz} para spawn Z={spawn.cz}")
-                    self._current_spawn_target = None
-                    return
-                # Inserir waypoints adjacentes às transições
-                full_path = self._insert_transition_waypoints(full_path)
-                # Extrair tiles do andar atual para navegar até a escada
-                same_floor = [t for t in full_path if t[2] == pz]
-                # Parar 2 tiles antes da transição para que scan_for_floor_change
-                # possa detectar e interagir com o tile especial (rope/escada)
-                if len(same_floor) > 2:
-                    same_floor = same_floor[:-2]
-                if same_floor:
-                    self.current_global_path = same_floor
-                    self._navigate_hybrid(same_floor[-1][0], same_floor[-1][1], pz, px, py)
+
+                # CACHE CHECK: Só recalcula path se necessário (evita recálculo a cada ciclo)
+                need_recalc = False
+                if not self.current_global_path:
+                    need_recalc = True
+                elif self._cached_spawn_target_pos != target_pos:
+                    need_recalc = True
+
+                if need_recalc:
+                    # Atualiza cache
+                    self._cached_spawn_target_pos = target_pos
+                    full_path = self.global_map.get_path_multilevel(
+                        (px, py, pz), target_pos
+                    )
+                    if not full_path:
+                        if DEBUG_AUTO_EXPLORE:
+                            print(f"[{_ts()}] [AutoExplore] Sem rota multilevel de Z={pz} para spawn Z={spawn.cz}")
+                        self._current_spawn_target = None
+                        return
+                    # Inserir waypoints adjacentes às transições
+                    full_path = self._insert_transition_waypoints(full_path)
+                    # Extrair tiles do andar atual para navegar até a escada
+                    same_floor = [t for t in full_path if t[2] == pz]
+                    # Parar 2 tiles antes da transição para que scan_for_floor_change
+                    # possa detectar e interagir com o tile especial (rope/escada)
+                    if len(same_floor) > 2:
+                        same_floor = same_floor[:-2]
+                    if same_floor:
+                        self.current_global_path = same_floor
+
+                # Navegar usando path cacheado ou recém-calculado
+                if self.current_global_path:
+                    last_tile = self.current_global_path[-1]
+                    self._navigate_hybrid(last_tile[0], last_tile[1], pz, px, py)
                 return
 
         # 6. Mesmo andar: navegar ate o spawn
@@ -3099,7 +3121,7 @@ class Cavebot:
 
         elif response == 'SKIP':
             print(f"[{_ts()}] [AutoExplore] Pulando spawn devido a bloqueio por '{player.name}'")
-            self._spawn_selector.skip_spawn(spawn, f"bloqueado por {player.name}", (px, py, pz))
+            self._spawn_selector.skip_spawn(spawn, f"bloqueado por {player.name}", (px, py, pz), cooldown_override=600)
             self._current_spawn_target = None
             if self.current_global_path:
                 print(f"[{_ts()}] [DEBUG] Path limpo em: player_skip_explore (tinha {len(self.current_global_path)} nós)")
