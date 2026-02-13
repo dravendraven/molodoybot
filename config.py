@@ -6,6 +6,8 @@ from database import foods_db
 # ==============================================================================
 DEBUG_MODE = False    # Modo debug geral - ativa logs extras em diversos módulos
 HIT_LOG_ENABLED = False  # Controls writing hits to hits_monitor.txt
+RESOURCE_LOG_ENABLED = True   # Loga consumo de CPU e RAM
+RESOURCE_LOG_INTERVAL = 30     # Intervalo entre logs (segundos)
 XRAY_TRAINER_DEBUG = False    # True = mostra overlay de debug do trainer
 
 # Bot State Debugger HUD
