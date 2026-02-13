@@ -90,6 +90,7 @@ class GameState:
             mana=0, mana_max=1, mana_percent=0.0,
             cap=0.0, speed=0, is_moving=False, is_full=False
         )
+        self._cached_char_name = ""  # Cached - never changes during session
         self._target_id: int = 0
 
         # Creatures & players
@@ -185,8 +186,13 @@ class GameState:
     def shutdown(self):
         """Stop the polling thread."""
         self._running = False
+        self.clear_char_name_cache()
         if self._update_thread:
             self._update_thread.join(timeout=2.0)
+
+    def clear_char_name_cache(self):
+        """Reset cached char name (call on disconnect)."""
+        self._cached_char_name = ""
 
     # =========================================================================
     # POLLING LOOP (20Hz)
@@ -270,8 +276,10 @@ class GameState:
             target_id = get_target_id(self.pm, self.base_addr)
             facing_direction = get_player_facing_direction(self.pm, self.base_addr)
 
-            # Character name
-            char_name = get_connected_char_name(self.pm, self.base_addr)
+            # Character name (cached - never changes during session)
+            if not self._cached_char_name:
+                self._cached_char_name = get_connected_char_name(self.pm, self.base_addr)
+            char_name = self._cached_char_name
 
             # Fullness check - hybrid approach (events + memory fallback)
             is_full = self._check_is_full_hybrid()
