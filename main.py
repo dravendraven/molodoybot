@@ -2170,13 +2170,12 @@ def gui_updater_loop():
         sw_data = sword_tracker.get_display_data()
         sh_data = shield_tracker.get_display_data()
         ml_stats = magic_tracker.get_display_data()
-        
-        
-        if pm is not None:
+
+        if player.char_id != 0:
             try:
-                curr_exp = pm.read_int(base_addr + OFFSET_EXP)
-                char_lvl = pm.read_int(base_addr + OFFSET_LEVEL)
-                
+                curr_exp = player.experience
+                char_lvl = player.level
+
                 exp_tracker.update(curr_exp)
                 xp_stats = exp_tracker.get_stats(char_lvl)
                 
@@ -2191,43 +2190,37 @@ def gui_updater_loop():
                 if lbl_exp_left.winfo_exists():
                     lbl_exp_left.configure(text=f"{xp_stats['left']} xp")
 
-                # --- 3. NOVA LÓGICA: ATUALIZAÇÃO DE GOLD ---
-                # Usa game_state cache (20Hz) com fallback para scan direto
+                # --- Gold & Regen trackers ---
                 current_containers = game_state.get_containers()
 
-                # Fallback: se game_state ainda não populou, usa scan direto
-                if not current_containers:
-                    current_containers = scan_containers(pm, base_addr)
-                
                 # A. ATUALIZA GOLD
-                if 'gold_tracker' in globals() and gold_tracker:
+                if gold_tracker:
                     gold_tracker.update_inventory(current_containers)
                     g_stats = gold_tracker.get_stats()
-                    
-                    if 'lbl_gold_total' in globals() and lbl_gold_total.winfo_exists():
+
+                    if lbl_gold_total.winfo_exists():
                         lbl_gold_total.configure(text=f"🪙 {g_stats['inventory']} gp")
-                    
-                    if 'lbl_gold_rate' in globals() and lbl_gold_rate.winfo_exists():
+
+                    if lbl_gold_rate.winfo_exists():
                         lbl_gold_rate.configure(text=f"{g_stats['gp_h']} gp/h")
 
-                # B. ATUALIZA REGEN STOCK (NOVO)
-                if 'regen_tracker' in globals() and regen_tracker:
+                # B. ATUALIZA REGEN STOCK
+                if regen_tracker:
                     regen_tracker.update_inventory(current_containers)
                     r_str = regen_tracker.get_display_string()
-                    
-                    if 'lbl_regen_stock' in globals() and lbl_regen_stock.winfo_exists():
+
+                    if lbl_regen_stock.winfo_exists():
                         lbl_regen_stock.configure(text=f"🍖 Food: {r_str}")
 
             except Exception as e:
                 print(f"Erro GUI: {e}")
 
-        if pm is not None and sw_data['pct'] != -1:
-            try:              
-
-                sw_lvl = pm.read_int(base_addr + OFFSET_SKILL_SWORD)
-                sh_lvl = pm.read_int(base_addr + OFFSET_SKILL_SHIELD)
-                ml_pct = pm.read_int(base_addr + OFFSET_MAGIC_PCT)
-                ml_lvl = pm.read_int(base_addr + OFFSET_MAGIC_LEVEL)
+        if player.char_id != 0 and sw_data['pct'] != -1:
+            try:
+                sw_lvl = player.sword_skill
+                sh_lvl = player.shield_skill
+                ml_pct = player.magic_level_pct
+                ml_lvl = player.magic_level
 
                 lbl_sword_val.configure(text=f"{sw_data['pct']}%")
                 lbl_shield_val.configure(text=f"{sh_data['pct']}%")
