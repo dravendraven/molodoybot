@@ -2158,27 +2158,31 @@ def gui_updater_loop():
             time.sleep(1)
             continue
 
-        # --- Update skill trackers from game_state (replaces skill_monitor_loop) ---
-        try:
-            player = game_state.get_player_state()
-            sword_tracker.update(player.sword_skill_pct)
-            shield_tracker.update(player.shield_skill_pct)
-            magic_tracker.update(player.magic_level_pct)
-        except Exception:
-            pass
+        # --- Update skill trackers (read directly from memory for reliability) ---
+        if pm is not None:
+            try:
+                sw_pct = pm.read_int(base_addr + OFFSET_SKILL_SWORD_PCT)
+                sh_pct = pm.read_int(base_addr + OFFSET_SKILL_SHIELD_PCT)
+                ml_pct = pm.read_int(base_addr + OFFSET_MAGIC_PCT)
+
+                sword_tracker.update(sw_pct)
+                shield_tracker.update(sh_pct)
+                magic_tracker.update(ml_pct)
+            except Exception:
+                pass
 
         sw_data = sword_tracker.get_display_data()
         sh_data = shield_tracker.get_display_data()
         ml_stats = magic_tracker.get_display_data()
 
-        if player.char_id != 0:
+        if pm is not None:
             try:
-                curr_exp = player.experience
-                char_lvl = player.level
+                curr_exp = pm.read_int(base_addr + OFFSET_EXP)
+                char_lvl = pm.read_int(base_addr + OFFSET_LEVEL)
 
                 exp_tracker.update(curr_exp)
                 xp_stats = exp_tracker.get_stats(char_lvl)
-                
+
                 if lbl_exp_rate.winfo_exists():
                     if xp_stats['xp_hour'] > 0:
                         lbl_exp_rate.configure(text=f"{xp_stats['xp_hour']} xp/h")
@@ -2191,7 +2195,7 @@ def gui_updater_loop():
                     lbl_exp_left.configure(text=f"{xp_stats['left']} xp")
 
                 # --- Gold & Regen trackers ---
-                current_containers = game_state.get_containers()
+                current_containers = scan_containers(pm, base_addr)
 
                 # A. ATUALIZA GOLD
                 if gold_tracker:
@@ -2215,12 +2219,12 @@ def gui_updater_loop():
             except Exception as e:
                 print(f"Erro GUI: {e}")
 
-        if player.char_id != 0 and sw_data['pct'] != -1:
+        if pm is not None and sw_data['pct'] != -1:
             try:
-                sw_lvl = player.sword_skill
-                sh_lvl = player.shield_skill
-                ml_pct = player.magic_level_pct
-                ml_lvl = player.magic_level
+                sw_lvl = pm.read_int(base_addr + OFFSET_SKILL_SWORD)
+                sh_lvl = pm.read_int(base_addr + OFFSET_SKILL_SHIELD)
+                ml_pct = pm.read_int(base_addr + OFFSET_MAGIC_PCT)
+                ml_lvl = pm.read_int(base_addr + OFFSET_MAGIC_LEVEL)
 
                 lbl_sword_val.configure(text=f"{sw_data['pct']}%")
                 lbl_shield_val.configure(text=f"{sh_data['pct']}%")
@@ -3197,6 +3201,11 @@ def update_minimap_loop():
             ratio = min(max_width / pil_img.width, max_height / pil_img.height)
             new_size = (int(pil_img.width * ratio), int(pil_img.height * ratio))
             pil_img = pil_img.resize(new_size, Image.LANCZOS)
+
+        # === MEMORY OPTIMIZATION: Limpar referência anterior ===
+        # CTkImage antigo é liberado quando a referência é removida
+        if minimap_image_ref is not None:
+            del minimap_image_ref
 
         # Create CTkImage
         ctk_img = ctk.CTkImage(
