@@ -27,8 +27,9 @@ class GlobalMap:
         # Tiles de transição para bloquear no pathfinding same-floor
         # (evita que o A* roteie por cima de buracos/escadas acidentalmente)
         self._transition_tiles = set()
-        if transitions_file and os.path.isfile(transitions_file):
-            self._load_transitions(transitions_file)
+        # Lazy load: store path, load on first pathfinding call (~6.3 MB savings)
+        self._transitions_file = transitions_file if (transitions_file and os.path.isfile(transitions_file)) else None
+        self._transitions_loaded = False
 
         # Overrides de tiles walkables (ex: stone archways que aparecem como montanha)
         self._walkable_overrides = set()
@@ -57,6 +58,14 @@ class GlobalMap:
                     if match:
                         x, y, z = int(match.group(1)), int(match.group(2)), int(match.group(3))
                         self._walkable_overrides.add((x, y, z))
+
+    def _ensure_transitions_loaded(self):
+        """Lazy-load transitions on first pathfinding call."""
+        if self._transitions_loaded:
+            return
+        self._transitions_loaded = True
+        if self._transitions_file:
+            self._load_transitions(self._transitions_file)
 
     def _resolve_filename(self, chunk_x, chunk_y, abs_z):
         """Resolve e cacheia o nome do arquivo .map para um chunk."""
@@ -143,6 +152,7 @@ class GlobalMap:
         A* Global com suporte a diagonais.
         Retorna lista [(x,y,z), (x,y,z)...] do início ao fim.
         """
+        self._ensure_transitions_loaded()
         sx, sy, sz = start_pos
         ex, ey, ez = end_pos
         _walkable = self.is_walkable_offline if offline else self.is_walkable
@@ -242,6 +252,7 @@ class GlobalMap:
         Returns:
             Lista de (x, y, z) ou None se nenhum caminho for achado
         """
+        self._ensure_transitions_loaded()
         from config import DEBUG_GLOBAL_MAP
 
         ex, ey, ez = end_pos
@@ -333,6 +344,7 @@ class GlobalMap:
         return neighbors
 
     def get_path_multilevel(self, start_pos, end_pos, max_iter=150000, debug=False, offline=False):
+        self._ensure_transitions_loaded()
         sx, sy, sz = start_pos
         ex, ey, ez = end_pos
         _walkable = self.is_walkable_offline if offline else self.is_walkable
