@@ -59,12 +59,19 @@ class GameState:
     """
     Centralized game state manager.
 
-    Polls memory at 20Hz (50ms) and caches everything modules need.
+    Runs a 20Hz polling loop (50ms intervals) with TIERED SCANNING:
+    different data groups are read at different frequencies based on criticality.
+
+    Tier Frequencies:
+        T1 (20Hz / 50ms):  Vitals — HP, Mana, Position, Target, Cap
+        T2 (~7Hz / 150ms): Combat/Nav — Battlelist, Map, Movement, Speed
+        T3 (2Hz / 500ms):  Stats — Skills, Equipment, Containers, Level/Exp
+
     All modules query this instead of reading memory directly.
 
     This provides:
     - Single source of truth (all modules see same snapshot)
-    - Performance (one scan shared by all modules)
+    - Performance (tiered scans reduce CPU load on heavy operations)
     - Consistency (no race conditions from modules reading at different times)
     """
 
@@ -116,6 +123,7 @@ class GameState:
         self._update_count = 0
         self._last_update_time = 0.0
         self._update_duration_ms = 0.0
+        self._tick_counter: int = 0  # For tiered scanning
 
         # Module lock (for atomic action sequences)
         self._active_module: Optional[str] = None
@@ -195,14 +203,17 @@ class GameState:
         self._cached_char_name = ""
 
     # =========================================================================
-    # POLLING LOOP (20Hz)
+    # POLLING LOOP (20Hz with Tiered Scanning)
     # =========================================================================
 
     def _update_loop(self):
         """
-        Main polling loop - runs at 20Hz (50ms intervals).
+        Main polling loop - runs at 20Hz (50ms intervals) with TIERED SCANNING.
 
-        Reads all game state from memory and caches it.
+        Different data groups are polled at different frequencies:
+            T1 (20Hz):  Vitals — HP, Mana, Position, Target, Cap (every tick)
+            T2 (~7Hz):  Combat/Nav — Battlelist, Map, Movement (every 3 ticks)
+            T3 (2Hz):   Stats — Skills, Equipment, Containers (every 10 ticks)
         """
         while self._running:
             start_time = time.time()
@@ -226,107 +237,121 @@ class GameState:
 
     def _update_state(self):
         """
-        Single atomic update of all game state.
+        Stratified update — different data groups poll at different rates.
 
-        This is called 20 times per second (50ms intervals).
+        T1 (20Hz/50ms):  Vitals — HP, Mana, Position, Target, Cap
+        T2 (~7Hz/150ms): Combat/Nav — Battlelist, Map, Movement, Speed
+        T3 (2Hz/500ms):  Stats — Skills, Equipment, Containers, Level/Exp
         """
-        # NOTA: Removido check de is_connected para evitar race condition
-        # O game_state deve escanear assim que pm/base_addr estão disponíveis
-        # Os módulos (trainer, alarm) podem começar antes de is_connected=True
         if not self.pm or not self.base_addr:
             return
 
         try:
-            # === PLAYER STATE ===
+            is_t2_tick = (self._tick_counter % 3 == 0)
+            is_t3_tick = (self._tick_counter % 10 == 0)
+
+            # ============================================================
+            # T1: VITALS — Every tick (20Hz)
+            # ============================================================
             player_id = get_player_id(self.pm, self.base_addr)
             player_pos = get_player_pos(self.pm, self.base_addr)
-
             hp = self.pm.read_int(self.base_addr + OFFSET_PLAYER_HP)
             hp_max = self.pm.read_int(self.base_addr + OFFSET_PLAYER_HP_MAX)
             mana = self.pm.read_int(self.base_addr + OFFSET_PLAYER_MANA)
             mana_max = self.pm.read_int(self.base_addr + OFFSET_PLAYER_MANA_MAX)
             cap = self.pm.read_float(self.base_addr + OFFSET_PLAYER_CAP)
-
-            # Stats / Progressão
-            level = self.pm.read_int(self.base_addr + OFFSET_LEVEL)
-            experience = self.pm.read_int(self.base_addr + OFFSET_EXP)
-            magic_level = self.pm.read_int(self.base_addr + OFFSET_MAGIC_LEVEL)
-            magic_level_pct = self.pm.read_int(self.base_addr + OFFSET_MAGIC_PCT)
-
-            # Skills
-            sword_skill = self.pm.read_int(self.base_addr + OFFSET_SKILL_SWORD)
-            sword_skill_pct = self.pm.read_int(self.base_addr + OFFSET_SKILL_SWORD_PCT)
-            shield_skill = self.pm.read_int(self.base_addr + OFFSET_SKILL_SHIELD)
-            shield_skill_pct = self.pm.read_int(self.base_addr + OFFSET_SKILL_SHIELD_PCT)
-
-            # Equipment
-            right_hand_equip = self.pm.read_int(self.base_addr + OFFSET_SLOT_RIGHT)
-            left_hand_equip = self.pm.read_int(self.base_addr + OFFSET_SLOT_LEFT)
-            ammo_equip = self.pm.read_int(self.base_addr + OFFSET_SLOT_AMMO)
-
-            # Calculate percentages
             hp_percent = (hp / hp_max * 100) if hp_max > 0 else 0
             mana_percent = (mana / mana_max * 100) if mana_max > 0 else 0
-
-            # Movement and speed
-            is_moving = is_player_moving(self.pm, self.base_addr)
-            speed = get_player_speed(self.pm, self.base_addr)
-
-            # Target
             target_id = get_target_id(self.pm, self.base_addr)
             facing_direction = get_player_facing_direction(self.pm, self.base_addr)
-
-            # Character name (cached - never changes during session)
-            if not self._cached_char_name:
-                self._cached_char_name = get_connected_char_name(self.pm, self.base_addr)
-            char_name = self._cached_char_name
-
-            # Fullness check - hybrid approach (events + memory fallback)
+            # Sync combat state to legacy bot_state (replaces combat_loot_monitor_thread)
+            legacy_state.set_combat_state(target_id != 0)
             is_full = self._check_is_full_hybrid()
 
-            # === BATTLELIST (Creatures & Players) ===
-            # BattleListScanner already returns List[Creature] from models.py!
-            all_entities = self.battlelist.scan_all() if self.battlelist else []
-
-            creatures = []
-            players = []
-
-            for creature in all_entities:
-                # Creature objects already have is_player property
-                if creature.is_player:
-                    players.append(creature)
-                else:
-                    creatures.append(creature)
-
-            # === CONTAINERS ===
-            containers = scan_containers(self.pm, self.base_addr)
-
-            # === MAP TILES ===
-            # Read full map (15x11 around player)
-            if self.memory_map and player_pos:
-                map_data = self.memory_map.read_full_map()
-                # Store as dict keyed by (x, y, z)
-                map_tiles = {}
-                for tile in map_data:
-                    pos = tile.get('position')
-                    if pos:
-                        map_tiles[pos] = tile
-            else:
-                map_tiles = {}
-
-            # === EQUIPMENT ===
-            left_hand = get_item_id_in_hand(self.pm, self.base_addr, is_left=True)
-            right_hand = get_item_id_in_hand(self.pm, self.base_addr, is_left=False)
-
-            # Convert position tuple to Position object
             if player_pos:
                 position = Position(player_pos[0], player_pos[1], player_pos[2])
             else:
                 position = Position(0, 0, 0)
 
-            # === ATOMIC UPDATE (write all cached state) ===
+            # Char name — cached, never changes during session
+            if not self._cached_char_name:
+                self._cached_char_name = get_connected_char_name(self.pm, self.base_addr)
+            char_name = self._cached_char_name
+
+            # ============================================================
+            # T2: COMBAT/NAV — Every 3 ticks (~7Hz / 150ms)
+            # ============================================================
+            if is_t2_tick:
+                is_moving = is_player_moving(self.pm, self.base_addr)
+                speed = get_player_speed(self.pm, self.base_addr)
+
+                all_entities = self.battlelist.scan_all() if self.battlelist else []
+                creatures = []
+                players = []
+                for creature in all_entities:
+                    if creature.is_player:
+                        players.append(creature)
+                    else:
+                        creatures.append(creature)
+
+                if self.memory_map and player_pos:
+                    map_data = self.memory_map.read_full_map()
+                    map_tiles = {}
+                    for tile in map_data:
+                        pos = tile.get('position')
+                        if pos:
+                            map_tiles[pos] = tile
+                else:
+                    map_tiles = {}
+            else:
+                # Reuse cached values from previous scan
+                with self._lock:
+                    is_moving = self._player.is_moving
+                    speed = self._player.speed
+                    creatures = self._creatures
+                    players = self._players
+                    map_tiles = self._map_tiles
+
+            # ============================================================
+            # T3: STATS/INVENTORY — Every 10 ticks (2Hz / 500ms)
+            # ============================================================
+            if is_t3_tick:
+                level = self.pm.read_int(self.base_addr + OFFSET_LEVEL)
+                experience = self.pm.read_int(self.base_addr + OFFSET_EXP)
+                magic_level = self.pm.read_int(self.base_addr + OFFSET_MAGIC_LEVEL)
+                magic_level_pct = self.pm.read_int(self.base_addr + OFFSET_MAGIC_PCT)
+                sword_skill = self.pm.read_int(self.base_addr + OFFSET_SKILL_SWORD)
+                sword_skill_pct = self.pm.read_int(self.base_addr + OFFSET_SKILL_SWORD_PCT)
+                shield_skill = self.pm.read_int(self.base_addr + OFFSET_SKILL_SHIELD)
+                shield_skill_pct = self.pm.read_int(self.base_addr + OFFSET_SKILL_SHIELD_PCT)
+                right_hand_equip = self.pm.read_int(self.base_addr + OFFSET_SLOT_RIGHT)
+                left_hand_equip = self.pm.read_int(self.base_addr + OFFSET_SLOT_LEFT)
+                ammo_equip = self.pm.read_int(self.base_addr + OFFSET_SLOT_AMMO)
+                containers = scan_containers(self.pm, self.base_addr)
+                left_hand = get_item_id_in_hand(self.pm, self.base_addr, is_left=True)
+                right_hand = get_item_id_in_hand(self.pm, self.base_addr, is_left=False)
+            else:
+                # Reuse cached values from previous scan
+                with self._lock:
+                    level = self._player.level
+                    experience = self._player.experience
+                    magic_level = self._player.magic_level
+                    magic_level_pct = self._player.magic_level_pct
+                    sword_skill = self._player.sword_skill
+                    sword_skill_pct = self._player.sword_skill_pct
+                    shield_skill = self._player.shield_skill
+                    shield_skill_pct = self._player.shield_skill_pct
+                    right_hand_equip = self._player.right_hand_id
+                    left_hand_equip = self._player.left_hand_id
+                    ammo_equip = self._player.ammo_id
+                    containers = self._containers
+                    left_hand = self._left_hand_id
+                    right_hand = self._right_hand_id
+
+            # ============================================================
+            # ATOMIC UPDATE — Write all cached state
+            # ============================================================
             with self._lock:
-                # Player - create new Player object
                 self._player = Player(
                     char_id=player_id,
                     char_name=char_name,
@@ -355,27 +380,19 @@ class GameState:
                     facing_direction=facing_direction,
                     target_id=target_id,
                 )
-
-                # Target
                 self._target_id = target_id
-
-                # Entities
                 self._creatures = creatures
                 self._players = players
-
-                # Containers
                 self._containers = containers
-
-                # Map
                 self._map_tiles = map_tiles
-
-                # Equipment
                 self._left_hand_id = left_hand
                 self._right_hand_id = right_hand
 
         except Exception:
             # Ignore read errors (disconnected, etc.)
             pass
+
+        self._tick_counter += 1
 
     def _check_is_full_hybrid(self) -> bool:
         """

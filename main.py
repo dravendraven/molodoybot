@@ -11,6 +11,7 @@ import winsound
 import os
 import json
 import random # Para o delay humano
+import psutil # Para monitoramento de CPU e RAM
 from utils.timing import gauss_wait
 from datetime import datetime
 from PIL import Image # Import necessário para imagens
@@ -1913,34 +1914,6 @@ def auto_loot_thread():
             print(f"Erro Loot/Stack: {e}")
             time.sleep(1)
 
-def combat_loot_monitor_thread():
-    """
-    Thread dedicada para monitorar estado de combate.
-    Atualiza bot_state.py para coordenação entre módulos a cada 300ms.
-
-    NOTA: state.has_open_loot é gerenciado DENTRO de auto_loot.py
-    (não é responsabilidade deste monitor thread)
-    """
-    log("🔍 Combat Monitor iniciado")
-
-    while state.is_running:
-        if not state.is_connected or pm is None:
-            state.set_combat_state(False)
-            time.sleep(1)
-            continue
-
-        try:
-            # Verifica combate (lê TARGET_ID_PTR da memória)
-            target_id = pm.read_int(base_addr + TARGET_ID_PTR)
-            in_combat = (target_id != 0)
-            state.set_combat_state(in_combat)
-
-        except Exception as e:
-            # Silencioso para não poluir logs
-            pass
-
-        gauss_wait(0.3, 20)  # ~3 verificações por segundo
-
 def auto_fisher_thread():
     hwnd = 0
     def should_fish():
@@ -2174,6 +2147,24 @@ def skill_monitor_loop():
             except:
                 pass
         time.sleep(1)
+
+def resource_monitor_loop():
+    """Thread que monitora e loga consumo de CPU e RAM."""
+    if not RESOURCE_LOG_ENABLED:
+        return
+
+    process = psutil.Process()
+    process.cpu_percent()  # primeira chamada retorna 0, descartamos
+    time.sleep(1)
+
+    while state.is_running:
+        try:
+            cpu = process.cpu_percent()
+            ram_mb = process.memory_info().rss / (1024 * 1024)
+            log(f"CPU: {cpu:.1f}% | RAM: {ram_mb:.1f} MB")
+        except:
+            pass
+        time.sleep(RESOURCE_LOG_INTERVAL)
 
 # ==============================================================================
 # 6. FUNÇÕES DA INTERFACE (CALLBACKS E JANELAS)
@@ -3383,7 +3374,6 @@ if __name__ == "__main__":
     # Iniciar Threads
     threading.Thread(target=start_trainer_thread, daemon=True).start()
     threading.Thread(target=start_alarm_thread, daemon=True).start()
-    threading.Thread(target=combat_loot_monitor_thread, daemon=True).start()
     threading.Thread(target=auto_loot_thread, daemon=True).start()
     threading.Thread(target=skill_monitor_loop, daemon=True).start()
     threading.Thread(target=gui_updater_loop, daemon=True).start()
@@ -3399,6 +3389,7 @@ if __name__ == "__main__":
     threading.Thread(target=start_spear_picker_thread, daemon=True).start()
     threading.Thread(target=start_aimbot_thread, daemon=True).start()
     threading.Thread(target=auto_torch_thread, daemon=True).start()
+    threading.Thread(target=resource_monitor_loop, daemon=True).start()
 
     # Atualiza visibilidade baseada na vocação
     main_window.update_stats_visibility()
