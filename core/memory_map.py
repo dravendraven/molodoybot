@@ -107,26 +107,11 @@ class MemoryMap:
         target_x = 8 + rel_x + self.offset_x
         target_y = 6 + rel_y + self.offset_y
 
-        # DEBUG TEMPORÁRIO
-        if rel_y == 2:  # Só para tile (+0, +2)
-            print(f"[DEBUG get_tile] rel=({rel_x},{rel_y})")
-            print(f"  offset_x={self.offset_x}, offset_y={self.offset_y}, offset_z={self.offset_z}")
-            print(f"  target_x={target_x}, target_y={target_y}")
-            print(f"  center_index={self.center_index}")
-        
-        # SEM ESSA VALIDAÇÃO, VOCÊ LÊ TILE ERRADO!
         if not (0 <= target_x < 18 and 0 <= target_y < 14):
-            if rel_y == 2:
-                print(f"  ❌ REJEITADO: target fora de bounds!")
             return None
 
         index = target_x + (target_y * 18) + (self.offset_z * 252)
-        
-        if rel_y == 2:
-            print(f"  index calculado: {index}")
-            if 0 <= index < TOTAL_TILES and self.tiles[index]:
-                print(f"  items no tile: {self.tiles[index].items}")
-        
+
         if 0 <= index < TOTAL_TILES:
             return self.tiles[index]
         return None
