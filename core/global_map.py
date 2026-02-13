@@ -3,7 +3,7 @@ import json
 import heapq
 import time
 import re
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 
 # Custos de movimento (Tibia: diagonal = 3x cardinal)
 COST_CARDINAL = 10
@@ -15,7 +15,8 @@ class GlobalMap:
     def __init__(self, maps_dir, walkable_ids, transitions_file=None, archway_files=None):
         self.maps_dir = maps_dir
         self.walkable_ids = set(walkable_ids) # Ex: {186, 121} - IDs que são chão
-        self.cache = {} # Cache de arquivos carregados
+        self.cache = OrderedDict()  # LRU cache de arquivos carregados
+        self._cache_max = 150  # ~9.6 MB max (150 * 64 KB)
         self._filename_cache = {} # (chunk_x, chunk_y, z) -> filename or None
         self.temporary_obstacles = {} # (x, y, z) -> timestamp
 
@@ -81,12 +82,17 @@ class GlobalMap:
         if not filename:
             return 0
 
-        if filename not in self.cache:
+        if filename in self.cache:
+            self.cache.move_to_end(filename)  # Mark as recently used
+        else:
             try:
                 with open(os.path.join(self.maps_dir, filename), "rb") as f:
                     self.cache[filename] = f.read()
             except:
                 return 0
+            # Evict oldest entries if over capacity
+            while len(self.cache) > self._cache_max:
+                self.cache.popitem(last=False)
 
         rel_x = abs_x % 256
         rel_y = abs_y % 256
