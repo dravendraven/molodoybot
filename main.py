@@ -902,27 +902,27 @@ def record_current_pos():
 
 def save_waypoints_file():
     """Salva a lista atual usando o nome informado no campo (pasta /cavebot_scripts)."""
-    name = entry_waypoint_name.get().strip() if entry_waypoint_name else ""
-    if not name:
-        log("⚠️ Informe um nome para salvar o script.")
-        return
-
-    folder = Path("cavebot_scripts")
     try:
+        # Usa referência direta do settings_window (lazy loading compatível)
+        entry = settings_window.entry_waypoint_name if settings_window else entry_waypoint_name
+        name = entry.get().strip() if entry else ""
+        if not name:
+            log("⚠️ Informe um nome para salvar o script.")
+            return
+
+        folder = Path("cavebot_scripts")
         folder.mkdir(parents=True, exist_ok=True)
-    except Exception as e:
-        log(f"Erro ao preparar pasta cavebot_scripts: {e}")
-        return
 
-    filename = folder / f"{name}.json"
-    try:
+        filename = folder / f"{name}.json"
         with open(filename, 'w', encoding='utf-8') as f:
             json.dump(current_waypoints_ui, f, indent=4)
         _set_waypoint_name_field(name)
         refresh_cavebot_scripts_combo(selected=name)
         log(f"💾 Waypoints salvos: {filename.name}")
     except Exception as e:
-        log(f"Erro ao salvar: {e}")
+        log(f"❌ Erro ao salvar waypoints: {e}")
+        import traceback
+        traceback.print_exc()
 
 def load_waypoints_file():
     """Carrega um script selecionado na combo de /cavebot_scripts."""
