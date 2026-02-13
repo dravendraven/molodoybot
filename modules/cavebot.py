@@ -259,7 +259,7 @@ class Cavebot:
             if self._waypoints:
                 try:
                     # 1. Recalibra o mapa para ler posição atual da tela
-                    player_id = self.pm.read_int(self.base_addr + OFFSET_PLAYER_ID)
+                    player_id = state.get_player_id(self.pm, self.base_addr)
                     self.memory_map.read_full_map(player_id)
 
                     # 2. Agora lê a posição atualizada
@@ -319,6 +319,10 @@ class Cavebot:
             # Cópia local para evitar lock durante todo ciclo
             current_waypoints = self._waypoints
             current_index = self._current_index
+
+        # Atualiza estado no bot_state para alarm stuck detection
+        # O estado atual (do ciclo anterior) é publicado no início de cada ciclo
+        state.set_cavebot_current_state(self.current_state)
 
         # NOVO: Pausa APENAS se GM detectado (não pausa para criaturas/players)
         if state.is_gm_detected:
@@ -412,6 +416,18 @@ class Cavebot:
             self.last_action_time = time.time()
             return
 
+        # NOVO: Evita iniciar navegação se há alvos visíveis (dar tempo ao trainer)
+        # Um humano veria a criatura na tela antes de começar a andar
+        if state.has_visible_targets:
+            self._was_paused = True
+            self.current_state = self.STATE_PAUSED
+            self.state_message = "⏸️ Pausado (alvos visíveis)"
+            if DEBUG_PATHFINDING and self._last_logged_pause != "visible_targets":
+                self._last_logged_pause = "visible_targets"
+                print(f"[{_ts()}] [Cavebot] ⏸️ PAUSA: Alvos visíveis na tela (aguardando trainer)")
+            self.last_action_time = time.time()
+            return
+
         # === AFK HUMANIZATION ===
         # Pausas aleatórias para simular comportamento humano (banheiro, celular, etc.)
         if self._check_afk_pause():
@@ -475,14 +491,14 @@ class Cavebot:
 
         # 1. Atualizar Posição e Mapa
         px, py, pz = get_player_pos(self.pm, self.base_addr)
-        player_id = self.pm.read_int(self.base_addr + OFFSET_PLAYER_ID)
+        player_id = state.get_player_id(self.pm, self.base_addr)
         success = self.memory_map.read_full_map(player_id)
 
         # RETRY LOGIC: Se calibração falhar, tenta novamente
         if not success or not self.memory_map.is_calibrated:
             print(f"[{_ts()}] [Cavebot] Calibração do mapa falhou, tentando novamente...")
             time.sleep(0.1)  # Aguarda 100ms para estabilizar
-            player_id = self.pm.read_int(self.base_addr + OFFSET_PLAYER_ID)
+            player_id = state.get_player_id(self.pm, self.base_addr)
             success = self.memory_map.read_full_map(player_id)
 
             if not success or not self.memory_map.is_calibrated:
@@ -1096,7 +1112,7 @@ class Cavebot:
             if not self._explore_battlelist:
                 self._explore_battlelist = BattleListScanner(self.pm, self.base_addr)
             creatures = self._explore_battlelist.scan_all()
-            player_id = self.pm.read_int(self.base_addr + OFFSET_PLAYER_ID)
+            player_id = state.get_player_id(self.pm, self.base_addr)
             players = [c for c in creatures
                        if c.is_player and c.id != player_id and c.is_visible]
             if pz is not None:
@@ -1557,7 +1573,7 @@ class Cavebot:
 
             # Ler posição e mapa
             px, py, pz = get_player_pos(self.pm, self.base_addr)
-            player_id = self.pm.read_int(self.base_addr + OFFSET_PLAYER_ID)
+            player_id = state.get_player_id(self.pm, self.base_addr)
             success = self.memory_map.read_full_map(player_id)
             if not success or not self.memory_map.is_calibrated:
                 return
@@ -2924,7 +2940,7 @@ class Cavebot:
         Retorna player adjacente (1 tile de distância Chebyshev) ou None.
         """
         scanner = BattleListScanner(self.pm, self.base_addr)
-        player_id = self.pm.read_int(self.base_addr + OFFSET_PLAYER_ID)
+        player_id = state.get_player_id(self.pm, self.base_addr)
         players = scanner.get_players(exclude_self_id=player_id)
 
         for player in players:

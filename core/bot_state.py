@@ -11,7 +11,10 @@ Esses dados DEVEM ser lidos em tempo real a cada ciclo.
 """
 import threading
 import time
-from typing import Optional, Callable
+from typing import Optional, Callable, Dict
+
+# Importa offset para leitura do player ID
+from config import OFFSET_PLAYER_ID
 
 
 class BotState:
@@ -70,6 +73,10 @@ class BotState:
         self._is_following: bool = False           # True quando seguindo criatura (antes de atacar)
         self._follow_target_id: int = 0            # ID da criatura sendo seguida
         self._is_spear_pickup_pending: bool = False  # True quando spear pickup deve rodar após loot
+        self._has_visible_targets: bool = False    # True quando há criaturas atacáveis visíveis (trainer atualiza)
+
+        # ===== Cavebot State (for Alarm Stuck Detection) =====
+        self._cavebot_current_state: str = ""      # Estado atual do cavebot (STATE_WALKING, STATE_PAUSED, etc)
 
         # ===== Alarm Movement Detection =====
         self._alarm_origin_pos: tuple = None  # (x, y, z) posição de origem ao ligar alarme
@@ -77,8 +84,11 @@ class BotState:
         # ===== Spawn Protection (Race Condition Prevention) =====
         # Blacklist de criaturas suspeitas (possível GM summon)
         # Trainer e Alarm populam; safe_attack() verifica antes de atacar
-        self._suspicious_creature_ids: set = set()
+        # Dict com {creature_id: timestamp} para TTL automático
+        self._suspicious_creature_ids: Dict[int, float] = {}
         self._suspicious_creature_lock = threading.Lock()
+        self._suspicious_ttl: float = 300.0  # 5 minutos TTL
+        self._suspicious_max_size: int = 200  # Limite máximo de entradas
     
     # =========================================================================
     # CONEXÃO
@@ -271,7 +281,46 @@ class BotState:
     def char_id(self, value: int):
         with self._lock:
             self._char_id = value
-    
+
+    def get_player_id(self, pm, base_addr: int) -> int:
+        """
+        Retorna o player_id cacheado, ou lê da memória se não cacheado.
+
+        O player_id é constante durante toda a sessão de conexão.
+        O cache é limpo automaticamente quando is_connected = False.
+
+        Args:
+            pm: Instância do Pymem conectada ao processo
+            base_addr: Endereço base do cliente Tibia
+
+        Returns:
+            Player ID (int), ou 0 se não conectado
+        """
+        with self._lock:
+            if self._char_id != 0:
+                return self._char_id
+
+        # Lê da memória (fora do lock para não bloquear)
+        try:
+            player_id = pm.read_int(base_addr + OFFSET_PLAYER_ID)
+            if player_id != 0:
+                with self._lock:
+                    self._char_id = player_id
+                return player_id
+        except Exception:
+            pass
+
+        return 0
+
+    def clear_player_id_cache(self):
+        """
+        Limpa o cache do player_id.
+        Deve ser chamado quando o jogador desconecta.
+        Nota: Já é chamado automaticamente em is_connected.setter quando False.
+        """
+        with self._lock:
+            self._char_id = 0
+
     # =========================================================================
     # CONTEXTOS DE JOGO - Coordenação entre Módulos
     # =========================================================================
@@ -499,6 +548,55 @@ class BotState:
                 self._last_combat_time = time.time()
 
     # =========================================================================
+    # VISIBLE TARGETS (Trainer → Cavebot Coordination)
+    # =========================================================================
+
+    @property
+    def has_visible_targets(self) -> bool:
+        """
+        Retorna True se há criaturas atacáveis visíveis na tela.
+        Atualizado pelo trainer a cada ciclo de scan.
+        Usado pelo cavebot para evitar iniciar navegação quando há alvos.
+        """
+        with self._lock:
+            return self._has_visible_targets
+
+    def set_visible_targets(self, has_targets: bool):
+        """
+        Atualiza flag de alvos visíveis.
+        Chamado pelo trainer após filtrar valid_candidates.
+
+        Args:
+            has_targets: True se há criaturas atacáveis visíveis
+        """
+        with self._lock:
+            self._has_visible_targets = has_targets
+
+    # =========================================================================
+    # CAVEBOT STATE (Alarm Stuck Detection)
+    # =========================================================================
+
+    @property
+    def cavebot_current_state(self) -> str:
+        """
+        Retorna o estado atual do cavebot.
+        Usado pelo alarm.py para verificar se cavebot está stuck.
+        """
+        with self._lock:
+            return self._cavebot_current_state
+
+    def set_cavebot_current_state(self, state_name: str):
+        """
+        Atualiza o estado atual do cavebot.
+        Chamado pelo cavebot ao final de run_cycle().
+
+        Args:
+            state_name: Nome do estado (STATE_WALKING, STATE_PAUSED, etc)
+        """
+        with self._lock:
+            self._cavebot_current_state = state_name
+
+    # =========================================================================
     # MÉTODOS DE CONVENIÊNCIA
     # =========================================================================
     
@@ -552,6 +650,8 @@ class BotState:
                 'is_following': self._is_following,
                 'follow_target_id': self._follow_target_id,
                 'is_spear_pickup_pending': self._is_spear_pickup_pending,
+                'has_visible_targets': self._has_visible_targets,
+                'cavebot_current_state': self._cavebot_current_state,
                 'suspicious_creature_count': self.get_suspicious_creature_count(),
             }
     
@@ -580,6 +680,8 @@ class BotState:
             self._is_following = False
             self._follow_target_id = 0
             self._is_spear_pickup_pending = False
+            self._has_visible_targets = False
+            self._cavebot_current_state = ""
             self._alarm_origin_pos = None
             # NÃO reseta _bot_running
 
@@ -605,30 +707,64 @@ class BotState:
     # SPAWN PROTECTION - Prevenção de Race Condition GM Summon
     # =========================================================================
 
+    def _cleanup_suspicious_creatures(self):
+        """
+        Remove criaturas expiradas da blacklist (TTL) e limita tamanho.
+        DEVE ser chamado com lock já adquirido.
+        """
+        now = time.time()
+        cutoff = now - self._suspicious_ttl
+
+        # Remove entradas expiradas
+        self._suspicious_creature_ids = {
+            cid: ts for cid, ts in self._suspicious_creature_ids.items()
+            if ts > cutoff
+        }
+
+        # Limita tamanho (remove mais antigas se exceder)
+        if len(self._suspicious_creature_ids) > self._suspicious_max_size:
+            # Ordena por timestamp e mantém apenas as mais recentes
+            sorted_items = sorted(
+                self._suspicious_creature_ids.items(),
+                key=lambda x: x[1],
+                reverse=True
+            )
+            self._suspicious_creature_ids = dict(sorted_items[:self._suspicious_max_size])
+
     def add_suspicious_creature(self, creature_id: int, reason: str = ""):
         """
         Marca criatura como suspeita (possível summon de GM).
         Thread-safe via lock dedicado para alta frequência de acesso.
+        Entradas expiram automaticamente após TTL (5 minutos).
 
         Chamado por:
         - Trainer (detecção inline) - proteção primária
         - Alarm (SpawnTracker) - proteção backup
         """
         with self._suspicious_creature_lock:
-            self._suspicious_creature_ids.add(creature_id)
+            self._suspicious_creature_ids[creature_id] = time.time()
+            self._cleanup_suspicious_creatures()
 
     def is_suspicious_creature(self, creature_id: int) -> bool:
         """
         Verifica se criatura está na blacklist de suspeitos.
         DEVE ser chamado antes de CADA packet.attack() via safe_attack().
+        Retorna False para entradas expiradas.
         """
         with self._suspicious_creature_lock:
-            return creature_id in self._suspicious_creature_ids
+            if creature_id not in self._suspicious_creature_ids:
+                return False
+            # Verifica se não expirou
+            ts = self._suspicious_creature_ids[creature_id]
+            if time.time() - ts > self._suspicious_ttl:
+                del self._suspicious_creature_ids[creature_id]
+                return False
+            return True
 
     def remove_suspicious_creature(self, creature_id: int):
         """Remove criatura da blacklist (quando morre ou despawna)."""
         with self._suspicious_creature_lock:
-            self._suspicious_creature_ids.discard(creature_id)
+            self._suspicious_creature_ids.pop(creature_id, None)
 
     def clear_suspicious_creatures(self):
         """Limpa blacklist (ao mudar de andar ou resetar sessão)."""
@@ -636,8 +772,9 @@ class BotState:
             self._suspicious_creature_ids.clear()
 
     def get_suspicious_creature_count(self) -> int:
-        """Retorna quantidade de criaturas na blacklist."""
+        """Retorna quantidade de criaturas na blacklist (após cleanup)."""
         with self._suspicious_creature_lock:
+            self._cleanup_suspicious_creatures()
             return len(self._suspicious_creature_ids)
 
 

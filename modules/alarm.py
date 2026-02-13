@@ -4,14 +4,18 @@ import threading
 import win32gui
 from config import *
 from core.map_core import get_player_pos
-from core.player_core import get_connected_char_name, get_player_id
+from core.player_core import get_connected_char_name, get_player_id, is_player_moving
 from core.bot_state import state
+from core.game_state import game_state
 from core.config_utils import make_config_getter
 from core.battlelist import BattleListScanner, SpawnTracker
 
 # Definição de intervalos de alerta (Fallback caso não esteja no config)
 TELEGRAM_INTERVAL_NORMAL = 60
 TELEGRAM_INTERVAL_GM = 10
+
+# Stuck Detection: tempo mínimo parado antes de disparar alarme (segundos)
+STUCK_DETECTION_THRESHOLD_SECONDS = 3.0
 
 # Offset do ponteiro do console (Baseado no seu input: 0x71DD18 - 0x400000)
 OFFSET_CONSOLE_PTR = 0x31DD18
@@ -128,6 +132,9 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
 
     last_seen_msg = ""
     last_seen_author = ""
+
+    # Stuck Detection: timestamp quando começou a detectar stuck
+    stuck_detection_start_time = None
 
     # Configura listener de eventos do sniffer
     _setup_chat_event_listener()
@@ -329,7 +336,12 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
 
             if visual_enabled:
                 my_x, my_y, my_z = get_player_pos(pm, base_addr)
-                all_creatures = scanner.scan_all()
+                # SCAN via game_state cache (20Hz) com fallback para BattleListScanner
+                all_creatures = game_state.get_creatures() + game_state.get_players()
+
+                # Fallback: se game_state ainda não populou, usa scanner direto
+                if not all_creatures:
+                    all_creatures = scanner.scan_all()
 
                 for creature in all_creatures:
                     # Skip NPCs (bit 31 do ID setado) — via Creature model
@@ -451,6 +463,62 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
                             move_to_coord_hybrid(pm, base_addr, hwnd, origin, log_func=log_msg)
                         except Exception as e:
                             log_msg(f"[ALARM] Erro ao retornar posição: {e}")
+
+            # =================================================================
+            # F. VERIFICAÇÃO DE CAVEBOT STUCK
+            # =================================================================
+            # Detecta quando cavebot deveria estar andando mas personagem está parado
+            stuck_alarm_enabled = get_cfg('alarm_stuck_detection_enabled', False)
+
+            if stuck_alarm_enabled and state.cavebot_active:
+                cavebot_state = state.cavebot_current_state
+
+                # Estados que indicam "deveria estar andando"
+                WALKING_STATES = ["walking", "stuck"]
+
+                if cavebot_state in WALKING_STATES:
+                    # Verifica se player está se movendo
+                    try:
+                        player_moving = is_player_moving(pm, base_addr)
+                    except Exception:
+                        player_moving = True  # Assume moving em caso de erro
+
+                    if player_moving:
+                        # Player está se movendo - resetar timer
+                        stuck_detection_start_time = None
+                    else:
+                        # Player parado + deveria estar andando = potencial stuck
+                        current_time = time.time()
+
+                        if stuck_detection_start_time is None:
+                            # Primeira detecção - iniciar timer
+                            stuck_detection_start_time = current_time
+                        else:
+                            # Verificar tempo decorrido
+                            elapsed = current_time - stuck_detection_start_time
+
+                            if elapsed >= STUCK_DETECTION_THRESHOLD_SECONDS:
+                                # ALARME! Stuck detectado por 3+ segundos
+                                stuck_detection_start_time = None  # Reset para não repetir imediatamente
+
+                                msg = f"⚠️ CAVEBOT STUCK: Parado há {elapsed:.1f}s (estado: {cavebot_state})"
+                                log_msg(msg)
+                                set_status(msg)
+
+                                # Som de alerta (frequência média - não é crítico como GM)
+                                winsound.Beep(1500, 500)
+
+                                # Telegram se habilitado
+                                telegram_enabled = get_cfg('telegram_enabled', False)
+                                if telegram_enabled and (time.time() - last_telegram_time) > TELEGRAM_INTERVAL_NORMAL:
+                                    send_telegram(f"⚠️ Cavebot Stuck! Parado há {elapsed:.1f}s")
+                                    last_telegram_time = time.time()
+                else:
+                    # Estado não é de navegação ativa - resetar timer
+                    stuck_detection_start_time = None
+            else:
+                # Alarme desabilitado ou cavebot inativo - resetar timer
+                stuck_detection_start_time = None
 
             # =================================================================
             # D. CONSOLIDAÇÃO DE ESTADO

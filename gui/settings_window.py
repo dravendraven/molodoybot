@@ -695,6 +695,16 @@ class SettingsWindow:
         if settings.get('alarm_keep_position', False):
             switch_keep_pos.select()
 
+        # Cavebot Stuck Detection
+        ctk.CTkLabel(tab, text="Cavebot Stuck:", **self.UI['H1']).pack(anchor="w", padx=10, pady=(5, 5))
+
+        switch_stuck_detection = ctk.CTkSwitch(tab, text="Alarme de Cavebot Parado (3s+)",
+                                                command=lambda: None,
+                                                progress_color="#FFA500", **self.UI['BODY'])
+        switch_stuck_detection.pack(anchor="w", padx=self.UI['PAD_INDENT'], pady=2)
+        if settings.get('alarm_stuck_detection_enabled', False):
+            switch_stuck_detection.select()
+
         # Botão Salvar
         def save_alarm():
             try:
@@ -710,6 +720,7 @@ class SettingsWindow:
                 s['alarm_movement_enabled'] = bool(switch_movement.get())
                 s['alarm_keep_position'] = bool(switch_keep_pos.get())
                 s['alarm_mana_gm_enabled'] = bool(switch_mana_gm.get())
+                s['alarm_stuck_detection_enabled'] = bool(switch_stuck_detection.get())
                 self.cb.save_config_file()
                 self.cb.log("🔔 Alarme salvo.")
             except:

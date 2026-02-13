@@ -224,7 +224,10 @@ class GameState:
 
         This is called 20 times per second (50ms intervals).
         """
-        if not self.pm or not legacy_state.is_connected:
+        # NOTA: Removido check de is_connected para evitar race condition
+        # O game_state deve escanear assim que pm/base_addr estão disponíveis
+        # Os módulos (trainer, alarm) podem começar antes de is_connected=True
+        if not self.pm or not self.base_addr:
             return
 
         try:

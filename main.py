@@ -2212,8 +2212,12 @@ def gui_updater_loop():
                     lbl_exp_left.configure(text=f"{xp_stats['left']} xp")
 
                 # --- 3. NOVA LÓGICA: ATUALIZAÇÃO DE GOLD ---
-                # Scaneia os containers para ver quanto dinheiro temos na bolsa agora
-                current_containers = scan_containers(pm, base_addr)
+                # Usa game_state cache (20Hz) com fallback para scan direto
+                current_containers = game_state.get_containers()
+
+                # Fallback: se game_state ainda não populou, usa scan direto
+                if not current_containers:
+                    current_containers = scan_containers(pm, base_addr)
                 
                 # A. ATUALIZA GOLD
                 if 'gold_tracker' in globals() and gold_tracker:

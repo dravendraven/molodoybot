@@ -52,12 +52,21 @@ class BattleListScanner:
         list_start = self.base_addr + TARGET_ID_PTR + REL_FIRST_ID
         invalid_streak = 0
 
-        for i in range(MAX_CREATURES):
-            slot = list_start + (i * STEP_SIZE)
+        try:
+            # BATCH READ: 1 syscall para ler TODOS os slots de uma vez
+            # Reduz de ~255 syscalls para 1, diminuindo overhead de kernel transitions
+            total_size = STEP_SIZE * MAX_CREATURES
+            all_data = self.pm.read_bytes(list_start, total_size)
+        except Exception:
+            # Fallback: se batch falhar, retorna lista vazia
+            return creatures
 
+        for i in range(MAX_CREATURES):
             try:
-                # BATCH READ: 1 syscall em vez de 7+
-                raw_bytes = self.pm.read_bytes(slot, STEP_SIZE)
+                # Extrai bytes do slot do buffer já lido (sem syscall)
+                offset = i * STEP_SIZE
+                raw_bytes = all_data[offset:offset + STEP_SIZE]
+
                 creature = self._parse_creature(raw_bytes, i)
 
                 if creature is None or not creature.is_valid:

@@ -16,6 +16,7 @@ from database.creature_outfits import is_humanoid_creature
 from modules.auto_loot import scan_containers
 from core.player_core import get_connected_char_name, get_player_id
 from core.bot_state import state
+from core.game_state import game_state
 from core.config_utils import make_config_getter
 from core.map_analyzer import MapAnalyzer
 from core.astar_walker import AStarWalker
@@ -433,6 +434,10 @@ def find_nearest_reachable_target(candidates, my_x, my_y, walker, attack_range=1
 class EngagementDetector:
     """Detecta se criaturas estão engajadas com outros players via distância relativa e HP tracking."""
 
+    # Limites para prevenir memory leak
+    MAX_HISTORY_SIZE = 100  # Máximo de creature_ids no histórico
+    DEAD_CREATURE_TTL = 30.0  # Segundos para manter criatura morta no histórico
+
     def __init__(self):
         self.hp_history = {}  # {creature_id: [(timestamp, hp), ...]}
 
@@ -449,6 +454,43 @@ class EngagementDetector:
             if ts > cutoff
         ]
         self.hp_history[creature_id].append((now, hp))
+
+    def cleanup_dead_creatures(self, visible_creature_ids: set):
+        """
+        Remove criaturas mortas/despawnadas do histórico.
+        Deve ser chamado periodicamente no loop principal.
+
+        Args:
+            visible_creature_ids: Set de IDs das criaturas atualmente visíveis
+        """
+        now = time.time()
+        cutoff = now - self.DEAD_CREATURE_TTL
+
+        # Remove criaturas não visíveis há mais de DEAD_CREATURE_TTL segundos
+        to_remove = []
+        for cid, history in self.hp_history.items():
+            if cid not in visible_creature_ids:
+                # Criatura não visível - verifica último timestamp
+                if history:
+                    last_ts = history[-1][0]
+                    if last_ts < cutoff:
+                        to_remove.append(cid)
+                else:
+                    # Histórico vazio, remove
+                    to_remove.append(cid)
+
+        for cid in to_remove:
+            del self.hp_history[cid]
+
+        # Limita tamanho máximo (remove entradas mais antigas se exceder)
+        if len(self.hp_history) > self.MAX_HISTORY_SIZE:
+            # Ordena por último timestamp e mantém apenas as mais recentes
+            sorted_items = sorted(
+                self.hp_history.items(),
+                key=lambda x: x[1][-1][0] if x[1] else 0,
+                reverse=True
+            )
+            self.hp_history = dict(sorted_items[:self.MAX_HISTORY_SIZE])
 
     def is_engaged_with_other(self, creature, my_name, my_pos, all_entities, my_target_id, targets_list, walker=None, attack_range=1, debug=False, log_func=print):
         """
@@ -744,8 +786,8 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
             analyzer = MapAnalyzer(mapper)
             walker = AStarWalker(analyzer, max_depth=150, debug=debug_mode)
 
-        try:  
-            player_id = pm.read_int(base_addr + OFFSET_PLAYER_ID)
+        try:
+            player_id = state.get_player_id(pm, base_addr)
 
             current_name = get_my_char_name(pm, base_addr)
             if not current_name: 
@@ -782,11 +824,20 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                 print(f"  KS Prevention: {ks_enabled}")
                 print(f"{'='*70}\n")
 
-            # SCAN via BattleListScanner (centralizado, early-exit interno)
-            all_creatures = scanner.scan_all()
+            # SCAN via game_state cache (20Hz) com fallback para BattleListScanner
+            # game_state reduz syscalls: 1 thread escaneia, todos os módulos consomem
+            all_creatures = game_state.get_creatures() + game_state.get_players()
+
+            # Fallback: se game_state ainda não populou, usa scanner direto
+            if not all_creatures:
+                all_creatures = scanner.scan_all()
 
             # Atualiza overlay de debug (se XRAY_TRAINER_DEBUG ativo)
             update_trainer_overlay(all_creatures, my_x, my_y, my_z, current_target_id, current_name)
+
+            # Cleanup de criaturas mortas no HP history (previne memory leak)
+            visible_ids = {c.id for c in all_creatures if c.is_visible}
+            engagement_detector.cleanup_dead_creatures(visible_ids)
 
             # ==============================================================================
             # SPAWN PROTECTION: Detecta spawns suspeitos ANTES de decidir atacar
@@ -1034,6 +1085,10 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
             if debug_mode:
                 print(f"--- FIM DO SCAN ---")
 
+            # Atualiza flag de alvos visíveis para coordenação com cavebot
+            # Cavebot usa isso para evitar iniciar navegação quando há alvos na tela
+            state.set_visible_targets(len(valid_candidates) > 0)
+
             # PRIORIZAÇÃO POR DISTÂNCIA: Ordena candidatos pelo mais próximo primeiro
             # Usa A* ou Manhattan dependendo de USE_PATHFINDING_DISTANCE
             if valid_candidates:
@@ -1190,6 +1245,9 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                                 if is_engaged:
                                     log(f"⚠️ [KS FAIL-SAFE] {target_data['name']} engajada ao chegar - cancelando ataque")
                                     log_decision(f"🛑 KS FAIL-SAFE: {target_data['name']} engajada ({ks_reason}) - buscando novo alvo")
+
+                                    # CRÍTICO: Envia packet.stop() para parar follow no cliente
+                                    packet.stop()
 
                                     # Cancela follow e limpa estado
                                     state.stop_follow()
