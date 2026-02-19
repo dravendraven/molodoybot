@@ -1,3 +1,39 @@
+# ==============================================================================
+# SPLASH SCREEN - Aparece imediatamente enquanto carrega
+# ==============================================================================
+import tkinter as _tk_splash
+
+_splash = None
+
+def _show_splash():
+    global _splash
+    _splash = _tk_splash.Tk()
+    _splash.overrideredirect(True)
+    _splash.attributes('-topmost', True)
+    _splash.configure(bg="#1a1a1a")
+
+    w, h = 280, 80
+    x = (_splash.winfo_screenwidth() // 2) - (w // 2)
+    y = (_splash.winfo_screenheight() // 2) - (h // 2)
+    _splash.geometry(f"{w}x{h}+{x}+{y}")
+
+    lbl = _tk_splash.Label(_splash, text="Carregando MolodoyBot...",
+                   font=("Verdana", 11), bg="#1a1a1a", fg="#CCCCCC")
+    lbl.pack(expand=True)
+    _splash.update()
+
+def _close_splash():
+    global _splash
+    if _splash:
+        try:
+            _splash.destroy()
+        except:
+            pass
+        _splash = None
+
+# _show_splash()  # DISABLED: breaks CustomTkinter root window
+# ==============================================================================
+
 import customtkinter as ctk
 import threading
 import pymem
@@ -2686,6 +2722,8 @@ def create_settings_callbacks() -> SettingsCallbacks:
                 txt_log.pack_forget()
             if frame_status_panel:
                 frame_status_panel.pack(side="bottom", fill="x", padx=8, pady=3)
+                # FIX: Schedule status panel update after pack is processed
+                main_window.app.after(20, update_status_panel)
         log(f"📊 Console Log: {'Visível' if enabled else 'Oculto'}")
 
     def on_ignore_toggle(enabled: bool):
@@ -3542,5 +3580,6 @@ if __name__ == "__main__":
     main_window.update_status_panel()
 
     log("🚀 Iniciado.")
+    # _close_splash()  # DISABLED: splash disabled
     app.mainloop()
     state.stop()  # Garante que todas as threads encerrem ao fechar

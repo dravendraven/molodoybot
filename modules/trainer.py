@@ -848,7 +848,8 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
             )
 
             # Marca spawns suspeitos na blacklist compartilhada
-            if suspicious_spawns:
+            # Durante pausa AFK, ignora spawns suspeitos (evita falso positivo de respawns naturais)
+            if suspicious_spawns and not state.is_afk_paused:
                 for creature in suspicious_spawns:
                     state.add_suspicious_creature(creature.id)
                     log(f"👮 [TRAINER] Spawn suspeito: {creature.name} (ID:{creature.id})")

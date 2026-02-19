@@ -404,7 +404,9 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
             if visual_enabled:
                 suspicious_spawns = spawn_tracker.update(all_creatures, my_x, my_y, my_z, self_id=state.char_id)
 
-                if suspicious_spawns:
+                # Durante pausa AFK, ignora spawns suspeitos (evita falso positivo de respawns naturais)
+                # O tracker continua atualizando, mas não dispara alarme
+                if suspicious_spawns and not state.is_afk_paused:
                     # Popula blacklist compartilhada (redundância com trainer inline detection)
                     for c in suspicious_spawns:
                         state.add_suspicious_creature(c.id)

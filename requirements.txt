@@ -1,9 +1,6 @@
 # Dependências principais do bot
 pymem>=1.8.0
 
-# GUI (PyQt5 para interface gráfica)
-PyQt5>=5.15.0
-
 # AI Chat Handler
 openai>=1.0.0
 python-dotenv>=1.0.0
