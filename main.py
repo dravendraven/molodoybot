@@ -284,6 +284,7 @@ magic_tracker = SkillTracker("Magic")
 exp_tracker = ExpTracker()
 gold_tracker = GoldTracker()
 regen_tracker = RegenTracker()
+current_primary_skill_name = "Sword"  # Nome atual do skill principal (Sword/Club/Axe/Distance)
 
 # ==============================================================================
 # MINIMAP VISUALIZATION (REALTIME)
@@ -1153,12 +1154,7 @@ def start_cavebot_thread():
                     pm,
                     base_addr,
                     maps_directory=maps_dir,
-                    spear_picker_enabled_callback=lambda: BOT_SETTINGS.get('spear_picker_enabled', False),
-                    afk_settings_callback=lambda: {
-                        'enabled': BOT_SETTINGS.get('afk_pause_enabled', False),
-                        'duration': BOT_SETTINGS.get('afk_pause_duration', 30),
-                        'interval': BOT_SETTINGS.get('afk_pause_interval', 10)
-                    }
+                    spear_picker_enabled_callback=lambda: BOT_SETTINGS.get('spear_picker_enabled', False)
                 )
                 # Se já tiver waypoints na UI, carrega eles
                 if current_waypoints_ui:
@@ -2050,6 +2046,106 @@ def auto_stacker_thread():
             print(f"Erro Stacker Thread: {e}")
             time.sleep(2)
 
+def global_afk_pause_thread():
+    """
+    Thread global para pausas AFK aleatórias.
+    Pausa TODOS os módulos (exceto Alarme) em intervalos aleatórios.
+    Usa Gaussian distribution com 50% de variância.
+    """
+    import random
+
+    next_pause_time = 0  # Timestamp da próxima pausa
+
+    def schedule_next_pause():
+        """Agenda próxima pausa com variância Gaussiana de 50%."""
+        nonlocal next_pause_time
+        interval_minutes = BOT_SETTINGS.get('afk_pause_interval', 10)
+        interval_seconds = interval_minutes * 60
+
+        # Gaussiana com 50% de variância: centro = interval, stddev = 50%
+        variance = interval_seconds * 0.5
+        actual_interval = random.gauss(interval_seconds, variance / 2)
+        actual_interval = max(60, actual_interval)  # Mínimo 1 minuto
+
+        next_pause_time = time.time() + actual_interval
+        print(f"[AFK Global] Próxima pausa em {actual_interval/60:.1f} minutos")
+
+    def get_pause_duration():
+        """Calcula duração da pausa com variância Gaussiana de 50%."""
+        duration = BOT_SETTINGS.get('afk_pause_duration', 30)
+        variance = duration * 0.5
+        actual_duration = random.gauss(duration, variance / 2)
+        return max(5, min(duration * 1.5, actual_duration))  # Min 5s, max 150% do config
+
+    def is_safe_to_pause():
+        """Verifica se é seguro pausar (não em combate, não em loot, etc)."""
+        if not state.is_connected:
+            return False
+        if state.is_gm_detected:
+            return False
+        if state.is_chat_paused:
+            return False
+        if not state.is_safe():
+            return False
+
+        # Se cavebot está ativo: verificações extras (combate, loot, criaturas)
+        cavebot_ativo = cavebot_instance and cavebot_instance.enabled
+        if cavebot_ativo:
+            # Não pausar em combate
+            if state.is_in_combat:
+                return False
+            # Não pausar com loot aberto
+            if state.has_open_loot or state.is_processing_loot:
+                return False
+            # Não pausar se houver criaturas visíveis na tela
+            try:
+                from core.battlelist import BattleListScanner
+                _, _, pz = get_player_pos(pm, base_addr)
+                scanner = BattleListScanner(pm, base_addr)
+                # get_monsters() filtra: is_alive (hp > 0 AND visible) e mesmo andar
+                monsters = scanner.get_monsters(player_z=pz)
+                if monsters:
+                    return False
+            except Exception:
+                pass
+
+        return True
+
+    # Aguarda conexão inicial
+    while state.is_running and not state.is_connected:
+        time.sleep(1)
+
+    # Agenda primeira pausa
+    schedule_next_pause()
+
+    while state.is_running:
+        try:
+            # Verifica se feature está ativa
+            if not BOT_SETTINGS.get('afk_pause_enabled', False):
+                time.sleep(2)
+                continue
+
+            # Verifica se é hora de pausar
+            if time.time() >= next_pause_time:
+                if is_safe_to_pause():
+                    duration = get_pause_duration()
+                    log(f"💤 Pausa AFK iniciada ({duration:.0f}s)")
+                    state.set_afk_pause(True, duration)
+
+                    # Aguarda duração da pausa
+                    time.sleep(duration)
+
+                    log("✅ Pausa AFK finalizada")
+
+                # Agenda próxima pausa (mesmo se não pausou por segurança)
+                schedule_next_pause()
+
+            time.sleep(1)
+
+        except Exception as e:
+            print(f"[AFK Global] Erro: {e}")
+            time.sleep(5)
+
 def runemaker_thread():
     hwnd = 0
 
@@ -2186,15 +2282,25 @@ def gui_updater_loop():
             continue
 
         # --- Update skill trackers (read directly from memory for reliability) ---
+        global current_primary_skill_name
         if pm is not None:
             try:
-                sw_pct = pm.read_int(base_addr + OFFSET_SKILL_SWORD_PCT)
+                # Detectar skill principal baseado na vocação
+                vocation = BOT_SETTINGS.get('vocation', 'Knight')
+                skill_name, skill_lvl, skill_pct = get_primary_skill_info(pm, base_addr, vocation)
+
                 sh_pct = pm.read_int(base_addr + OFFSET_SKILL_SHIELD_PCT)
                 ml_pct = pm.read_int(base_addr + OFFSET_MAGIC_PCT)
 
-                sword_tracker.update(sw_pct)
+                sword_tracker.update(skill_pct)  # Reutiliza tracker para skill principal
                 shield_tracker.update(sh_pct)
                 magic_tracker.update(ml_pct)
+
+                # Atualizar label se skill mudou
+                if skill_name != current_primary_skill_name:
+                    current_primary_skill_name = skill_name
+                    if main_window and hasattr(main_window, 'update_primary_skill_label'):
+                        main_window.app.after(0, lambda name=skill_name: main_window.update_primary_skill_label(name))
             except Exception:
                 pass
 
@@ -2248,16 +2354,20 @@ def gui_updater_loop():
 
         if pm is not None and sw_data['pct'] != -1:
             try:
-                sw_lvl = pm.read_int(base_addr + OFFSET_SKILL_SWORD)
+                # Usar skill principal detectado pela vocação
+                vocation = BOT_SETTINGS.get('vocation', 'Knight')
+                _, sw_lvl, _ = get_primary_skill_info(pm, base_addr, vocation)
                 sh_lvl = pm.read_int(base_addr + OFFSET_SKILL_SHIELD)
                 ml_pct = pm.read_int(base_addr + OFFSET_MAGIC_PCT)
                 ml_lvl = pm.read_int(base_addr + OFFSET_MAGIC_LEVEL)
 
-                lbl_sword_val.configure(text=f"{sw_data['pct']}%")
-                lbl_shield_val.configure(text=f"{sh_data['pct']}%")
+                lbl_sword_val.configure(text=f"{sw_lvl} ({sw_data['pct']}%)")
+                lbl_shield_val.configure(text=f"{sh_lvl} ({sh_data['pct']}%)")
                 lbl_magic_val.configure(text=f"{ml_lvl} ({ml_stats['pct']}%)")
 
-                bench_sw = get_benchmark_min_per_pct(sw_lvl, BOT_SETTINGS['vocation'], "Melee")
+                # Benchmark usa "Dist" para Paladin, "Melee" para Knight/None
+                skill_type = "Dist" if "Paladin" in vocation else "Melee"
+                bench_sw = get_benchmark_min_per_pct(sw_lvl, vocation, skill_type)
                 real_sw = sw_data['speed'] 
                 
                 if ml_stats['speed'] > 0:
@@ -2312,22 +2422,25 @@ def gui_updater_loop():
         # --- ATUALIZAÇÃO DO GRÁFICO (Se estiver visível) ---
         if is_graph_visible:
             try:
-                ax.clear() 
-                
+                ax.clear()
+
                 sw_hist_speed = sword_tracker.get_display_data()['history']
                 sw_eff_hist = []
-                
+
                 if len(sw_hist_speed) > 1:
-                    bench_sw = get_benchmark_min_per_pct(sw_lvl, BOT_SETTINGS['vocation'], "Melee")
+                    # Benchmark usa tipo correto baseado na vocação
+                    vocation = BOT_SETTINGS.get('vocation', 'Knight')
+                    skill_type = "Dist" if "Paladin" in vocation else "Melee"
+                    bench_sw = get_benchmark_min_per_pct(sw_lvl, vocation, skill_type)
                     for s in sw_hist_speed:
                         if s > 0:
                             eff = (bench_sw / s) * 100
-                            if eff > 100: eff = 100 
+                            if eff > 100: eff = 100
                             sw_eff_hist.append(eff)
                         else:
                             sw_eff_hist.append(0)
 
-                    ax.plot(sw_eff_hist, color='#4EA5F9', linewidth=2, marker='.', markersize=5, label='Sword')
+                    ax.plot(sw_eff_hist, color='#4EA5F9', linewidth=2, marker='.', markersize=5, label=current_primary_skill_name)
                     ax.fill_between(range(len(sw_eff_hist)), sw_eff_hist, color='#4EA5F9', alpha=0.1)
 
                 sh_hist_speed = shield_tracker.get_display_data()['history']
@@ -3398,6 +3511,7 @@ if __name__ == "__main__":
     threading.Thread(target=auto_fisher_thread, daemon=True).start()
     threading.Thread(target=auto_eater_thread, daemon=True).start()
     threading.Thread(target=auto_stacker_thread, daemon=True).start()
+    threading.Thread(target=global_afk_pause_thread, daemon=True, name="AFK-Global").start()
     threading.Thread(target=runemaker_thread, daemon=True).start()
     threading.Thread(target=connection_watchdog, daemon=True).start()
     threading.Thread(target=start_cavebot_thread, daemon=True).start()

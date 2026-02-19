@@ -140,6 +140,7 @@ class MainWindow:
         self.lbl_regen_stock: ctk.CTkLabel = None
         self.lbl_gold_total: ctk.CTkLabel = None
         self.lbl_gold_rate: ctk.CTkLabel = None
+        self.lbl_primary_skill_name: ctk.CTkLabel = None  # Label dinâmico (Sword/Club/Axe/Distance)
         self.lbl_sword_val: ctk.CTkLabel = None
         self.lbl_sword_rate: ctk.CTkLabel = None
         self.lbl_sword_time: ctk.CTkLabel = None
@@ -442,14 +443,15 @@ class MainWindow:
         )
         self.lbl_gold_total.pack(side="right", padx=(10, 10))
 
-        # LINHA 4: SWORD
+        # LINHA 4: PRIMARY SKILL (Sword/Club/Axe/Distance)
         self.box_sword = ctk.CTkFrame(self.frame_stats, fg_color="transparent")
         self.box_sword.grid(row=4, column=0, padx=10, sticky="w")
 
-        ctk.CTkLabel(
+        self.lbl_primary_skill_name = ctk.CTkLabel(
             self.box_sword, text="Sword:",
             font=("Verdana", 11)
-        ).pack(side="left")
+        )
+        self.lbl_primary_skill_name.pack(side="left")
 
         self.lbl_sword_val = ctk.CTkLabel(
             self.box_sword, text="--",
@@ -964,3 +966,8 @@ class MainWindow:
         """Atualiza a cor do botão X-Ray."""
         if self.btn_xray:
             self.btn_xray.configure(fg_color=color)
+
+    def update_primary_skill_label(self, skill_name: str):
+        """Atualiza o label do skill principal (Sword/Club/Axe/Distance)."""
+        if hasattr(self, 'lbl_primary_skill_name') and self.lbl_primary_skill_name:
+            self.lbl_primary_skill_name.configure(text=f"{skill_name}:")

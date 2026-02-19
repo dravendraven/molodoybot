@@ -186,6 +186,38 @@ class SkillTracker:
 sword_tracker = SkillTracker("Sword")
 shield_tracker = SkillTracker("Shield")
 
+
+def get_primary_skill_info(pm, base_addr, vocation):
+    """
+    Retorna (nome, level, pct) do skill principal baseado na vocação.
+    - Paladin: Distance
+    - Knight/None: Maior entre Sword, Club, Axe
+    """
+    from config import (
+        OFFSET_SKILL_SWORD, OFFSET_SKILL_SWORD_PCT,
+        OFFSET_SKILL_CLUB, OFFSET_SKILL_CLUB_PCT,
+        OFFSET_SKILL_AXE, OFFSET_SKILL_AXE_PCT,
+        OFFSET_SKILL_DISTANCE, OFFSET_SKILL_DISTANCE_PCT
+    )
+
+    if "Paladin" in vocation:
+        level = pm.read_int(base_addr + OFFSET_SKILL_DISTANCE)
+        pct = pm.read_int(base_addr + OFFSET_SKILL_DISTANCE_PCT)
+        return ("Distance", level, pct)
+
+    # Knight/None: detectar maior skill
+    skills = [
+        ("Sword", pm.read_int(base_addr + OFFSET_SKILL_SWORD),
+         pm.read_int(base_addr + OFFSET_SKILL_SWORD_PCT)),
+        ("Club", pm.read_int(base_addr + OFFSET_SKILL_CLUB),
+         pm.read_int(base_addr + OFFSET_SKILL_CLUB_PCT)),
+        ("Axe", pm.read_int(base_addr + OFFSET_SKILL_AXE),
+         pm.read_int(base_addr + OFFSET_SKILL_AXE_PCT)),
+    ]
+    # Ordenar por level (maior primeiro), desempate por pct
+    skills.sort(key=lambda x: (x[1], x[2]), reverse=True)
+    return skills[0]
+
 class TrainingMonitor:
     def __init__(self, log_callback=None, log_hits=True):
         """

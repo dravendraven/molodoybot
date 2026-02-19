@@ -200,14 +200,13 @@ class Creature:
 
         # FALLBACK: Se não tem cores de outfit, verifica pelo nome
         # Se nome não é de nenhuma criatura conhecida → provavelmente é player
+        # IMPORTANTE: Usa APENAS exact match para evitar falsos positivos
+        # Ex: "wolf winter" (player) não deve matchear com "Wolf" (criatura)
         if not has_colors:
             from database.corpses import CORPSE_IDS
-            # Verifica se o nome corresponde a alguma criatura conhecida
             name_lower = self.name.lower()
             is_known_creature = any(
-                creature_name.lower() == name_lower or
-                creature_name.lower() in name_lower or
-                name_lower in creature_name.lower()
+                creature_name.lower() == name_lower
                 for creature_name in CORPSE_IDS.keys()
             )
             # Nome desconhecido + sem cores = provavelmente player

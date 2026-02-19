@@ -452,6 +452,35 @@ class SettingsWindow:
         if settings.get('console_log_visible', True):
             switch_console_log.select()
 
+        # === PAUSAS AFK ALEATÓRIAS ===
+        ctk.CTkLabel(frame_switches, text="Pausas AFK Aleatórias", **self.UI['H1']).pack(anchor="w", pady=(10, 2))
+
+        switch_afk_pause = ctk.CTkSwitch(frame_switches, text="Ativar Pausas AFK",
+                                          command=lambda: None,
+                                          progress_color="#9B59B6", **self.UI['BODY'])
+        switch_afk_pause.pack(anchor="w", pady=self.UI['PAD_ITEM'])
+        if settings.get('afk_pause_enabled', False):
+            switch_afk_pause.select()
+
+        # Tempo entre pausas (minutos)
+        f_afk_interval = ctk.CTkFrame(frame_switches, fg_color="transparent")
+        f_afk_interval.pack(anchor="w", pady=2, padx=20)
+        ctk.CTkLabel(f_afk_interval, text="Intervalo (min):", **self.UI['BODY']).pack(side="left")
+        entry_afk_interval = ctk.CTkEntry(f_afk_interval, width=50)
+        entry_afk_interval.pack(side="left", padx=5)
+        entry_afk_interval.insert(0, str(settings.get('afk_pause_interval', 10)))
+
+        # Duração da pausa (segundos)
+        f_afk_duration = ctk.CTkFrame(frame_switches, fg_color="transparent")
+        f_afk_duration.pack(anchor="w", pady=2, padx=20)
+        ctk.CTkLabel(f_afk_duration, text="Duração (seg):", **self.UI['BODY']).pack(side="left")
+        entry_afk_duration = ctk.CTkEntry(f_afk_duration, width=50)
+        entry_afk_duration.pack(side="left", padx=5)
+        entry_afk_duration.insert(0, str(settings.get('afk_pause_duration', 30)))
+
+        ctk.CTkLabel(frame_switches, text="↳ Pausa todos os módulos (exceto Alarme) com 50% de variância.",
+                    **self.UI['HINT']).pack(anchor="w", padx=20)
+
         # Botão Salvar
         def save_geral():
             s = self.cb.get_bot_settings()
@@ -466,6 +495,16 @@ class SettingsWindow:
             except:
                 pass
             s['console_log_visible'] = bool(switch_console_log.get())
+            # AFK Pauses
+            s['afk_pause_enabled'] = bool(switch_afk_pause.get())
+            try:
+                s['afk_pause_interval'] = max(1, int(entry_afk_interval.get()))
+            except:
+                pass
+            try:
+                s['afk_pause_duration'] = max(5, int(entry_afk_duration.get()))
+            except:
+                pass
             self.cb.update_stats_visibility()
             self.cb.save_config_file()
             self.cb.log("⚙️ Geral salvo.")
@@ -1215,7 +1254,6 @@ class SettingsWindow:
         frame_options.pack(fill="x", pady=(0, 5))
 
         self._auto_explore_var = ctk.IntVar(value=1 if settings.get('auto_explore_enabled', False) else 0)
-        self._afk_pause_var = ctk.IntVar(value=1 if settings.get('afk_pause_enabled', False) else 0)
 
         # Linha 1: Auto-explore + Raio
         frame_row1 = ctk.CTkFrame(frame_options, fg_color="transparent")
@@ -1239,16 +1277,6 @@ class SettingsWindow:
         self._entry_explore_radius.pack(side="left")
         self._entry_explore_radius.insert(0, str(settings.get('auto_explore_radius', 50)))
 
-        # Linha 2: Pausas AFK
-        def toggle_afk_pause():
-            s = self.cb.get_bot_settings()
-            s['afk_pause_enabled'] = (self._afk_pause_var.get() == 1)
-            self.cb.save_config_file()
-
-        ctk.CTkSwitch(frame_options, text="Pausas AFK aleatórias",
-                      variable=self._afk_pause_var, command=toggle_afk_pause,
-                      **self.UI['BODY']).pack(anchor="w", padx=10, pady=5)
-
         # === BOTÃO SALVAR CAVEBOT (salva tudo) ===
         def save_cavebot():
             try:
@@ -1257,10 +1285,6 @@ class SettingsWindow:
                 s['auto_explore_enabled'] = self._auto_explore_var.get() == 1
                 s['auto_explore_radius'] = max(10, int(self._entry_explore_radius.get()))
                 s['auto_explore_cooldown'] = 600
-                # AFK Humanization
-                s['afk_pause_enabled'] = self._afk_pause_var.get() == 1
-                s['afk_pause_duration'] = 30
-                s['afk_pause_interval'] = 5
                 self.cb.save_config_file()
                 self.cb.log("🤖 Cavebot salvo!")
             except Exception:
