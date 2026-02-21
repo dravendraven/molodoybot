@@ -136,6 +136,9 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
     # Stuck Detection: timestamp quando começou a detectar stuck
     stuck_detection_start_time = None
 
+    # Movement Alert: timestamp do último alerta de movimento (controla spam quando runemaker gerencia)
+    last_movement_alert_time = 0
+
     # Configura listener de eventos do sniffer
     _setup_chat_event_listener()
 
@@ -469,16 +472,34 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
 
                 ex, ey, ez = origin
                 if (my_x, my_y, my_z) != (ex, ey, ez):
-                    movement_danger = True
-                    dist_moved = max(abs(my_x - ex), abs(my_y - ey))
-                    log_msg(f"🚨 MOVIMENTO INESPERADO: ({ex},{ey},{ez}) → ({my_x},{my_y},{my_z}) [{dist_moved} sqm]")
-                    set_status(f"🚨 Movimento inesperado! ({dist_moved} sqm)")
-                    set_safe_state(False)
-                    winsound.Beep(1500, 500)
+                    # Comportamento baseado em quem gerencia o retorno:
+                    # - runemaker_return_safe=True: Alerta UMA vez, runemaker faz flee/return
+                    # - runemaker_return_safe=False: Alerta contínuo como perigo padrão
+                    is_first_alert = (last_movement_alert_time == 0)
+                    should_alert = is_first_alert or (not runemaker_return_safe)
 
-                    if (time.time() - last_telegram_time) > TELEGRAM_INTERVAL_NORMAL:
-                        send_telegram(f"🚨 Movimento inesperado: ({ex},{ey},{ez}) → ({my_x},{my_y},{my_z})")
-                        last_telegram_time = time.time()
+                    # Só marca como perigo se é primeiro alerta OU runemaker não está gerenciando
+                    # Isso permite que runemaker transite de FLEEING → RETURNING quando chega ao safe_pos
+                    # (a consolidação de estado usa movement_danger para chamar set_safe_state)
+                    if is_first_alert or not runemaker_return_safe:
+                        movement_danger = True
+                        set_safe_state(False)
+
+                    if should_alert:
+                        dist_moved = max(abs(my_x - ex), abs(my_y - ey))
+
+                        # Log só no primeiro alerta (evita flood no console)
+                        if is_first_alert:
+                            log_msg(f"🚨 MOVIMENTO INESPERADO: ({ex},{ey},{ez}) → ({my_x},{my_y},{my_z}) [{dist_moved} sqm]")
+
+                        set_status(f"🚨 Movimento inesperado! ({dist_moved} sqm)")
+                        winsound.Beep(1500, 500)
+
+                        if (time.time() - last_telegram_time) > TELEGRAM_INTERVAL_NORMAL:
+                            send_telegram(f"🚨 Movimento inesperado: ({ex},{ey},{ez}) → ({my_x},{my_y},{my_z})")
+                            last_telegram_time = time.time()
+
+                        last_movement_alert_time = time.time()
 
                     # Manter Posição: retornar ao ponto (só se runemaker return_safe NÃO está ativo)
                     if keep_position and not runemaker_return_safe:
@@ -492,6 +513,9 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
                             )
                         except Exception as e:
                             log_msg(f"[ALARM] Erro ao retornar posição: {e}")
+                else:
+                    # Voltou para origin - reseta para próximo evento
+                    last_movement_alert_time = 0
 
             # =================================================================
             # F. VERIFICAÇÃO DE CAVEBOT STUCK
@@ -586,8 +610,13 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
             
             elif not chat_danger and not movement_danger:
                 # Se visual está limpo E chat está limpo E sem movimento inesperado -> Seguro
-                set_safe_state(True)
-                set_gm_state(False)
+                # EXCEÇÃO: Se runemaker está gerenciando evento de movimento, NÃO marcar como seguro
+                # (runemaker vai sinalizar "seguro" quando chegar ao safe_pos)
+                in_movement_event = (runemaker_return_safe and last_movement_alert_time > 0)
+
+                if not in_movement_event:
+                    set_safe_state(True)
+                    set_gm_state(False)
 
                 # Verifica se há cooldown de retomada ativo
                 cooldown = state.cooldown_remaining

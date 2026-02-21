@@ -45,7 +45,7 @@ class SimpleNavigator:
         # Componentes de navegacao
         self.memory_map = MemoryMap(pm, base_addr)
         self.analyzer = MapAnalyzer(self.memory_map)
-        self.walker = AStarWalker(self.memory_map, self.analyzer)
+        self.walker = AStarWalker(self.analyzer)
 
         # Estado
         self.stuck_counter = 0

@@ -359,8 +359,10 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
             )
             if arrived:
                 log_msg("📍 Chegou ao safe spot!")
+                # Sinaliza que está seguro no safe_pos (permite transição FLEEING → RETURNING)
+                state.clear_alarm()
             time.sleep(0.3)
-            continue 
+            continue
 
         # ======================================================================
         # PRIORIDADE 3: RETORNO
