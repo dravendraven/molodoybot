@@ -1,57 +1,94 @@
 # ==============================================================================
-# SPLASH SCREEN - Aparece imediatamente enquanto carrega
+# SPLASH SCREEN - Usa tkinter puro para não conflitar com CustomTkinter
 # ==============================================================================
 import tkinter as _tk_splash
+from tkinter import ttk as _ttk_splash
 
 _splash = None
+_splash_label = None
+_splash_progress = None
 
 def _show_splash():
-    global _splash
+    """Mostra splash screen com barra de progresso enquanto carrega."""
+    global _splash, _splash_label, _splash_progress
     _splash = _tk_splash.Tk()
     _splash.overrideredirect(True)
     _splash.attributes('-topmost', True)
     _splash.configure(bg="#1a1a1a")
 
-    w, h = 280, 80
+    w, h = 300, 100
     x = (_splash.winfo_screenwidth() // 2) - (w // 2)
     y = (_splash.winfo_screenheight() // 2) - (h // 2)
     _splash.geometry(f"{w}x{h}+{x}+{y}")
 
-    lbl = _tk_splash.Label(_splash, text="Carregando MolodoyBot...",
-                   font=("Verdana", 11), bg="#1a1a1a", fg="#CCCCCC")
-    lbl.pack(expand=True)
+    _splash_label = _tk_splash.Label(_splash, text="Carregando MolodoyBot...",
+                                      font=("Verdana", 11), bg="#1a1a1a", fg="#3B8ED0")
+    _splash_label.pack(expand=True, pady=(20, 5))
+
+    # Estilo da barra de progresso
+    style = _ttk_splash.Style(_splash)
+    style.theme_use('clam')
+    style.configure("splash.Horizontal.TProgressbar",
+                    background="#3B8ED0", troughcolor="#333333",
+                    bordercolor="#1a1a1a", lightcolor="#3B8ED0", darkcolor="#3B8ED0")
+
+    _splash_progress = _ttk_splash.Progressbar(_splash, style="splash.Horizontal.TProgressbar",
+                                                length=220, mode='indeterminate')
+    _splash_progress.pack(pady=(0, 20))
+    _splash_progress.start(15)
+
     _splash.update()
 
+def _update_splash(text=None):
+    """Atualiza splash e mantém responsiva."""
+    global _splash, _splash_label
+    if _splash:
+        if text and _splash_label:
+            _splash_label.configure(text=text)
+        try:
+            _splash.update()
+        except:
+            pass
+
 def _close_splash():
-    global _splash
+    """Fecha splash screen ANTES de criar janela CTk."""
+    global _splash, _splash_progress
     if _splash:
         try:
+            if _splash_progress:
+                _splash_progress.stop()
             _splash.destroy()
         except:
             pass
         _splash = None
 
-# _show_splash()  # DISABLED: breaks CustomTkinter root window
-# ==============================================================================
+# Mostrar splash IMEDIATAMENTE
+_show_splash()
 
-import customtkinter as ctk
+# ==============================================================================
+# IMPORTS PESADOS (splash já está visível)
+# ==============================================================================
 import threading
+_update_splash("Carregando memória...")
 import pymem
 import pymem.process
+_update_splash("Carregando sistema...")
 import time
 import win32gui
 import win32con
 import win32api
+_update_splash("Carregando utilitários...")
 # import requests  # Lazy import: send_telegram()
 import winsound
 import os
 import json
-import random # Para o delay humano
-import psutil # Para monitoramento de CPU e RAM
+import random
+import psutil
 from utils.timing import gauss_wait
 from datetime import datetime
 # from PIL import Image  # Lazy import: update_minimap_loop()
-# matplotlib será carregado sob demanda (lazy loading) para acelerar o startup
+
+# matplotlib será carregado sob demanda (lazy loading)
 plt = None
 FigureCanvasTkAgg = None
 
@@ -66,43 +103,59 @@ def setup_matplotlib():
         plt = plt_module
         FigureCanvasTkAgg = Canvas
     return plt, FigureCanvasTkAgg
+
+_update_splash("Carregando interface...")
 import sys
 import traceback
 import ctypes
 import tkinter as tk
-from tkinter import filedialog # Para salvar/abrir arquivos
+from tkinter import filedialog
 from pathlib import Path
 
 # arquivos do bot
+_update_splash("Carregando configurações...")
 from config import *
 import config
 from utils.monitor import *
+
+_update_splash("Carregando módulos...")
 from modules.auto_loot import *
-from modules.fisher import fishing_loop # Vamos usar essa função principal
+from modules.fisher import fishing_loop
 from modules.runemaker import runemaker_loop
+_update_splash("Carregando core...")
 from core.mouse_lock import acquire_mouse, release_mouse
 from core.map_core import get_game_view, get_screen_coord, get_player_pos
 from core.input_core import ctrl_right_click_at
 from core import packet
 from database import foods_db
+
+_update_splash("Carregando trainer...")
 from modules.trainer import trainer_loop
 from modules.alarm import alarm_loop
+_update_splash("Carregando cavebot...")
 from modules.cavebot import Cavebot
 # Lazy imports - carregados sob demanda para acelerar startup
 # from modules.spear_picker import spear_picker_loop  # Lazy: start_spear_picker_thread()
 # from modules.aimbot import AimbotModule              # Lazy: start_aimbot_thread()
 # from modules.debug_monitor import ...               # Lazy: após criar app
+
+_update_splash("Carregando estado...")
 from core.player_core import get_connected_char_name
 from core.bot_state import state
 from core.action_scheduler import init_scheduler, get_scheduler, stop_scheduler
 from core.game_state import game_state, init_game_state, shutdown_game_state
 from core.overlay_renderer import renderer as overlay_renderer
+
+_update_splash("Carregando chat...")
 from core.chat_handler import ChatHandler
+
+_update_splash("Carregando GUI...")
 from gui.settings_window import SettingsWindow, SettingsCallbacks
 from gui.main_window import MainWindow, MainWindowCallbacks
 #import corpses
 
 # Sniffer de pacotes (opcional - requer Npcap e execução como Admin)
+_update_splash("Finalizando...")
 try:
     from core.sniffer import start_sniffer, stop_sniffer, get_sniffer
     SNIFFER_AVAILABLE = True
@@ -112,6 +165,13 @@ except ImportError:
     def stop_sniffer(): pass
     def get_sniffer(): return None
 
+# ==============================================================================
+# FECHAR SPLASH E IMPORTAR CUSTOMTKINTER
+# ==============================================================================
+# IMPORTANTE: Fechar splash tkinter ANTES de importar customtkinter
+# para evitar conflito entre tk.Tk() e ctk.CTk()
+_close_splash()
+import customtkinter as ctk
 
 # ==============================================================================
 # 1. SETUP DE AMBIENTE E SISTEMA
