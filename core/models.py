@@ -133,6 +133,7 @@ class Creature:
     is_visible: bool
     is_moving: bool
     facing_direction: int
+    walk_direction: int  # Direção do movimento enquanto anda (0=N, 1=E, 2=S, 3=W)
     slot_index: int  # Índice no battlelist (útil para debug)
     # Outfit (para detecção precisa de player vs criatura humanoid)
     outfit_type: int = 0    # LookType (sprite base)

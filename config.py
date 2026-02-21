@@ -122,8 +122,9 @@ OFFSET_Z = 0x2C
 OFFSET_HP = 0x84
 OFFSET_SPEED = 0x88
 OFFSET_VISIBLE = 0x8C
+OFFSET_WALK_DIRECTION = 0x38    # 56 - Direção do movimento enquanto anda (0=N, 1=E, 2=S, 3=W)
 OFFSET_MOVEMENT_STATUS = 0x4C    # 0=parado, 1=andando
-OFFSET_FACING_DIRECTION = 0x50  # 0=Norte, 1=Este, 2=Sul, 3=Oeste
+OFFSET_FACING_DIRECTION = 0x50  # 0=Norte, 1=Este, 2=Sul, 3=Oeste (look_dir)
 
 # Offsets de Outfit (para diferenciar players de criaturas)
 # Players tem cores > 0, criaturas tem cores = 0

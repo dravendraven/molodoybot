@@ -24,6 +24,7 @@ from config import (
     OFFSET_Z,
     OFFSET_HP,
     OFFSET_SPEED,
+    OFFSET_WALK_DIRECTION,
     OFFSET_MOVEMENT_STATUS,
     OFFSET_FACING_DIRECTION,
 )
@@ -102,7 +103,7 @@ def is_player_moving(pm, base_addr) -> bool:
 
 def get_player_facing_direction(pm, base_addr) -> int:
     """
-    Retorna a direção para qual o jogador está olhando.
+    Retorna a direção para qual o jogador está olhando (look_dir).
 
     Returns:
         0=Norte, 1=Este, 2=Sul, 3=Oeste, -1=Não encontrado
@@ -113,6 +114,29 @@ def get_player_facing_direction(pm, base_addr) -> int:
 
     try:
         return pm.read_int(slot + OFFSET_FACING_DIRECTION)
+    except Exception:
+        return -1
+
+
+def get_player_walk_direction(pm, base_addr) -> int:
+    """
+    Retorna a direção para qual o jogador está andando (walk_dir).
+
+    DIFERENÇA DE look_dir (facing_direction):
+    - look_dir: Para onde está OLHANDO (muda ao virar)
+    - walk_dir: Para onde está ANDANDO (só válido durante movimento)
+
+    NOTA: walk_dir só mostra direções cardeais (0-3), mesmo em movimento diagonal.
+
+    Returns:
+        0=Norte, 1=Este, 2=Sul, 3=Oeste, -1=Não encontrado
+    """
+    slot = _get_player_slot_address(pm, base_addr)
+    if not slot:
+        return -1
+
+    try:
+        return pm.read_int(slot + OFFSET_WALK_DIRECTION)
     except Exception:
         return -1
 

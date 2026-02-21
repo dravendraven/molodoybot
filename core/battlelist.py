@@ -16,7 +16,7 @@ from config import (
     STEP_SIZE, MAX_CREATURES,
     OFFSET_ID, OFFSET_NAME, OFFSET_X, OFFSET_Y, OFFSET_Z,
     OFFSET_HP, OFFSET_SPEED, OFFSET_VISIBLE,
-    OFFSET_MOVEMENT_STATUS, OFFSET_FACING_DIRECTION,
+    OFFSET_WALK_DIRECTION, OFFSET_MOVEMENT_STATUS, OFFSET_FACING_DIRECTION,
     OFFSET_OUTFIT_TYPE, OFFSET_OUTFIT_HEAD, OFFSET_OUTFIT_BODY,
     OFFSET_OUTFIT_LEGS, OFFSET_OUTFIT_FEET,
     OFFSET_LIGHT, OFFSET_LIGHT_COLOR, OFFSET_BLACKSQUARE
@@ -107,6 +107,7 @@ class BattleListScanner:
             hp = struct.unpack_from('<i', raw_bytes, OFFSET_HP)[0]
             speed = struct.unpack_from('<i', raw_bytes, OFFSET_SPEED)[0]
             visible = struct.unpack_from('<i', raw_bytes, OFFSET_VISIBLE)[0]
+            walk_dir = struct.unpack_from('<i', raw_bytes, OFFSET_WALK_DIRECTION)[0]
             moving = struct.unpack_from('<i', raw_bytes, OFFSET_MOVEMENT_STATUS)[0]
             facing = struct.unpack_from('<i', raw_bytes, OFFSET_FACING_DIRECTION)[0]
 
@@ -131,6 +132,7 @@ class BattleListScanner:
                 is_visible=(visible == 1),
                 is_moving=(moving == 1),
                 facing_direction=facing,
+                walk_direction=walk_dir,
                 slot_index=slot_index,
                 outfit_type=outfit_type,
                 outfit_head=outfit_head,

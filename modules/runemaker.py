@@ -347,6 +347,7 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
 
                 log_msg("🏃 Fugindo para Safe Spot...")
                 current_state = STATE_FLEEING
+                state.set_runemaker_fleeing(True)  # Sinaliza que está em fuga
 
             set_status("fugindo para safe spot...")
             # Movimento para Safe usando A* navigation
@@ -359,6 +360,7 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
             )
             if arrived:
                 log_msg("📍 Chegou ao safe spot!")
+                state.set_runemaker_fleeing(False)  # Fuga completa - libera alarme
                 # Sinaliza que está seguro no safe_pos (permite transição FLEEING → RETURNING)
                 state.clear_alarm()
             time.sleep(0.3)
@@ -391,11 +393,13 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                     )
                     if arrived:
                         current_state = STATE_WORKING
+                        state.set_runemaker_fleeing(False)  # Fallback: garante que flag está limpo
                         log_msg("📍 Cheguei no trabalho.")
                     else:
                         continue  # Continua andando ate chegar
                 else:
                     current_state = STATE_WORKING
+                    state.set_runemaker_fleeing(False)  # Fallback: garante que flag está limpo
 
         # ======================================================================
         # PRIORIDADE 4: MODO DE ESPERA (COOL-OFF / SEGURANÇA GLOBAL)

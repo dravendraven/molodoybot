@@ -29,7 +29,6 @@ DIRECTION_TO_OPCODE = {
     (-1, -1): OP_WALK_NORTH_WEST,
 }
 
-
 class SimpleNavigator:
     """
     Navegador simplificado para mover ate coordenada exata.
@@ -72,6 +71,7 @@ class SimpleNavigator:
 
         tx, ty, tz = target_pos
         steps_taken = 0
+        last_step_succeeded = False  # Track if last step moved successfully (for fluid movement)
 
         while steps_taken < max_steps:
             # Atualiza mapa da memoria (CRITICO: sem isso, scan_for_floor_change retorna None)
@@ -127,10 +127,19 @@ class SimpleNavigator:
                         log_func(f"Sem transicao visivel de {pz} para {tz}")
                     return False
 
-            # Aguarda parar antes de dar proximo passo
-            if is_player_moving(self.pm, self.base_addr):
-                time.sleep(0.1)
+            # ===== FLUID MOVEMENT =====
+            # Se acabamos de completar um step com sucesso, NÃO esperamos o player parar
+            # Isso permite "pipelining" de comandos para movimento fluido
+            player_moving = is_player_moving(self.pm, self.base_addr)
+
+            if player_moving and not last_step_succeeded:
+                # Player está movendo MAS não foi de um step nosso que acabou de suceder
+                # Pode ser movimento externo ou primeiro step - espera
+                time.sleep(0.02)
                 continue
+
+            # Reset flag - só vale para uma iteração
+            last_step_succeeded = False
 
             # Calcula posicao relativa do alvo
             rel_x = tx - px
@@ -158,10 +167,18 @@ class SimpleNavigator:
             # Verifica se o tile esta bloqueado
             tile_props = self.analyzer.get_tile_properties(dx, dy)
 
-            # Se nao e walkable, verifica se e obstaculo removivel
-            if not tile_props.get('walkable') and clear_obstacles:
+            # BUG FIX: Verificar se tem MOVE/STACK item MESMO QUE "walkable"
+            # (quando OBSTACLE_CLEARING_ENABLED=True, mesas são removidas de BLOCKING_IDS,
+            # fazendo o tile parecer walkable, mas fisicamente ainda bloqueia!)
+            if clear_obstacles:
                 obstacle = self.analyzer.get_obstacle_type(dx, dy)
-                if obstacle.get('clearable'):
+                if obstacle.get('type') in ('MOVE', 'STACK') and obstacle.get('clearable'):
+                    print(f"[NAV] Detectou {obstacle.get('type')} no caminho, tentando limpar...")
+                    if self._attempt_clear_obstacle(dx, dy):
+                        time.sleep(0.5)
+                        continue
+                # Fallback: se não é walkable por outro motivo
+                elif not tile_props.get('walkable') and obstacle.get('clearable'):
                     if self._attempt_clear_obstacle(dx, dy):
                         time.sleep(0.5)
                         continue
@@ -169,6 +186,7 @@ class SimpleNavigator:
             # Executa o passo via packet
             opcode = DIRECTION_TO_OPCODE.get((dx, dy))
             if opcode:
+                step_start = time.time()
                 self.packet.walk(opcode)
                 steps_taken += 1
 
@@ -178,47 +196,102 @@ class SimpleNavigator:
 
                 # Verifica se moveu
                 new_x, new_y, _ = get_player_pos(self.pm, self.base_addr)
+                step_total = (time.time() - step_start) * 1000
+                print(f"[NAV DEBUG] Step complete: ({px},{py})→({new_x},{new_y}) total_time={step_total:.0f}ms")
+
                 if (new_x, new_y) == (px, py):
                     self.stuck_counter += 1
+                    last_step_succeeded = False  # Não conseguiu mover
+                    print(f"[NAV DEBUG] STUCK! counter={self.stuck_counter}")
                 else:
                     self.stuck_counter = 0
+                    last_step_succeeded = True  # Step OK - próxima iteração pode enviar imediatamente
             else:
                 time.sleep(0.1)
 
         return False  # Excedeu max_steps
 
     def _get_step_delay(self, dx, dy):
-        """Calcula delay humanizado para um passo."""
+        """Calcula delay humanizado para um passo (mesma lógica do cavebot)."""
         try:
             ground_speed = self.analyzer.get_ground_speed(dx, dy)
             player_speed = get_player_speed(self.pm, self.base_addr)
+            if player_speed <= 0:
+                player_speed = 220  # Fallback
 
             # Diagonal = 3x o custo
             multiplier = 3 if (dx != 0 and dy != 0) else 1
             effective_speed = ground_speed * multiplier
 
-            # Formula do Tibia
-            base_delay = (1000 * effective_speed) / max(player_speed, 50)
+            # Fórmula do Tibia
+            base_ms = (1000.0 * effective_speed) / player_speed
 
-            # Adiciona jitter humano (+/- 15%)
-            jitter = random.uniform(0.85, 1.15)
-            delay_ms = base_delay * jitter
+            # Jitter gaussiano ±4% (mais humano que uniforme)
+            jitter_std = base_ms * 0.04
+            jitter = random.gauss(0, jitter_std)
 
-            return delay_ms / 1000.0  # Converte para segundos
-        except:
-            return 0.3 + random.uniform(0.05, 0.15)
+            # Micro-pausa aleatória (2% chance, 30-100ms)
+            if random.random() < 0.02:
+                jitter += random.uniform(30, 100)
+
+            total_ms = base_ms + jitter
+
+            # Pre-move buffer (antecipação - envia comando antes de terminar)
+            # 180ms é mais agressivo que cavebot (150ms), mas is_player_moving atua como safety net
+            pre_move_buffer = 180  # ms
+            wait_time = (total_ms / 1000.0) - (pre_move_buffer / 1000.0)
+
+            # Mínimo 50ms para evitar flood
+            final_delay = max(0.05, wait_time)
+
+            # DEBUG: Log do cálculo de delay
+            print(f"[NAV DEBUG] Step({dx},{dy}) ground={ground_speed} player={player_speed} "
+                  f"base={base_ms:.0f}ms total={total_ms:.0f}ms wait={final_delay*1000:.0f}ms")
+
+            return final_delay
+        except Exception as e:
+            print(f"[NAV DEBUG] Exception in _get_step_delay: {e}")
+            return 0.15 + random.uniform(0.01, 0.05)  # Fallback mais rápido
 
     def _try_clear_path(self, target_rel_x, target_rel_y):
-        """Tenta limpar caminho na direcao do alvo."""
-        # Tenta tiles cardinais primeiro
-        directions = [(0, -1), (0, 1), (-1, 0), (1, 0)]
+        """
+        Tenta limpar caminho na direção do alvo.
+        Usa a mesma lógica do cavebot para calcular direção.
+        """
+        # Calcular direção geral ao destino (normalizada para -1, 0, ou 1)
+        dir_x = 1 if target_rel_x > 0 else (-1 if target_rel_x < 0 else 0)
+        dir_y = 1 if target_rel_y > 0 else (-1 if target_rel_y < 0 else 0)
 
-        # Ordena por proximidade com a direcao do alvo
-        directions.sort(key=lambda d: abs(d[0] - target_rel_x) + abs(d[1] - target_rel_y))
+        # Tiles adjacentes a verificar (prioriza direção do destino)
+        tiles_to_check = []
 
-        for dx, dy in directions:
-            if self._attempt_clear_obstacle(dx, dy):
-                return True
+        # 1. Direção diagonal (se aplicável)
+        if dir_x != 0 and dir_y != 0:
+            tiles_to_check.append((dir_x, dir_y))
+
+        # 2. Direção horizontal
+        if dir_x != 0:
+            tiles_to_check.append((dir_x, 0))
+
+        # 3. Direção vertical
+        if dir_y != 0:
+            tiles_to_check.append((0, dir_y))
+
+        # 4. Fallback: outras direções cardeais (para casos de rota não-linear)
+        for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            if (dx, dy) not in tiles_to_check:
+                tiles_to_check.append((dx, dy))
+
+        for check_x, check_y in tiles_to_check:
+            if check_x == 0 and check_y == 0:
+                continue
+
+            obstacle_info = self.analyzer.get_obstacle_type(check_x, check_y)
+
+            if obstacle_info.get('clearable') and obstacle_info.get('type') in ('MOVE', 'STACK'):
+                if self._attempt_clear_obstacle(check_x, check_y):
+                    return True
+
         return False
 
     def _attempt_clear_obstacle(self, rel_x, rel_y):
@@ -229,49 +302,113 @@ class SimpleNavigator:
         try:
             obstacle = self.analyzer.get_obstacle_type(rel_x, rel_y)
 
+            # DEBUG: Log para diagnosticar problemas
+            print(f"[NAV] _attempt_clear_obstacle({rel_x},{rel_y}): {obstacle}")
+
             if not obstacle or not obstacle.get('clearable'):
                 return False
 
             obs_type = obstacle.get('type')
 
             if obs_type == 'MOVE':
+                print(f"[NAV] Tentando mover MOVE item id={obstacle.get('item_id')} stack={obstacle.get('stack_pos')}")
                 return self._push_move_item(rel_x, rel_y, obstacle)
             elif obs_type == 'STACK':
+                print(f"[NAV] Tentando mover STACK item id={obstacle.get('item_id')} stack={obstacle.get('stack_pos')}")
                 return self._push_stack_item(rel_x, rel_y, obstacle)
 
             return False
-        except:
+        except Exception as e:
+            print(f"[NAV] _attempt_clear_obstacle ERRO: {e}")
             return False
 
     def _push_move_item(self, rel_x, rel_y, obstacle):
         """Move item bloqueador para tile adjacente."""
+        from database.tiles_config import MOVE_IDS, BLOCKING_IDS
+
         item_id = obstacle.get('item_id')
         stack_pos = obstacle.get('stack_pos', 0)
 
         if not item_id:
+            print(f"[NAV] _push_move_item: item_id é None, abortando")
             return False
 
         px, py, pz = get_player_pos(self.pm, self.base_addr)
         obs_x, obs_y = px + rel_x, py + rel_y
 
         # Tenta mover para tiles adjacentes ao obstaculo
-        adjacent = [
+        # (prioriza tiles adjacentes ao PLAYER como no cavebot)
+        player_adjacent = [(-1, 0), (1, 0), (0, -1), (0, 1)]  # Cardeais ao player
+        obstacle_adjacent = [
             (rel_x - 1, rel_y), (rel_x + 1, rel_y),
             (rel_x, rel_y - 1), (rel_x, rel_y + 1),
         ]
 
-        for adj_x, adj_y in adjacent:
-            # Verifica se tile adjacente e walkable via analyzer
+        # Primeiro tenta tiles adjacentes ao player
+        for adj_x, adj_y in player_adjacent:
+            # Pula tile onde o obstáculo está
+            if adj_x == rel_x and adj_y == rel_y:
+                continue
+            # Pula tile onde o player está
+            if adj_x == 0 and adj_y == 0:
+                continue
+
+            # Verifica se destino tem item bloqueador (outra mesa, etc)
+            dest_tile = self.memory_map.get_tile_visible(adj_x, adj_y)
+            if not dest_tile or not dest_tile.items:
+                continue  # Tile vazio/inexistente
+
+            has_blocking = False
+            for tile_item_id in dest_tile.items:
+                if tile_item_id in MOVE_IDS or tile_item_id in BLOCKING_IDS:
+                    print(f"[NAV] ({adj_x},{adj_y}) já tem item bloqueador {tile_item_id}, pulando")
+                    has_blocking = True
+                    break
+
+            if has_blocking:
+                continue
+
             adj_props = self.analyzer.get_tile_properties(adj_x, adj_y)
             if adj_props.get('walkable'):
-                # Move item para este tile
                 pos_from = get_ground_pos(obs_x, obs_y, pz)
                 pos_to = get_ground_pos(px + adj_x, py + adj_y, pz)
 
-                self.packet.move_item(pos_from, pos_to, item_id, stack_pos)
+                print(f"[NAV] Movendo item {item_id} de ({obs_x},{obs_y}) para ({px + adj_x},{py + adj_y})")
+                self.packet.move_item(pos_from, pos_to, item_id, 1, stack_pos=stack_pos)
                 time.sleep(0.4 + random.uniform(0.1, 0.2))
                 return True
 
+        # Fallback: tiles adjacentes ao obstáculo
+        for adj_x, adj_y in obstacle_adjacent:
+            # Pula tile onde o player está
+            if adj_x == 0 and adj_y == 0:
+                continue
+
+            # Verifica se destino tem item bloqueador
+            dest_tile = self.memory_map.get_tile_visible(adj_x, adj_y)
+            if not dest_tile or not dest_tile.items:
+                continue
+
+            has_blocking = False
+            for tile_item_id in dest_tile.items:
+                if tile_item_id in MOVE_IDS or tile_item_id in BLOCKING_IDS:
+                    has_blocking = True
+                    break
+
+            if has_blocking:
+                continue
+
+            adj_props = self.analyzer.get_tile_properties(adj_x, adj_y)
+            if adj_props.get('walkable'):
+                pos_from = get_ground_pos(obs_x, obs_y, pz)
+                pos_to = get_ground_pos(px + adj_x, py + adj_y, pz)
+
+                print(f"[NAV] Movendo item {item_id} de ({obs_x},{obs_y}) para ({px + adj_x},{py + adj_y}) (fallback)")
+                self.packet.move_item(pos_from, pos_to, item_id, 1, stack_pos=stack_pos)
+                time.sleep(0.4 + random.uniform(0.1, 0.2))
+                return True
+
+        print(f"[NAV] _push_move_item: nenhum tile livre encontrado para mover item")
         return False
 
     def _push_stack_item(self, rel_x, rel_y, obstacle):

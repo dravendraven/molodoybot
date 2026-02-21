@@ -62,6 +62,7 @@ class BotState:
         self._is_processing_loot: bool = False  # NOVO: Cobre DYING → fim loot (ciclo completo)
         self._last_combat_time: float = 0.0
         self._is_runemaking: bool = False
+        self._runemaker_fleeing: bool = False  # True enquanto runemaker está fugindo para safe_pos
         self._is_chat_paused: bool = False  # Pausado por conversa de chat
         self._chat_pause_until: float = 0.0  # Timestamp até quando pausar por chat
 
@@ -408,6 +409,22 @@ class BotState:
         """
         with self._lock:
             self._is_runemaking = value
+
+    @property
+    def runemaker_fleeing(self) -> bool:
+        """Retorna True se runemaker está fugindo para safe_pos."""
+        with self._lock:
+            return self._runemaker_fleeing
+
+    def set_runemaker_fleeing(self, value: bool):
+        """
+        Atualiza estado de fuga do runemaker.
+
+        Args:
+            value: True se runemaker está fugindo, False caso contrário
+        """
+        with self._lock:
+            self._runemaker_fleeing = value
 
     @property
     def is_chat_paused(self) -> bool:

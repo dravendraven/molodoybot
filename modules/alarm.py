@@ -514,8 +514,10 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
                         except Exception as e:
                             log_msg(f"[ALARM] Erro ao retornar posição: {e}")
                 else:
-                    # Voltou para origin - reseta para próximo evento
-                    last_movement_alert_time = 0
+                    # Voltou para origin - MAS só reseta se runemaker não está fugindo
+                    # (runemaker pode passar pelo origin durante a fuga para o safe_pos)
+                    if not state.runemaker_fleeing:
+                        last_movement_alert_time = 0
 
             # =================================================================
             # F. VERIFICAÇÃO DE CAVEBOT STUCK
@@ -614,7 +616,8 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
                 # (runemaker vai sinalizar "seguro" quando chegar ao safe_pos)
                 in_movement_event = (runemaker_return_safe and last_movement_alert_time > 0)
 
-                if not in_movement_event:
+                # TAMBÉM verifica se runemaker está fugindo (pode ter passado pelo origin durante a fuga)
+                if not in_movement_event and not state.runemaker_fleeing:
                     set_safe_state(True)
                     set_gm_state(False)
 
