@@ -1,11 +1,10 @@
 import tkinter as tk
 from tkinter import ttk
-import requests
 import os
 import subprocess
 import sys
 import threading
-from packaging import version
+# requests e packaging são importados sob demanda (lazy) para inicialização mais rápida
 
 # ================= CONFIGURAÇÕES =================
 URL_VERSION = "https://raw.githubusercontent.com/dravendraven/molodoybot/refs/heads/main/version.txt"
@@ -31,6 +30,7 @@ def is_version_commit(msg, ver=None):
 
 def fetch_patch_notes(local_ver, remote_ver):
     """Busca os commits entre as versões baseado nas mensagens de commit"""
+    import requests  # Lazy import
     try:
         # Busca commits recentes (até 50 para encontrar a versão anterior)
         response = requests.get(f"{GITHUB_API_COMMITS}?per_page=50", timeout=10)
@@ -128,14 +128,29 @@ class LauncherApp:
         )
         self.btn_action.pack(pady=10)
 
-        # Inicia a verificação em segundo plano
-        threading.Thread(target=self.start_update_check, daemon=True).start()
+        # Força renderização imediata da UI antes de qualquer processamento pesado
+        self.root.update()
+
+        # Inicia a verificação em segundo plano com pequeno delay para garantir UI responsiva
+        self.root.after(100, lambda: threading.Thread(target=self.start_update_check, daemon=True).start())
 
     def run(self):
         self.root.mainloop()
 
     def start_update_check(self):
         try:
+            # Import dos módulos (pode demorar em sistemas lentos)
+            self.update_gui("status", "Carregando módulos...")
+            try:
+                import requests
+                from packaging import version
+            except ImportError as e:
+                self.update_gui("status", f"Erro ao carregar: {e}")
+                self.root.after(0, self._enable_close_button)
+                return
+
+            self.update_gui("status", "Verificando atualizações...")
+
             # 1. Ler versão local
             local_ver = "0.0"
             if os.path.exists(VERSION_FILE):
@@ -143,8 +158,9 @@ class LauncherApp:
                     local_ver = f.read().strip()
 
             # 2. Ler versão remota (GitHub)
+            self.update_gui("status", "Conectando ao servidor...")
             try:
-                response = requests.get(URL_VERSION, timeout=10)
+                response = requests.get(URL_VERSION, timeout=15)
                 response.raise_for_status()
                 remote_ver = response.text.strip()
             except Exception:
@@ -152,6 +168,7 @@ class LauncherApp:
                 return
 
             # 3. Comparar
+            self.update_gui("status", "Comparando versões...")
             if version.parse(remote_ver) > version.parse(local_ver):
                 self.update_gui("status", f"Atualizando: v{local_ver} -> v{remote_ver}")
 
@@ -165,9 +182,11 @@ class LauncherApp:
                 self.launch_bot("Sistema atualizado. Iniciando...")
 
         except Exception as e:
-            self.launch_bot(f"Erro: {e}")
+            self.update_gui("status", f"Erro: {e}")
+            self.root.after(0, self._enable_close_button)
 
     def download_update(self, new_ver):
+        import requests  # Lazy import
         try:
             self.update_gui("status", "Baixando nova versão...")
 

@@ -25,7 +25,17 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        # Libs externas pesadas não utilizadas
+        'numpy', 'pandas', 'scipy', 'sklearn',
+        'torch', 'tensorflow', 'keras', 'cv2',
+        # Módulos de teste
+        'unittest', 'pytest', 'nose',
+        # Servidores não usados
+        'http.server', 'xmlrpc', 'ftplib',
+        # Debug/docs
+        'pydoc', 'pdb',
+    ],
     noarchive=False,
     optimize=2,
 )

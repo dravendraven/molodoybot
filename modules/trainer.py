@@ -669,6 +669,9 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
     # Anti Kill-Steal Detection
     engagement_detector = EngagementDetector()
 
+    # Tracking de estado AFK para reset do SpawnTracker (evita falsos positivos)
+    _was_afk_last_cycle = False
+
     while True:
         if check_running and not check_running(): 
             return
@@ -721,8 +724,17 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
 
         # Pausa durante AFK humanization
         if state.is_afk_paused:
+            _was_afk_last_cycle = True
+            remaining = state.get_afk_pause_remaining()
+            set_status(f"pausado (AFK {remaining:.0f}s)")
             time.sleep(0.5)
             continue
+
+        # RESET: Pausa AFK terminou (transição AFK→ATIVO)
+        # Evita falso positivo de spawn suspeito com criaturas que apareceram durante AFK
+        if _was_afk_last_cycle:
+            trainer_spawn_tracker.reset()
+            _was_afk_last_cycle = False
 
         min_delay = get_cfg('min_delay', 1.0)
         max_delay = get_cfg('max_delay', 2.0)

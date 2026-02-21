@@ -42,7 +42,7 @@ import time
 import win32gui
 import win32con
 import win32api
-import requests
+# import requests  # Lazy import: send_telegram()
 import winsound
 import os
 import json
@@ -50,7 +50,7 @@ import random # Para o delay humano
 import psutil # Para monitoramento de CPU e RAM
 from utils.timing import gauss_wait
 from datetime import datetime
-from PIL import Image # Import necessário para imagens
+# from PIL import Image  # Lazy import: update_minimap_loop()
 # matplotlib será carregado sob demanda (lazy loading) para acelerar o startup
 plt = None
 FigureCanvasTkAgg = None
@@ -88,9 +88,10 @@ from database import foods_db
 from modules.trainer import trainer_loop
 from modules.alarm import alarm_loop
 from modules.cavebot import Cavebot
-from modules.spear_picker import spear_picker_loop
-from modules.aimbot import AimbotModule
-from modules.debug_monitor import init_debug_monitor, show_debug_monitor
+# Lazy imports - carregados sob demanda para acelerar startup
+# from modules.spear_picker import spear_picker_loop  # Lazy: start_spear_picker_thread()
+# from modules.aimbot import AimbotModule              # Lazy: start_aimbot_thread()
+# from modules.debug_monitor import ...               # Lazy: após criar app
 from core.player_core import get_connected_char_name
 from core.bot_state import state
 from core.action_scheduler import init_scheduler, get_scheduler, stop_scheduler
@@ -374,6 +375,7 @@ def log(msg):
 def send_telegram(msg):
     if "TOKEN" in TELEGRAM_TOKEN: return
     try:
+        import requests  # Lazy import
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         data = {"chat_id": BOT_SETTINGS['telegram_chat_id'], "text": f"🚨 {msg}"}
         requests.post(url, data=data, timeout=2)
@@ -1228,6 +1230,7 @@ def start_spear_picker_thread():
     Pega spears do chao automaticamente (funcionalidade para Paladinos).
     """
     global pm, base_addr
+    from modules.spear_picker import spear_picker_loop  # Lazy import
 
     print("[SpearPicker] Thread iniciada.")
 
@@ -1256,6 +1259,7 @@ def start_aimbot_thread():
     Usa runas via hotkey (F5 por padrao) no alvo atual.
     """
     global pm, base_addr
+    from modules.aimbot import AimbotModule  # Lazy import
 
     print("[Aimbot] Thread iniciada.")
 
@@ -3287,6 +3291,7 @@ def hide_minimap_panel():
 def update_minimap_loop():
     """Auto-scheduled loop to update minimap every 3 seconds."""
     global minimap_label, minimap_image_ref, minimap_visualizer, cavebot_instance, main_window
+    from PIL import Image  # Lazy import
 
     # Check if widget exists
     if not minimap_label or not minimap_label.winfo_exists():
@@ -3566,7 +3571,8 @@ if __name__ == "__main__":
     # Atualiza visibilidade baseada na vocação
     main_window.update_stats_visibility()
 
-    # Inicializar Debug Monitor
+    # Inicializar Debug Monitor (lazy import)
+    from modules.debug_monitor import init_debug_monitor, show_debug_monitor
     init_debug_monitor(app)
 
     # Abrir Debug Monitor automaticamente se habilitado
