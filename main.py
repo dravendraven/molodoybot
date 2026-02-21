@@ -2133,7 +2133,10 @@ def global_afk_pause_thread():
             # Não pausar com loot aberto
             if state.has_open_loot or state.is_processing_loot:
                 return False
-            # Não pausar se houver criaturas visíveis na tela
+            # Não pausar se há alvos visíveis (flag do trainer - backup rápido)
+            if state.has_visible_targets:
+                return False
+            # Não pausar se houver criaturas visíveis na tela (scan completo)
             try:
                 from core.battlelist import BattleListScanner
                 _, _, pz = get_player_pos(pm, base_addr)

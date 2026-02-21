@@ -419,6 +419,18 @@ class Cavebot:
             self.last_action_time = time.time()
             return
 
+        # NOVO: Pausa durante AFK humanization (pausas aleatórias)
+        if state.is_afk_paused:
+            self._was_paused = True
+            self.current_state = self.STATE_PAUSED
+            remaining = state.get_afk_pause_remaining()
+            self.state_message = f"💤 Pausa AFK ({remaining:.0f}s)"
+            if DEBUG_PATHFINDING and self._last_logged_pause != "afk_pause":
+                self._last_logged_pause = "afk_pause"
+                print(f"[{_ts()}] [Cavebot] 💤 PAUSA AFK: {remaining:.0f}s restantes")
+            self.last_action_time = time.time()
+            return
+
         # Controle de Cooldown - Verifica se já pode dar o próximo passo
         # Usa next_walk_time (timestamp futuro) ao invés de last_action_time - walk_delay
         now = time.time()

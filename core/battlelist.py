@@ -254,6 +254,15 @@ class SpawnTracker:
         self.cleanup_age = cleanup_age
         self._warmed_up = False  # Primeiro ciclo apenas registra
 
+    def reset(self):
+        """
+        Reseta o tracker para estado inicial (warmup).
+        Usar quando alarme é religado ou após pausa AFK para evitar falsos positivos.
+        """
+        self.known_creatures.clear()
+        self._warmed_up = False
+        self.last_player_z = None
+
     def update(self, creatures: List[Creature], player_x: int, player_y: int, player_z: int, self_id: int = 0) -> List[Creature]:
         """
         Atualiza tracker com scan atual e retorna criaturas com spawn suspeito.

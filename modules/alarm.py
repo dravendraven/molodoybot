@@ -143,6 +143,10 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
     scanner = BattleListScanner(pm, base_addr)
     spawn_tracker = SpawnTracker(suspicious_range=5, floor_change_cooldown=3.0)
 
+    # Tracking de estado para reset do SpawnTracker (evita falsos positivos)
+    _was_enabled_last_cycle = False
+    _was_afk_last_cycle = False
+
     # Movimento inesperado: hwnd para walk-back
     hwnd = win32gui.FindWindow("TibiaClient", None)
 
@@ -153,6 +157,15 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
 
         # 1. Verifica se o Alarme Global está ativado
         enabled = get_cfg('enabled', False)
+
+        # RESET: Alarme foi religado (transição OFF→ON)
+        # Evita falso positivo de spawn suspeito com criaturas que apareceram enquanto OFF
+        # Evita falso positivo de mana GM com regeneração natural enquanto OFF
+        if enabled and not _was_enabled_last_cycle:
+            spawn_tracker.reset()
+            last_mana_value = None
+        _was_enabled_last_cycle = enabled
+
         if not enabled:
             set_safe_state(True)
             set_gm_state(False)
@@ -402,6 +415,15 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
             # C2. DETECÇÃO DE SPAWN SUSPEITO (GM sumonando criaturas)
             # =================================================================
             if visual_enabled:
+                # RESET: Pausa AFK terminou (transição AFK→ATIVO)
+                # Evita falso positivo de spawn suspeito com criaturas que apareceram durante AFK
+                # Evita falso positivo de mana GM com regeneração natural durante AFK
+                current_afk = state.is_afk_paused
+                if not current_afk and _was_afk_last_cycle:
+                    spawn_tracker.reset()
+                    last_mana_value = None
+                _was_afk_last_cycle = current_afk
+
                 suspicious_spawns = spawn_tracker.update(all_creatures, my_x, my_y, my_z, self_id=state.char_id)
 
                 # Durante pausa AFK, ignora spawns suspeitos (evita falso positivo de respawns naturais)
@@ -461,8 +483,13 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
                     # Manter Posição: retornar ao ponto (só se runemaker return_safe NÃO está ativo)
                     if keep_position and not runemaker_return_safe:
                         try:
-                            from modules.runemaker import move_to_coord_hybrid
-                            move_to_coord_hybrid(pm, base_addr, hwnd, origin, log_func=log_msg)
+                            from core.navigation_utils import navigate_to_position
+                            navigate_to_position(
+                                pm, base_addr, hwnd, origin,
+                                packet=None,
+                                clear_obstacles=True,
+                                log_func=log_msg
+                            )
                         except Exception as e:
                             log_msg(f"[ALARM] Erro ao retornar posição: {e}")
 

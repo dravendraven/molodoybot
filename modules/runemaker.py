@@ -3,17 +3,16 @@ import random
 import win32con
 
 from core.packet import (
-    PacketManager, get_inventory_pos, get_container_pos,
-    OP_WALK_NORTH, OP_WALK_EAST, OP_WALK_SOUTH, OP_WALK_WEST,
-    OP_WALK_NORTH_EAST, OP_WALK_SOUTH_EAST, OP_WALK_SOUTH_WEST, OP_WALK_NORTH_WEST
+    PacketManager, get_inventory_pos, get_container_pos
 )
+from core.navigation_utils import navigate_to_position
 from core.packet_mutex import PacketMutex
 from config import *
 from core.inventory_core import find_item_in_containers
 from modules.auto_loot import scan_containers
-from core.map_core import get_player_pos, get_game_view, get_screen_coord
+from core.map_core import get_player_pos
 from modules.eater import attempt_eat
-from core.input_core import press_hotkey, left_click_at
+from core.input_core import press_hotkey
 from database import foods_db
 from core.config_utils import make_config_getter
 from core.bot_state import state
@@ -32,52 +31,6 @@ def get_vk_code(key_str):
         "F10": win32con.VK_F10, "F11": win32con.VK_F11, "F12": win32con.VK_F12
     }
     return mapping.get(key_str, win32con.VK_F3)
-
-def move_to_coord_hybrid(pm, base_addr, hwnd, target_pos, log_func=print, packet=None):
-    # Cria PacketManager se não foi passado
-    if packet is None:
-        packet = PacketManager(pm, base_addr)
-
-    px, py, pz = get_player_pos(pm, base_addr)
-    tx, ty, tz = target_pos
-
-    # 1. Chegou?
-    if px == tx and py == ty: return True
-    if pz != tz: return False # Andar errado
-
-    dx = tx - px
-    dy = ty - py
-
-    dist_sqm = max(abs(dx), abs(dy))
-
-    # [MELHORIA] Se estiver no SQM adjacente (Distância 1)
-    if dist_sqm == 1:
-        op_code = None
-
-        if dy < 0 and dx > 0:   op_code = OP_WALK_NORTH_EAST
-        elif dy > 0 and dx > 0: op_code = OP_WALK_SOUTH_EAST
-        elif dy > 0 and dx < 0: op_code = OP_WALK_SOUTH_WEST
-        elif dy < 0 and dx < 0: op_code = OP_WALK_NORTH_WEST
-
-        elif dy < 0: op_code = OP_WALK_NORTH
-        elif dy > 0: op_code = OP_WALK_SOUTH
-        elif dx < 0: op_code = OP_WALK_WEST
-        elif dx > 0: op_code = OP_WALK_EAST
-
-        if op_code:
-            packet.walk(op_code)
-            time.sleep(0.5 + random.uniform(0.05, 0.15))
-            return False 
-
-    # 2. SE ESTIVER LONGE (> 1 SQM) -> USA MOUSE
-    gv = get_game_view(pm, base_addr)
-    if gv:
-        screen_x, screen_y = get_screen_coord(gv, dx, dy, hwnd)
-        left_click_at(hwnd, screen_x, screen_y)
-        time.sleep(0.5 + (dist_sqm * 0.1)) 
-        return False
-            
-    return False
 
 def get_item_id_in_hand(pm, base_addr, slot_enum):
     try:
@@ -396,9 +349,17 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                 current_state = STATE_FLEEING
 
             set_status("fugindo para safe spot...")
-            # Movimento para Safe
-            move_to_coord_hybrid(pm, base_addr, hwnd, safe_pos, log_func=None)
-            time.sleep(0.5)
+            # Movimento para Safe usando A* navigation
+            arrived = navigate_to_position(
+                pm, base_addr, hwnd, safe_pos,
+                check_safety=lambda: not is_safe_callback() if is_safe_callback else True,
+                packet=packet,
+                clear_obstacles=True,
+                log_func=log_msg
+            )
+            if arrived:
+                log_msg("📍 Chegou ao safe spot!")
+            time.sleep(0.3)
             continue 
 
         # ======================================================================
@@ -419,12 +380,18 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                 if enable_move:
                     log_msg("🚶 Voltando para o Work Spot...")
                     set_status("voltando ao work spot...")
-                    arrived = move_to_coord_hybrid(pm, base_addr, hwnd, work_pos, log_func=None)
+                    arrived = navigate_to_position(
+                        pm, base_addr, hwnd, work_pos,
+                        check_safety=lambda: is_safe_callback() if is_safe_callback else True,
+                        packet=packet,
+                        clear_obstacles=True,
+                        log_func=log_msg
+                    )
                     if arrived:
                         current_state = STATE_WORKING
                         log_msg("📍 Cheguei no trabalho.")
                     else:
-                        continue # Continua andando até chegar
+                        continue  # Continua andando ate chegar
                 else:
                     current_state = STATE_WORKING
 
