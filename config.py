@@ -7,7 +7,7 @@ from database import foods_db
 DEBUG_MODE = False    # Modo debug geral - ativa logs extras em diversos módulos
 HIT_LOG_ENABLED = False  # Controls writing hits to hits_monitor.txt
 RESOURCE_LOG_ENABLED = True   # Loga consumo de CPU e RAM
-RESOURCE_LOG_INTERVAL = 30     # Intervalo entre logs (segundos)
+RESOURCE_LOG_INTERVAL = 120    # Intervalo entre logs (segundos) - 2 minutos
 XRAY_TRAINER_DEBUG = False    # True = mostra overlay de debug do trainer
 
 # Bot State Debugger HUD
@@ -371,8 +371,8 @@ FATIGUE_REST_RANGE = (10, 50)
 # Porcentagem extra de delay motor quando estiver cansado (Ex: 0.3 = 30% mais lento)
 FATIGUE_MOTOR_PENALTY = 0.4
 
-BASE_REACTION_MIN = 0.5
-BASE_REACTION_MAX = 0.9
+BASE_REACTION_MIN = 0.25
+BASE_REACTION_MAX = 0.8
 TRAVEL_SPEED_MIN = 0.02
 TRAVEL_SPEED_MAX = 0.09
 

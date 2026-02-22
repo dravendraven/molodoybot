@@ -146,6 +146,13 @@ from core.action_scheduler import init_scheduler, get_scheduler, stop_scheduler
 from core.game_state import game_state, init_game_state, shutdown_game_state
 from core.overlay_renderer import renderer as overlay_renderer
 
+# Sistema de Logging Centralizado
+from core.logger import (
+    setup_logger, get_logger, install_crash_handler,
+    install_thread_exception_handler, thread_safe_wrapper
+)
+logger = setup_logger()
+
 _update_splash("Carregando chat...")
 from core.chat_handler import ChatHandler
 
@@ -190,6 +197,28 @@ except Exception:
         try:
             ctypes.windll.user32.SetProcessDPIAware()
         except: pass
+
+# ==============================================================================
+# 1.5 CRASH HANDLER GLOBAL
+# ==============================================================================
+
+def _get_game_state_for_crash():
+    """Retorna estado do jogo para incluir no crash log."""
+    try:
+        return {
+            "player_pos": str(game_state.get_player_pos()) if game_state else "N/A",
+            "hp": game_state.get_hp() if game_state else "N/A",
+            "mana": game_state.get_mana() if game_state else "N/A",
+            "is_connected": state.is_connected if state else False,
+            "is_running": state.is_running if state else False,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+# Instala handlers de crash
+install_crash_handler(game_state_getter=_get_game_state_for_crash)
+install_thread_exception_handler()
+logger.info("Sistema de crash logging inicializado")
 
 # ==============================================================================
 # 2. VARIÁVEIS GLOBAIS E CONFIGURAÇÃO
@@ -1239,7 +1268,7 @@ def connection_watchdog():
 def start_cavebot_thread():
     """Gerencia a inicialização e o loop do Cavebot."""
     global cavebot_instance, pm, base_addr
-    print("Thread Cavebot iniciada.")
+    logger.info("Thread Cavebot iniciada.")
 
     while state.is_running:
         # 1. Inicialização Lazy (Só cria quando o PM existir)
@@ -1278,8 +1307,17 @@ def start_cavebot_thread():
                         label_cavebot_status.configure(text=label_text)
                     except:
                         pass  # Silencia erros de UI
+            except MemoryError as e:
+                logger.critical(f"MEMORY ERROR em Cavebot Thread!")
+                logger.exception("Stack trace:")
+                try:
+                    import gc
+                    gc.collect()
+                except:
+                    pass
+                time.sleep(10)
             except Exception as e:
-                print(f"Erro Cavebot Loop: {e}")
+                logger.exception(f"Erro Cavebot Loop: {e}")
                 time.sleep(1)
 
         time.sleep(0.05)
@@ -1499,8 +1537,17 @@ def start_trainer_thread():
             # Se a função retornar (ex: desconectou), espera um pouco antes de tentar de novo
             time.sleep(1)
             
+        except MemoryError as e:
+            logger.critical(f"MEMORY ERROR em Trainer Thread!")
+            logger.exception("Stack trace:")
+            try:
+                import gc
+                gc.collect()
+            except:
+                pass
+            time.sleep(10)
         except Exception as e:
-            print(f"Trainer Thread Crash: {e}")
+            logger.exception(f"Trainer Thread Crash: {e}")
             time.sleep(5)
 
 def start_alarm_thread():
@@ -1596,8 +1643,17 @@ def start_alarm_thread():
         try:
             alarm_loop(pm, base_addr, check_run, alarm_cfg, callbacks,
                       status_callback=update_alarm_status)
+        except MemoryError as e:
+            logger.critical(f"MEMORY ERROR em Alarm Thread!")
+            logger.exception("Stack trace:")
+            try:
+                import gc
+                gc.collect()
+            except:
+                pass
+            time.sleep(10)
         except Exception as e:
-            print(f"Alarm Thread Crash: {e}")
+            logger.exception(f"Alarm Thread Crash: {e}")
             time.sleep(5)
 
 def regen_monitor_loop():
@@ -2321,8 +2377,17 @@ def runemaker_thread():
                            status_callback=update_runemaker_status)
 
             time.sleep(1)
+        except MemoryError as e:
+            logger.critical(f"MEMORY ERROR em Runemaker Thread!")
+            logger.exception("Stack trace:")
+            try:
+                import gc
+                gc.collect()
+            except:
+                pass
+            time.sleep(10)
         except Exception as e:
-            print(f"Erro Runemaker: {e}")
+            logger.exception(f"Erro Runemaker: {e}")
             time.sleep(5)
 
 def lookid_monitor_loop():
@@ -2355,7 +2420,7 @@ def lookid_monitor_loop():
         time.sleep(0.1)
 
 def resource_monitor_loop():
-    """Thread que monitora e loga consumo de CPU e RAM."""
+    """Thread que monitora e loga consumo de CPU e RAM com alertas."""
     if not RESOURCE_LOG_ENABLED:
         return
 
@@ -2363,13 +2428,44 @@ def resource_monitor_loop():
     process.cpu_percent()  # primeira chamada retorna 0, descartamos
     time.sleep(1)
 
+    # Thresholds de memória (em MB)
+    memory_warning_threshold = 400
+    memory_critical_threshold = 600
+    last_warning_time = 0
+    warning_cooldown = 300  # 5 minutos entre warnings repetidos
+
     while state.is_running:
         try:
             cpu = process.cpu_percent()
             ram_mb = process.memory_info().rss / (1024 * 1024)
+
+            # Log normal (nível DEBUG para não poluir)
+            logger.debug(f"Recursos: CPU={cpu:.1f}% RAM={ram_mb:.1f}MB")
+
+            # Também envia para o log visual (compatibilidade)
             log(f"CPU: {cpu:.1f}% | RAM: {ram_mb:.1f} MB")
-        except:
-            pass
+
+            current_time = time.time()
+
+            # Alerta crítico de memória
+            if ram_mb > memory_critical_threshold:
+                logger.critical(f"MEMORIA CRITICA: {ram_mb:.1f}MB - risco de crash!")
+                try:
+                    import gc
+                    collected = gc.collect()
+                    logger.warning(f"Garbage collection forçado: {collected} objetos liberados")
+                except Exception:
+                    pass
+
+            # Warning de memória alta (com cooldown)
+            elif ram_mb > memory_warning_threshold:
+                if current_time - last_warning_time > warning_cooldown:
+                    logger.warning(f"Memoria alta: {ram_mb:.1f}MB (threshold: {memory_warning_threshold}MB)")
+                    last_warning_time = current_time
+
+        except Exception as e:
+            logger.error(f"Erro no monitor de recursos: {e}")
+
         time.sleep(RESOURCE_LOG_INTERVAL)
 
 # ==============================================================================
@@ -3609,24 +3705,26 @@ if __name__ == "__main__":
         start_sniffer(server_ip, PROCESS_NAME)
 
     # Iniciar Threads
-    threading.Thread(target=start_trainer_thread, daemon=True).start()
-    threading.Thread(target=start_alarm_thread, daemon=True).start()
-    threading.Thread(target=auto_loot_thread, daemon=True).start()
-    threading.Thread(target=gui_updater_loop, daemon=True).start()
-    threading.Thread(target=regen_monitor_loop, daemon=True).start()
-    threading.Thread(target=auto_fisher_thread, daemon=True).start()
-    threading.Thread(target=auto_eater_thread, daemon=True).start()
-    threading.Thread(target=auto_stacker_thread, daemon=True).start()
+    logger.info("Iniciando threads do bot...")
+    threading.Thread(target=start_trainer_thread, daemon=True, name="Trainer").start()
+    threading.Thread(target=start_alarm_thread, daemon=True, name="Alarm").start()
+    threading.Thread(target=auto_loot_thread, daemon=True, name="AutoLoot").start()
+    threading.Thread(target=gui_updater_loop, daemon=True, name="GUI-Updater").start()
+    threading.Thread(target=regen_monitor_loop, daemon=True, name="RegenMonitor").start()
+    threading.Thread(target=auto_fisher_thread, daemon=True, name="AutoFisher").start()
+    threading.Thread(target=auto_eater_thread, daemon=True, name="AutoEater").start()
+    threading.Thread(target=auto_stacker_thread, daemon=True, name="AutoStacker").start()
     threading.Thread(target=global_afk_pause_thread, daemon=True, name="AFK-Global").start()
-    threading.Thread(target=runemaker_thread, daemon=True).start()
-    threading.Thread(target=connection_watchdog, daemon=True).start()
-    threading.Thread(target=start_cavebot_thread, daemon=True).start()
-    threading.Thread(target=lookid_monitor_loop, daemon=True).start()
-    threading.Thread(target=start_chat_handler_thread, daemon=True).start()
-    threading.Thread(target=start_spear_picker_thread, daemon=True).start()
-    threading.Thread(target=start_aimbot_thread, daemon=True).start()
-    threading.Thread(target=auto_torch_thread, daemon=True).start()
-    threading.Thread(target=resource_monitor_loop, daemon=True).start()
+    threading.Thread(target=runemaker_thread, daemon=True, name="Runemaker").start()
+    threading.Thread(target=connection_watchdog, daemon=True, name="ConnectionWatchdog").start()
+    threading.Thread(target=start_cavebot_thread, daemon=True, name="Cavebot").start()
+    threading.Thread(target=lookid_monitor_loop, daemon=True, name="LookIDMonitor").start()
+    threading.Thread(target=start_chat_handler_thread, daemon=True, name="ChatHandler").start()
+    threading.Thread(target=start_spear_picker_thread, daemon=True, name="SpearPicker").start()
+    threading.Thread(target=start_aimbot_thread, daemon=True, name="Aimbot").start()
+    threading.Thread(target=auto_torch_thread, daemon=True, name="AutoTorch").start()
+    threading.Thread(target=resource_monitor_loop, daemon=True, name="ResourceMonitor").start()
+    logger.info(f"Threads iniciadas: {len([t for t in threading.enumerate() if t.daemon])} daemon threads")
 
     # Atualiza visibilidade baseada na vocação
     main_window.update_stats_visibility()
@@ -3649,6 +3747,7 @@ if __name__ == "__main__":
     main_window.update_status_panel()
 
     log("🚀 Iniciado.")
+    logger.info("MolodoyBot iniciado com sucesso. Logs em: logs/molodoy_bot.log")
     # _close_splash()  # DISABLED: splash disabled
     app.mainloop()
     state.stop()  # Garante que todas as threads encerrem ao fechar

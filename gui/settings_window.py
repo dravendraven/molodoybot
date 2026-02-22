@@ -1121,6 +1121,15 @@ class SettingsWindow:
         if settings['mana_train']:
             switch_train.select()
 
+        switch_logout_blanks = ctk.CTkSwitch(frame_extras, text="Logout se sem Blanks", width=60, height=20,
+                                             font=self.UI['BODY']['font'])
+        switch_logout_blanks.pack(anchor="w", padx=10, pady=2)
+        if settings.get('logout_on_no_blanks', False):
+            switch_logout_blanks.select()
+
+        ctk.CTkLabel(frame_extras, text="↳ Desloga após 15s parado sem blanks",
+                    **self.UI['HINT']).pack(anchor="w", padx=45)
+
         def save_rune():
             try:
                 s = self.cb.get_bot_settings()
@@ -1135,6 +1144,7 @@ class SettingsWindow:
                 s['rune_movement'] = bool(switch_movement.get())
                 s['auto_eat'] = bool(switch_eat.get())
                 s['mana_train'] = bool(switch_train.get())
+                s['logout_on_no_blanks'] = bool(switch_logout_blanks.get())
                 self.cb.save_config_file()
                 self.cb.log("🔮 Rune Config salva!")
             except:

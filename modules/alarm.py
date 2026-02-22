@@ -300,9 +300,16 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
 
                     # Alarme Chat Comum
                     elif chat_enabled and event.speak_type in (0x01, 0x02, 0x03):  # say, whisper, yell
-                        log_msg(f"💬 Chat: {event.speaker}: {event.message}")
-                        set_status(f"💬 {event.speaker}")
-                        winsound.Beep(800, 300)
+                        # Ignora se está na safe_list
+                        if not any(s in event.speaker for s in safe_list):
+                            log_msg(f"💬 Chat: {event.speaker}: {event.message}")
+                            set_status(f"💬 {event.speaker}")
+                            winsound.Beep(800, 300)
+
+                            # Telegram notification com rate limiting
+                            if (time.time() - last_telegram_time) > TELEGRAM_INTERVAL_NORMAL:
+                                send_telegram(f"💬 Chat: {event.speaker}: {event.message}")
+                                last_telegram_time = time.time()
 
                 # 2. Fallback: leitura de memória (para garantir compatibilidade)
                 if not chat_events:
@@ -339,9 +346,16 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
                             # 2. Alarme Chat Comum
                             elif chat_enabled:
                                 if "says:" in author or "whispers:" in author or "yells:" in author:
-                                    log_msg(f"💬 Chat: {author} {msg}")
-                                    set_status(f"💬 {author}")
-                                    winsound.Beep(800, 300)
+                                    # Ignora se está na safe_list
+                                    if not any(s in author for s in safe_list):
+                                        log_msg(f"💬 Chat: {author} {msg}")
+                                        set_status(f"💬 {author}")
+                                        winsound.Beep(800, 300)
+
+                                        # Telegram notification com rate limiting
+                                        if (time.time() - last_telegram_time) > TELEGRAM_INTERVAL_NORMAL:
+                                            send_telegram(f"💬 Chat: {author} {msg}")
+                                            last_telegram_time = time.time()
 
             # =================================================================
             # C. VERIFICAÇÃO VISUAL (CRIATURAS)

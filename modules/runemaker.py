@@ -286,6 +286,11 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
     last_combat_time = 0
     COMBAT_COOLDOWN = 7  # Aumentado para 7s: aguarda estabilização do loot (3-5s) + margem de segurança
 
+    # Controle de Logout por Falta de Blanks
+    logout_no_blanks_start = None  # Timestamp quando detectou falta de blanks
+    logout_no_blanks_pos = None    # Posição quando detectou falta de blanks
+    LOGOUT_NO_BLANKS_DELAY = 15    # Segundos para aguardar antes do logout
+
     log_msg(f"Iniciado (Modo Segurança Avançada).")
 
     # PacketManager para envio de pacotes
@@ -325,7 +330,17 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
             continue
 
         # ======================================================================
-        # PRIORIDADE 1.5: PAUSA AFK (HUMANIZAÇÃO)
+        # PRIORIDADE 1.5: CANCELAMENTO DE AFK POR EMERGÊNCIA
+        # ======================================================================
+        # AFK pause é cancelado se fuga for necessária (segurança > humanização)
+        if state.is_afk_paused and not is_safe and enable_move:
+            log_msg("⚠️ AFK pause cancelado - fuga necessária para segurança!")
+            set_status("⚠️ Emergência - cancelando AFK")
+            state.set_afk_pause(False)
+            # Continua para processar fuga normalmente
+
+        # ======================================================================
+        # PRIORIDADE 2: PAUSA AFK (HUMANIZAÇÃO)
         # ======================================================================
         if state.is_afk_paused:
             remaining = state.get_afk_pause_remaining()
@@ -334,7 +349,7 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
             continue
 
         # ======================================================================
-        # PRIORIDADE 2: FUGA (MONSTRO/PK)
+        # PRIORIDADE 3: FUGA (MONSTRO/PK)
         # ======================================================================
         if not is_safe and enable_move:
             if current_state != STATE_FLEEING:
@@ -367,7 +382,7 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
             continue
 
         # ======================================================================
-        # PRIORIDADE 3: RETORNO
+        # PRIORIDADE 4: RETORNO
         # ======================================================================
         if is_safe and current_state == STATE_FLEEING:
             current_state = STATE_RETURNING
@@ -402,7 +417,7 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                     state.set_runemaker_fleeing(False)  # Fallback: garante que flag está limpo
 
         # ======================================================================
-        # PRIORIDADE 4: MODO DE ESPERA (COOL-OFF / SEGURANÇA GLOBAL)
+        # PRIORIDADE 5: MODO DE ESPERA (COOL-OFF / SEGURANÇA GLOBAL)
         # ======================================================================
         # Se 'can_perform_actions' for False, significa que estamos no delay de segurança
         # definido pelo Main (ex: GM sumiu há pouco tempo, ou monstro sumiu e move=off).
@@ -414,7 +429,7 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
             continue
 
         # ======================================================================
-        # PRIORIDADE 5: TRABALHO (MANA TRAIN / RUNAS / COMIDA)
+        # PRIORIDADE 6: TRABALHO (MANA TRAIN / RUNAS / COMIDA)
         # ======================================================================
         
         # 1. Proteção de Combate (integrada com bot_state)
@@ -510,9 +525,50 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                         blank_id = get_cfg('blank_id', 3147)
                         blank_data = find_item_in_containers(pm, base_addr, blank_id)
                         if not blank_data:
-                            log_msg(f"⚠️ Sem Blanks na BP!")
+                            # Feature: Logout automático após período sem blanks
+                            logout_on_no_blanks = get_cfg('logout_on_no_blanks', False)
+
+                            if logout_on_no_blanks:
+                                current_pos = get_player_pos(pm, base_addr)
+
+                                # Primeira detecção: salvar estado
+                                if logout_no_blanks_start is None:
+                                    logout_no_blanks_start = time.time()
+                                    logout_no_blanks_pos = current_pos
+                                    log_msg(f"⚠️ Sem Blanks na BP! Logout em {LOGOUT_NO_BLANKS_DELAY}s se permanecer parado...")
+                                    set_status(f"sem blanks - logout em {LOGOUT_NO_BLANKS_DELAY}s")
+                                else:
+                                    # Verificar se jogador se moveu
+                                    if current_pos != logout_no_blanks_pos:
+                                        log_msg("🚶 Movimento detectado - logout cancelado, aguardando novo ciclo...")
+                                        logout_no_blanks_start = None
+                                        logout_no_blanks_pos = None
+                                    else:
+                                        # Verificar se passou o tempo de espera
+                                        elapsed = time.time() - logout_no_blanks_start
+                                        remaining = LOGOUT_NO_BLANKS_DELAY - elapsed
+
+                                        if remaining <= 0:
+                                            log_msg("🚪 LOGOUT: Sem blanks e parado por 15s - deslogando...")
+                                            set_status("deslogando...")
+                                            try:
+                                                packet.quit_game()
+                                                time.sleep(2)  # Aguarda logout processar
+                                                return  # Encerra o loop
+                                            except Exception as e:
+                                                log_msg(f"❌ Erro ao deslogar: {e}")
+                                        else:
+                                            set_status(f"sem blanks - logout em {int(remaining)}s")
+                            else:
+                                log_msg(f"⚠️ Sem Blanks na BP!")
+
                             next_cast_time = 0
+                            state.set_runemaking(False)
                             continue
+
+                        # Reset logout state - blanks foram encontradas
+                        logout_no_blanks_start = None
+                        logout_no_blanks_pos = None
 
                         # PACKET MUTEX: Wrap entire runemaking cycle (unequip -> blank -> cast -> return -> reequip)
                         with PacketMutex("runemaker"):
