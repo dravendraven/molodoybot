@@ -9,7 +9,6 @@ import customtkinter as ctk
 import tkinter as tk
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
-from PIL import Image
 
 # matplotlib será carregado sob demanda (lazy loading)
 plt = None

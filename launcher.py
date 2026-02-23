@@ -234,9 +234,9 @@ class LauncherApp:
         self.update_gui("status", msg)
         self.update_gui("progress", 100)
 
-        # Aguarda 1 segundo para ler a mensagem
+        # Breve pausa para ler a mensagem
         import time
-        time.sleep(1.0)
+        time.sleep(0.3)
 
         if os.path.exists(BOT_EXE_NAME):
             subprocess.Popen([BOT_EXE_NAME])
