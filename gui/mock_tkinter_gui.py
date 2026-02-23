@@ -574,13 +574,28 @@ class MockMainWindow:
         self._create_status_panel(main)
 
     def _create_header(self, parent):
-        """Header com botões."""
+        """Header com status + botões em linhas separadas."""
         frame = tk.Frame(parent, bg=COLORS['bg_main'])
-        frame.pack(fill="x", pady=(0, 10))
+        frame.pack(fill="x", pady=(0, 8))
+
+        # === LINHA 1: Status de conexão ===
+        status_line = tk.Frame(frame, bg=COLORS['bg_main'])
+        status_line.pack(fill="x", pady=(0, 6))
+
+        self.lbl_connection = tk.Label(
+            status_line, text="● Conectado",
+            bg=COLORS['bg_main'], fg=COLORS['accent_green'],
+            font=("Segoe UI", 11, "bold")
+        )
+        self.lbl_connection.pack(side="left")
+
+        # === LINHA 2: Botões ===
+        btn_line = tk.Frame(frame, bg=COLORS['bg_main'])
+        btn_line.pack(fill="x")
 
         # Config button
         ModernButton(
-            frame, text="⚙  Config",
+            btn_line, text="⚙ Config",
             bg=COLORS['bg_panel'],
             hover_bg=COLORS['bg_hover'],
             font=("Segoe UI", 10, "bold"),
@@ -589,27 +604,19 @@ class MockMainWindow:
 
         # Pause button
         ModernButton(
-            frame, text="⏸  Pausar",
+            btn_line, text="⏸ Pausar",
             bg=COLORS['bg_panel'],
             hover_bg=COLORS['bg_hover'],
             font=("Segoe UI", 10)
-        ).pack(side="left", padx=(8, 0))
+        ).pack(side="left", padx=(6, 0))
 
         # Raio-X button (right)
         ModernButton(
-            frame, text="Raio-X",
+            btn_line, text="👁 Raio-X",
             bg=COLORS['bg_panel'],
             hover_bg=COLORS['accent_blue'],
             font=("Segoe UI", 10)
         ).pack(side="right")
-
-        # Connection status
-        self.lbl_connection = tk.Label(
-            frame, text="● Conectado",
-            bg=COLORS['bg_main'], fg=COLORS['accent_green'],
-            font=("Segoe UI", 10)
-        )
-        self.lbl_connection.pack(side="right", padx=(0, 12))
 
     def _create_controls(self, parent):
         """Painel de switches dos módulos."""
