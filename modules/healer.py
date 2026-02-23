@@ -34,10 +34,10 @@ HEALING_RUNES = {
 }
 
 HEALING_SPELLS = {
-    "exura": {"mana": 20},
-    "exura vita": {"mana": 40},
-    "exura gran": {"mana": 70},
-    "exura sio": {"mana": 120, "target": True},
+    "exura": {"mana": 25},
+    "exura vita": {"mana": 80},
+    "exura gran": {"mana": 40},
+    "exura sio": {"mana": 70, "target": True},
 }
 
 
