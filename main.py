@@ -2518,6 +2518,8 @@ def gui_updater_loop():
 
         # --- Update skill trackers (read directly from memory for reliability) ---
         global current_primary_skill_name
+        skill_lvl = 0  # Cache for reuse later in this iteration
+        vocation = BOT_SETTINGS.get('vocation', 'Knight')
         if pm is not None:
             try:
                 # Detectar skill principal baseado na vocação
@@ -2589,9 +2591,8 @@ def gui_updater_loop():
 
         if pm is not None and sw_data['pct'] != -1:
             try:
-                # Usar skill principal detectado pela vocação
-                vocation = BOT_SETTINGS.get('vocation', 'Knight')
-                _, sw_lvl, _ = get_primary_skill_info(pm, base_addr, vocation)
+                # Reuse skill_lvl from earlier get_primary_skill_info call
+                sw_lvl = skill_lvl
                 sh_lvl = pm.read_int(base_addr + OFFSET_SKILL_SHIELD)
                 ml_pct = pm.read_int(base_addr + OFFSET_MAGIC_PCT)
                 ml_lvl = pm.read_int(base_addr + OFFSET_MAGIC_LEVEL)
