@@ -592,6 +592,7 @@ CHAT_PAUSE_DURATION = 10.0          # Segundos de pausa após última mensagem
 # Modo de combate: seguir criatura até dist<=1, depois atacar
 # Independente do spear_picker - útil para testes e combate melee
 FOLLOW_THEN_ATTACK = True  # True = segue antes de atacar
+CHASE_MODE_ENABLED = False  # True = usa walker A* para perseguir (em vez de packet.follow nativo)
 
 # ==============================================================================
 # AUTO-EXPLORE CONFIG (CAVEBOT)
