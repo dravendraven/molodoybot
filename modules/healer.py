@@ -19,6 +19,7 @@ from typing import Optional, List, Dict, Any, Callable
 
 from modules.base_module import BaseModule
 from core.game_state import game_state
+from core.battlelist import BattleListScanner
 from core.packet import get_container_pos
 from core.player_core import get_player_id
 from modules.auto_loot import scan_containers
@@ -112,6 +113,11 @@ class HealerModule(BaseModule):
     MODULE_NAME = "healer"
     THRESHOLD_JITTER = 3  # ±3% randomization
 
+    @property
+    def is_enabled(self) -> bool:
+        """Override to check healer_enabled instead of generic 'enabled'."""
+        return self.get_cfg('healer_enabled', False)
+
     def __init__(
         self,
         pm,
@@ -135,12 +141,8 @@ class HealerModule(BaseModule):
 
         ONE action per tick to prevent packet spam.
         """
-        # Check preconditions
+        # Check preconditions (includes healer_enabled via is_enabled override)
         if not self.can_act():
-            return
-
-        # Check healer enabled in settings
-        if not self.get_cfg('healer_enabled', False):
             return
 
         # Check GLOBAL cooldown (matches game's heal exhaust)
@@ -157,6 +159,9 @@ class HealerModule(BaseModule):
 
         # Sort by priority (lower number = higher priority)
         sorted_rules = sorted(self._rules, key=lambda r: r.priority)
+
+        if not sorted_rules:
+            return
 
         for rule in sorted_rules:
             if not rule.enabled:
@@ -177,6 +182,7 @@ class HealerModule(BaseModule):
                 continue
 
             # Execute heal and return (ONE action per tick)
+            print(f"[healer] Triggering heal: {target['name']} hp={target['hp_percent']}% < {jittered_threshold}%")
             success = self._execute_heal(rule, target)
             if success:
                 self._last_heal_time = time.time()  # Update GLOBAL cooldown
@@ -205,6 +211,7 @@ class HealerModule(BaseModule):
         """
         if rule.target_type == "self":
             hp, hp_max, hp_percent = game_state.get_player_hp()
+            print(f"[healer] Self HP: {hp}/{hp_max} ({hp_percent}%)")
             return {
                 'id': self._player_id,
                 'hp_percent': hp_percent,
@@ -214,24 +221,34 @@ class HealerModule(BaseModule):
         # For friend/creature: search battlelist by name
         target_name = rule.target_name.lower().strip()
         if not target_name:
+            print(f"[healer] Empty target name for {rule.target_type}")
             return None
 
-        # Get all creatures (includes players and monsters)
-        creatures = game_state.get_creatures()
+        # For "friend" targets, scan ALL entities directly from battlelist
+        # This bypasses is_player detection which may fail in some cases
+        if rule.target_type == "friend":
+            scanner = BattleListScanner(self.pm, self.base_addr)
+            entities = scanner.scan_all()
+            print(f"[healer] Searching for '{target_name}' in {len(entities)} battlelist entities")
+        else:
+            entities = game_state.get_creatures()
+            print(f"[healer] Searching for '{target_name}' in {len(entities)} creatures")
 
-        for creature in creatures:
+        for creature in entities:
             # Skip self
             if creature.id == self._player_id:
                 continue
 
             # Match by name (case insensitive)
             if creature.name.lower() == target_name and creature.is_visible:
+                print(f"[healer] Found target '{creature.name}' (id={creature.id}, hp={creature.hp_percent}%)")
                 return {
                     'id': creature.id,
                     'hp_percent': creature.hp_percent,
                     'name': creature.name
                 }
 
+        print(f"[healer] Target '{target_name}' not found on screen")
         return None  # Target not found on screen
 
     # =========================================================================
@@ -261,15 +278,15 @@ class HealerModule(BaseModule):
                 spell_words = f'exura sio "{target["name"]}"'
             # Other spells might not support targeting
             elif rule.target_type != "self":
-                self.log(f"Spell {spell_words} does not support targeting others")
+                print(f"[healer] Spell {spell_words} does not support targeting others")
                 return False
 
         try:
             self.packet.say(spell_words)
-            self.log(f"Healed {target['name']} with {spell_words}")
+            self.log(f"Curou {target['name']} com {spell_words}")
             return True
         except Exception as e:
-            self.log(f"Spell error: {e}")
+            print(f"[healer] Spell error: {e}")
             return False
 
     def _use_rune(self, rule: HealRule, target: Dict) -> bool:
@@ -278,7 +295,7 @@ class HealerModule(BaseModule):
         rune_id = HEALING_RUNES.get(rune_type)
 
         if not rune_id:
-            self.log(f"Unknown rune type: {rune_type}")
+            print(f"[healer] Unknown rune type: {rune_type}")
             return False
 
         # Find rune in containers
@@ -303,10 +320,10 @@ class HealerModule(BaseModule):
                 stack_pos=0,
                 creature_id=target['id']
             )
-            self.log(f"Healed {target['name']} with {rune_type} rune")
+            self.log(f"Curou {target['name']} com runa {rune_type}")
             return True
         except Exception as e:
-            self.log(f"Rune error: {e}")
+            print(f"[healer] Rune error: {e}")
             return False
 
     def _find_rune_in_backpack(self, rune_id: int) -> Optional[Dict]:
@@ -318,18 +335,21 @@ class HealerModule(BaseModule):
         """
         try:
             containers = scan_containers(self.pm, self.base_addr)
+            print(f"[healer] Scanning {len(containers)} containers for rune {rune_id}")
 
             for cont in containers:
                 for item in cont.items:
                     if item.id == rune_id:
+                        print(f"[healer] Found rune at container {cont.index}, slot {item.slot_index}, count={item.count}")
                         return {
                             'container_index': cont.index,
-                            'slot_index': item.slot,
+                            'slot_index': item.slot_index,
                             'count': item.count
                         }
         except Exception as e:
-            self.log(f"Error scanning containers: {e}")
+            print(f"[healer] Error scanning containers: {e}")
 
+        print(f"[healer] Rune {rune_id} not found in any container")
         return None
 
     # =========================================================================
@@ -341,7 +361,9 @@ class HealerModule(BaseModule):
         rules_data = self.get_cfg('healer_rules', [])
         self._rules = [HealRule.from_dict(r) for r in rules_data if isinstance(r, dict)]
         self._rules_dirty = False
-        self.log(f"Loaded {len(self._rules)} heal rules")
+        print(f"[healer] Loaded {len(self._rules)} heal rules")
+        for r in self._rules:
+            print(f"[healer]   Rule {r.priority}: {r.target_type}:{r.target_name} @ hp<{r.hp_below_percent}% -> {r.method}:{r.spell_or_rune}")
 
     def mark_rules_dirty(self):
         """Call when settings change to trigger reload."""
@@ -355,12 +377,14 @@ class HealerModule(BaseModule):
         """Called when module is started."""
         self._rules_dirty = True
         self._player_id = 0
-        self.log("Healer started")
+        self.log("Healer iniciado")
+        print("[healer] Module started")
 
     def on_stop(self):
         """Called when module is stopped."""
         super().on_stop()
-        self.log("Healer stopped")
+        self.log("Healer parado")
+        print("[healer] Module stopped")
 
 
 # =============================================================================

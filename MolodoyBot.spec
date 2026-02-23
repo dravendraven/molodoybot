@@ -11,7 +11,13 @@ datas = [
     ('spawn_graph.json', '.'),
 ]
 binaries = []
-hiddenimports = []
+hiddenimports = [
+    'cryptography',
+    'cryptography.fernet',
+    'cryptography.hazmat.primitives',
+    'cryptography.hazmat.primitives.hashes',
+    'cryptography.hazmat.primitives.kdf.pbkdf2',
+]
 tmp_ret = collect_all('customtkinter')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
@@ -35,6 +41,8 @@ a = Analysis(
         'http.server', 'xmlrpc', 'ftplib',
         # Debug/docs
         'pydoc', 'pdb',
+        # Ferramentas do desenvolvedor (NAO incluir no build)
+        'tools', 'tools.whitelist_manager',
     ],
     noarchive=False,
     optimize=2,

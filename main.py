@@ -1264,6 +1264,21 @@ def connection_watchdog():
                 if status == 8: # 8 geralmente é "In Game"
                     if not state.is_connected:
                         log("🟢 Conectado ao mundo!")
+
+                        # === VALIDACAO DE WHITELIST ===
+                        from core.whitelist import validate_character_or_exit
+                        time.sleep(0.5)  # Aguarda dados do personagem carregarem
+                        char_name = get_player_name()
+                        if char_name:
+                            validate_character_or_exit(char_name)
+                        else:
+                            # Retry apos delay
+                            time.sleep(1.0)
+                            char_name = get_player_name()
+                            if char_name:
+                                validate_character_or_exit(char_name)
+                        # === FIM VALIDACAO DE WHITELIST ===
+
                         if full_light_enabled:
                             time.sleep(1)
                             apply_full_light(True)
@@ -2447,6 +2462,9 @@ def start_healer_thread():
         return state.is_running and state.is_connected
 
     def config_getter(key, default=None):
+        # Check switch state directly for healer_enabled
+        if key == 'healer_enabled':
+            return switch_healer.get() if switch_healer else False
         return BOT_SETTINGS.get(key, default)
 
     def update_healer_status(msg):
