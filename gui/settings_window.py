@@ -44,6 +44,7 @@ class SettingsCallbacks:
     on_auto_torch_toggle: Callable[[bool], None]
     on_ai_chat_toggle: Callable[[bool], None]
     on_console_log_toggle: Callable[[bool], None]
+    on_logging_toggle: Callable[[bool], None]
     update_stats_visibility: Callable[[], None]
 
     # === TAB TRAINER CALLBACKS ===
@@ -452,6 +453,17 @@ class SettingsWindow:
         if settings.get('console_log_visible', True):
             switch_console_log.select()
 
+        # Logging Detalhado
+        switch_logging = ctk.CTkSwitch(frame_switches, text="Ativar Logging Detalhado",
+                                       command=lambda: self.cb.on_logging_toggle(bool(switch_logging.get())),
+                                       progress_color="#E74C3C", **self.UI['BODY'])
+        switch_logging.pack(anchor="w", pady=self.UI['PAD_ITEM'])
+        if settings.get('logging_enabled', False):
+            switch_logging.select()
+
+        ctk.CTkLabel(frame_switches, text="↳ ⚠️ Desabilitar melhora performance em VPS. Crash logs ficam sempre ativos.",
+                    **self.UI['HINT']).pack(anchor="w", padx=20)
+
         # === PAUSAS AFK ALEATÓRIAS ===
         ctk.CTkLabel(frame_switches, text="Pausas AFK Aleatórias", **self.UI['H1']).pack(anchor="w", pady=(10, 2))
 
@@ -495,6 +507,7 @@ class SettingsWindow:
             except:
                 pass
             s['console_log_visible'] = bool(switch_console_log.get())
+            s['logging_enabled'] = bool(switch_logging.get())
             # AFK Pauses
             s['afk_pause_enabled'] = bool(switch_afk_pause.get())
             try:

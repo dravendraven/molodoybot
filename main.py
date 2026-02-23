@@ -149,9 +149,12 @@ from core.overlay_renderer import renderer as overlay_renderer
 # Sistema de Logging Centralizado
 from core.logger import (
     setup_logger, get_logger, install_crash_handler,
-    install_thread_exception_handler, thread_safe_wrapper
+    install_thread_exception_handler, thread_safe_wrapper,
+    toggle_operational_logging, shutdown_logger
 )
-logger = setup_logger()
+# Inicializa com operational logging DESATIVADO (padrão para VPS)
+# Toggle na GUI permite ativar em runtime
+logger = setup_logger(operational_logging_enabled=False)
 
 _update_splash("Carregando chat...")
 from core.chat_handler import ChatHandler
@@ -292,12 +295,16 @@ BOT_SETTINGS = {
     "rune_movement": False,
     "rune_human_min": 15,   # Segundos mínimos de espera
     "rune_human_max": 300,  # Segundos máximos de espera
+    "logout_on_no_blanks": False,  # Logout automático quando acabar blanks
 
     # KS Prevention
     "ks_prevention_enabled": True,
 
     # Console Log
     "console_log_visible": False,  # Default: Status Panel visível, Console Log escondido
+
+    # Logging
+    "logging_enabled": False,  # Logging detalhado (False = apenas crash logging)
 
     # AFK Humanization (Cavebot)
     "afk_pause_enabled": False,     # Pausar AFK aleatórias durante rota
@@ -375,6 +382,15 @@ if os.path.exists("bot_config.json"):
             # Sincroniza console_log_visible com valor padrão se não existir
             if "console_log_visible" not in BOT_SETTINGS:
                 BOT_SETTINGS["console_log_visible"] = True
+
+            # Inicializa logging_enabled se não existir
+            if "logging_enabled" not in BOT_SETTINGS:
+                BOT_SETTINGS["logging_enabled"] = False
+
+            # Ativa operational logging se config carregada pedir
+            if BOT_SETTINGS.get("logging_enabled", False):
+                toggle_operational_logging(True)
+                print("[CONFIG] Operational logging ativado via bot_config.json")
 
             # NOVO: Converter nomes → IDs ao carregar (só se flag ativa)
             if USE_CONFIGURABLE_LOOT_SYSTEM:
@@ -458,6 +474,12 @@ def log(msg):
         now = datetime.now().strftime("%H:%M:%S")
         final_msg = f"[{now}] {msg}\n"
         txt_log.insert("end", final_msg)
+
+        # Limita a 1000 linhas para evitar performance degradation
+        line_count = int(txt_log.index('end-1c').split('.')[0])
+        if line_count > 1000:
+            txt_log.delete('1.0', f'{line_count - 1000}.0')
+
         txt_log.see("end")
     except: pass
 
@@ -1308,8 +1330,9 @@ def start_cavebot_thread():
                     except:
                         pass  # Silencia erros de UI
             except MemoryError as e:
-                logger.critical(f"MEMORY ERROR em Cavebot Thread!")
-                logger.exception("Stack trace:")
+                logger.critical(f"MEMORY ERROR em Cavebot Thread: {str(e)}")
+                if BOT_SETTINGS.get('logging_enabled', False):
+                    logger.exception("Stack trace detalhado:")
                 try:
                     import gc
                     gc.collect()
@@ -1317,7 +1340,9 @@ def start_cavebot_thread():
                     pass
                 time.sleep(10)
             except Exception as e:
-                logger.exception(f"Erro Cavebot Loop: {e}")
+                logger.critical(f"Erro Cavebot Loop: {e}")
+                if BOT_SETTINGS.get('logging_enabled', False):
+                    logger.exception("Stack trace detalhado:")
                 time.sleep(1)
 
         time.sleep(0.05)
@@ -1538,8 +1563,9 @@ def start_trainer_thread():
             time.sleep(1)
             
         except MemoryError as e:
-            logger.critical(f"MEMORY ERROR em Trainer Thread!")
-            logger.exception("Stack trace:")
+            logger.critical(f"MEMORY ERROR em Trainer Thread: {str(e)}")
+            if BOT_SETTINGS.get('logging_enabled', False):
+                logger.exception("Stack trace detalhado:")
             try:
                 import gc
                 gc.collect()
@@ -1547,7 +1573,9 @@ def start_trainer_thread():
                 pass
             time.sleep(10)
         except Exception as e:
-            logger.exception(f"Trainer Thread Crash: {e}")
+            logger.critical(f"Trainer Thread Crash: {e}")
+            if BOT_SETTINGS.get('logging_enabled', False):
+                logger.exception("Stack trace detalhado:")
             time.sleep(5)
 
 def start_alarm_thread():
@@ -1644,8 +1672,9 @@ def start_alarm_thread():
             alarm_loop(pm, base_addr, check_run, alarm_cfg, callbacks,
                       status_callback=update_alarm_status)
         except MemoryError as e:
-            logger.critical(f"MEMORY ERROR em Alarm Thread!")
-            logger.exception("Stack trace:")
+            logger.critical(f"MEMORY ERROR em Alarm Thread: {str(e)}")
+            if BOT_SETTINGS.get('logging_enabled', False):
+                logger.exception("Stack trace detalhado:")
             try:
                 import gc
                 gc.collect()
@@ -1653,7 +1682,9 @@ def start_alarm_thread():
                 pass
             time.sleep(10)
         except Exception as e:
-            logger.exception(f"Alarm Thread Crash: {e}")
+            logger.critical(f"Alarm Thread Crash: {e}")
+            if BOT_SETTINGS.get('logging_enabled', False):
+                logger.exception("Stack trace detalhado:")
             time.sleep(5)
 
 def regen_monitor_loop():
@@ -2346,6 +2377,7 @@ def runemaker_thread():
         'enable_movement': BOT_SETTINGS.get('rune_movement', False),
         'human_min': BOT_SETTINGS.get('rune_human_min', 0),
         'human_max': BOT_SETTINGS.get('rune_human_max', 0),
+        'logout_on_no_blanks': BOT_SETTINGS.get('logout_on_no_blanks', False),
 
         'can_perform_actions': (
             # Se movimento ligado E alarme NÃO foi GM -> Ignora timer (True)
@@ -2378,8 +2410,9 @@ def runemaker_thread():
 
             time.sleep(1)
         except MemoryError as e:
-            logger.critical(f"MEMORY ERROR em Runemaker Thread!")
-            logger.exception("Stack trace:")
+            logger.critical(f"MEMORY ERROR em Runemaker Thread: {str(e)}")
+            if BOT_SETTINGS.get('logging_enabled', False):
+                logger.exception("Stack trace detalhado:")
             try:
                 import gc
                 gc.collect()
@@ -2387,7 +2420,9 @@ def runemaker_thread():
                 pass
             time.sleep(10)
         except Exception as e:
-            logger.exception(f"Erro Runemaker: {e}")
+            logger.critical(f"Erro Runemaker: {e}")
+            if BOT_SETTINGS.get('logging_enabled', False):
+                logger.exception("Stack trace detalhado:")
             time.sleep(5)
 
 def lookid_monitor_loop():
@@ -2425,7 +2460,7 @@ def resource_monitor_loop():
         return
 
     process = psutil.Process()
-    process.cpu_percent()  # primeira chamada retorna 0, descartamos
+    process.cpu_percent(interval=None)  # primeira chamada retorna 0, descartamos
     time.sleep(1)
 
     # Thresholds de memória (em MB)
@@ -2436,14 +2471,15 @@ def resource_monitor_loop():
 
     while state.is_running:
         try:
-            cpu = process.cpu_percent()
+            cpu = process.cpu_percent(interval=None)  # Non-blocking
             ram_mb = process.memory_info().rss / (1024 * 1024)
 
-            # Log normal (nível DEBUG para não poluir)
-            logger.debug(f"Recursos: CPU={cpu:.1f}% RAM={ram_mb:.1f}MB")
-
-            # Também envia para o log visual (compatibilidade)
+            # Log visual na GUI
             log(f"CPU: {cpu:.1f}% | RAM: {ram_mb:.1f} MB")
+
+            # Log em arquivo apenas se logging detalhado ativo
+            if BOT_SETTINGS.get('logging_enabled', False):
+                logger.debug(f"Recursos: CPU={cpu:.1f}% RAM={ram_mb:.1f}MB")
 
             current_time = time.time()
 
@@ -2871,6 +2907,19 @@ def create_settings_callbacks() -> SettingsCallbacks:
         status = "ativado" if enabled else "desativado"
         log(f"🤖 Resposta via IA: {status}")
 
+    def on_logging_toggle(enabled: bool):
+        """Ativa/desativa operational logging em runtime."""
+        BOT_SETTINGS['logging_enabled'] = enabled
+        toggle_operational_logging(enabled)
+
+        status = "ativado ⚠️" if enabled else "desativado ✅"
+        log(f"📝 Logging Detalhado: {status}")
+
+        if enabled:
+            logger.info("Operational logging ativado pelo usuário via GUI")
+        else:
+            logger.warning("Operational logging desativado - apenas crash logs ativos")
+
     def on_console_log_toggle(enabled: bool):
         global log_visible
         log_visible = enabled
@@ -2937,6 +2986,7 @@ def create_settings_callbacks() -> SettingsCallbacks:
         on_auto_torch_toggle=on_auto_torch_toggle,
         on_ai_chat_toggle=on_ai_chat_toggle,
         on_console_log_toggle=on_console_log_toggle,
+        on_logging_toggle=on_logging_toggle,
         update_stats_visibility=update_stats_visibility,
 
         # Tab Trainer
@@ -3290,6 +3340,9 @@ def on_close():
     stop_scheduler()  # Para o action scheduler
     stop_sniffer()  # Para o sniffer de pacotes
     clear_player_name_cache()
+
+    # Fecha logger e libera file handles (CORRIGE LEAK)
+    shutdown_logger()
 
     try:
         if app:

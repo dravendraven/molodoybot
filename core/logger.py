@@ -1,13 +1,18 @@
 """
-Sistema de Logging Centralizado para MolodoyBot
+Sistema de Logging Centralizado para MolodoyBot (v2)
 
-Cria logs rotativos que persistem em arquivo, permitindo
-diagnosticar crashes e problemas de performance.
+Cria logs rotativos separados para crash e operational logging:
 
 Arquivos gerados:
-- molodoy_bot.log: Log principal (max 5MB, 3 backups)
+- crash.log: Crash logging (SEMPRE ATIVO) - max 2MB, 1 backup
+- molodoy_bot.log: Operational logging (toggle na GUI) - max 5MB, 3 backups
 - crash_dump.txt: Stack traces de segfaults (via faulthandler)
 - crash_state.json: Estado do jogo no momento do crash
+
+v2 Changes:
+- Separação de crash logging (sempre ativo) e operational logging (controlável)
+- Toggle em runtime via toggle_operational_logging()
+- Correção de file handle leak do faulthandler
 """
 
 import logging
@@ -49,12 +54,14 @@ def get_log_directory():
     return log_dir
 
 
-def setup_logger(name="MolodoyBot", console_level=logging.INFO):
+def setup_logger(name="MolodoyBot", operational_logging_enabled=False, console_level=logging.INFO):
     """
-    Configura e retorna o logger centralizado.
+    Configura e retorna o logger centralizado com handlers separados.
 
     Args:
         name: Nome do logger
+        operational_logging_enabled: Se True, ativa logging detalhado (DEBUG/INFO/WARNING)
+                                     Se False, apenas crash logging (CRITICAL)
         console_level: Nível mínimo para output no console
 
     Returns:
@@ -66,7 +73,7 @@ def setup_logger(name="MolodoyBot", console_level=logging.INFO):
         return _logger
 
     _logger = logging.getLogger(name)
-    _logger.setLevel(logging.DEBUG)
+    _logger.setLevel(logging.DEBUG)  # Logger aceita tudo, filtro nos handlers
 
     # Evita handlers duplicados se chamado múltiplas vezes
     if _logger.handlers:
@@ -74,26 +81,49 @@ def setup_logger(name="MolodoyBot", console_level=logging.INFO):
 
     log_dir = get_log_directory()
 
-    # Handler para arquivo (rotativo, max 5MB, 3 backups)
-    log_file = os.path.join(log_dir, "molodoy_bot.log")
+    # Formato detalhado para arquivos
+    file_formatter = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(threadName)s - %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
+
+    # ===================================================================
+    # 1. CRASH LOG (SEMPRE ATIVO) - Só loga CRITICAL (crashes)
+    # ===================================================================
+    crash_log_path = os.path.join(log_dir, "crash.log")
     try:
-        file_handler = RotatingFileHandler(
-            log_file,
-            maxBytes=5 * 1024 * 1024,  # 5 MB
-            backupCount=3,
+        crash_handler = RotatingFileHandler(
+            crash_log_path,
+            maxBytes=2 * 1024 * 1024,  # 2 MB
+            backupCount=1,
             encoding="utf-8"
         )
-        file_handler.setLevel(logging.DEBUG)
-
-        # Formato detalhado para arquivo
-        file_formatter = logging.Formatter(
-            "%(asctime)s [%(levelname)s] %(threadName)s - %(name)s: %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S"
-        )
-        file_handler.setFormatter(file_formatter)
-        _logger.addHandler(file_handler)
+        crash_handler.setLevel(logging.CRITICAL)  # Apenas crashes
+        crash_handler.setFormatter(file_formatter)
+        _logger.addHandler(crash_handler)
+        print(f"[LOGGER] Crash logging ativado: {crash_log_path}")
     except Exception as e:
-        print(f"[LOGGER] Erro ao criar arquivo de log: {e}")
+        print(f"[LOGGER] ERRO ao criar crash log: {e}")
+
+    # ===================================================================
+    # 2. OPERATIONAL LOG (CONTROLADO POR TOGGLE) - DEBUG/INFO/WARNING
+    # ===================================================================
+    if operational_logging_enabled:
+        operational_log_path = os.path.join(log_dir, "molodoy_bot.log")
+        try:
+            operational_handler = RotatingFileHandler(
+                operational_log_path,
+                maxBytes=5 * 1024 * 1024,  # 5 MB
+                backupCount=3,
+                encoding="utf-8"
+            )
+            operational_handler.setLevel(logging.DEBUG)  # Tudo exceto CRITICAL (já logado no crash.log)
+            operational_handler.setFormatter(file_formatter)
+            operational_handler.addFilter(lambda record: record.levelno < logging.CRITICAL)  # Evita duplicação
+            _logger.addHandler(operational_handler)
+            print(f"[LOGGER] Operational logging ativado: {operational_log_path}")
+        except Exception as e:
+            print(f"[LOGGER] Erro ao criar operational log: {e}")
 
     # Handler para console (menos verbose)
     console_handler = logging.StreamHandler(sys.stdout)
@@ -111,11 +141,12 @@ def setup_logger(name="MolodoyBot", console_level=logging.INFO):
     try:
         _crash_dump_file = open(crash_dump_path, "w")
         faulthandler.enable(file=_crash_dump_file)
-        _logger.info(f"Faulthandler ativado: {crash_dump_path}")
+        print(f"[LOGGER] Faulthandler ativado: {crash_dump_path}")
     except Exception as e:
-        _logger.warning(f"Não foi possível ativar faulthandler: {e}")
+        print(f"[LOGGER] Não foi possível ativar faulthandler: {e}")
 
-    _logger.info(f"Logger inicializado. Logs em: {log_dir}")
+    status = "com operational logging" if operational_logging_enabled else "apenas crash logging"
+    print(f"[LOGGER] Inicializado {status}. Logs em: {log_dir}")
 
     return _logger
 
@@ -126,6 +157,82 @@ def get_logger():
     if _logger is None:
         return setup_logger()
     return _logger
+
+
+def toggle_operational_logging(enabled: bool):
+    """
+    Ativa ou desativa operational logging em runtime.
+    Crash logging permanece sempre ativo.
+
+    Args:
+        enabled: True para ativar, False para desativar
+    """
+    logger = get_logger()
+    log_dir = get_log_directory()
+
+    # Remove handlers operacionais existentes
+    for handler in logger.handlers[:]:
+        if isinstance(handler, RotatingFileHandler):
+            if "molodoy_bot.log" in handler.baseFilename:
+                logger.removeHandler(handler)
+                handler.close()
+                print(f"[LOGGER] Operational handler removido")
+
+    # Adiciona novo handler se enabled
+    if enabled:
+        operational_log_path = os.path.join(log_dir, "molodoy_bot.log")
+        try:
+            operational_handler = RotatingFileHandler(
+                operational_log_path,
+                maxBytes=5 * 1024 * 1024,  # 5 MB
+                backupCount=3,
+                encoding="utf-8"
+            )
+            operational_handler.setLevel(logging.DEBUG)
+
+            formatter = logging.Formatter(
+                "%(asctime)s [%(levelname)s] %(threadName)s - %(name)s: %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S"
+            )
+            operational_handler.setFormatter(formatter)
+
+            # Filtra CRITICAL para evitar duplicação no crash.log
+            operational_handler.addFilter(lambda record: record.levelno < logging.CRITICAL)
+
+            logger.addHandler(operational_handler)
+            print(f"[LOGGER] Operational logging ativado em runtime: {operational_log_path}")
+        except Exception as e:
+            print(f"[LOGGER] Erro ao ativar operational logging: {e}")
+    else:
+        print(f"[LOGGER] Operational logging desativado - apenas crash logging ativo")
+
+
+def shutdown_logger():
+    """
+    Fecha todos os handlers e libera recursos (incluindo faulthandler).
+    Deve ser chamado no shutdown do bot.
+    """
+    global _logger, _crash_dump_file
+
+    if _logger:
+        # Fecha todos os handlers
+        for handler in _logger.handlers[:]:
+            try:
+                handler.close()
+                _logger.removeHandler(handler)
+            except Exception:
+                pass
+
+        print("[LOGGER] Todos os handlers fechados")
+
+    # Fecha file handle do faulthandler (CORRIGE LEAK)
+    if _crash_dump_file:
+        try:
+            _crash_dump_file.close()
+            _crash_dump_file = None
+            print("[LOGGER] Faulthandler file handle fechado")
+        except Exception:
+            pass
 
 
 def install_crash_handler(game_state_getter=None):
