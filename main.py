@@ -130,10 +130,10 @@ from core import packet
 from database import foods_db
 
 _update_splash("Carregando trainer...")
-from modules.trainer import trainer_loop
-from modules.alarm import alarm_loop
+# trainer_loop carregado lazy em start_trainer_thread() (puxa memory_map, battlelist, map_analyzer)
+# alarm_loop carregado lazy em start_alarm_thread()
 _update_splash("Carregando cavebot...")
-from modules.cavebot import Cavebot
+# Cavebot carregado lazy em start_cavebot_thread() (cadeia pesada: global_map, astar_walker, etc.)
 # Lazy imports - carregados sob demanda para acelerar startup
 # from modules.spear_picker import spear_picker_loop  # Lazy: start_spear_picker_thread()
 # from modules.aimbot import AimbotModule              # Lazy: start_aimbot_thread()
@@ -1267,6 +1267,7 @@ def connection_watchdog():
 
 def start_cavebot_thread():
     """Gerencia a inicialização e o loop do Cavebot."""
+    from modules.cavebot import Cavebot  # Lazy: cadeia pesada (global_map, astar, spawn_parser)
     global cavebot_instance, pm, base_addr
     logger.info("Thread Cavebot iniciada.")
 
@@ -1469,6 +1470,7 @@ def start_trainer_thread():
     Thread Wrapper para o Trainer.
     Cria a ponte de configuração em tempo real entre o Main e o Módulo.
     """
+    from modules.trainer import trainer_loop  # Lazy: cadeia pesada (memory_map, battlelist, map_analyzer)
     hwnd = 0
     
     # --- CONFIG PROVIDER ---
@@ -1555,6 +1557,7 @@ def start_alarm_thread():
     Thread Wrapper para o Alarme.
     Gerencia transições de Seguro/Perigo e Timers de Retorno.
     """
+    from modules.alarm import alarm_loop  # Lazy: evita carregar winsound, battlelist no startup
     
     def set_safe(val): 
         """
