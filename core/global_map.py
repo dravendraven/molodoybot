@@ -17,7 +17,8 @@ class GlobalMap:
         self.walkable_ids = set(walkable_ids) # Ex: {186, 121} - IDs que são chão
         self.cache = OrderedDict()  # LRU cache de arquivos carregados
         self._cache_max = 150  # ~9.6 MB max (150 * 64 KB)
-        self._filename_cache = {} # (chunk_x, chunk_y, z) -> filename or None
+        self._filename_cache = OrderedDict()  # (chunk_x, chunk_y, z) -> filename or None
+        self._filename_cache_max = 2048
         self.temporary_obstacles = {} # (x, y, z) -> timestamp
 
         # Transições entre andares: z -> [(x, y, z_to), ...]
@@ -71,15 +72,20 @@ class GlobalMap:
         """Resolve e cacheia o nome do arquivo .map para um chunk."""
         key = (chunk_x, chunk_y, abs_z)
         if key in self._filename_cache:
+            self._filename_cache.move_to_end(key)
             return self._filename_cache[key]
 
         for f in (f"{chunk_x}{chunk_y}{abs_z:02}.map",
                   f"{chunk_x:03}{chunk_y:03}{abs_z:02}.map"):
             if os.path.exists(os.path.join(self.maps_dir, f)):
                 self._filename_cache[key] = f
+                if len(self._filename_cache) > self._filename_cache_max:
+                    self._filename_cache.popitem(last=False)
                 return f
 
         self._filename_cache[key] = None
+        if len(self._filename_cache) > self._filename_cache_max:
+            self._filename_cache.popitem(last=False)
         return None
 
     def get_color_id(self, abs_x, abs_y, abs_z):

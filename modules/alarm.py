@@ -2,6 +2,7 @@ import time
 import winsound
 import threading
 import win32gui
+from collections import deque
 from config import *
 from core.map_core import get_player_pos
 from core.player_core import get_connected_char_name, get_player_id, is_player_moving
@@ -21,7 +22,7 @@ STUCK_DETECTION_THRESHOLD_SECONDS = 3.0
 OFFSET_CONSOLE_PTR = 0x31DD18
 
 # Fila de eventos de chat do sniffer (thread-safe)
-_chat_event_queue = []
+_chat_event_queue = deque(maxlen=100)
 _chat_event_lock = threading.Lock()
 _event_listener_setup = False
 
@@ -40,10 +41,7 @@ def _setup_chat_event_listener():
         def on_chat_event(event):
             """Callback quando sniffer detecta chat."""
             with _chat_event_lock:
-                _chat_event_queue.append(event)
-                # Limita tamanho da fila
-                while len(_chat_event_queue) > 100:
-                    _chat_event_queue.pop(0)
+                _chat_event_queue.append(event)  # deque(maxlen=100) auto-evicts oldest
 
         event_bus.subscribe(EVENT_CHAT, on_chat_event)
         _event_listener_setup = True
@@ -54,7 +52,7 @@ def _setup_chat_event_listener():
 def _get_pending_chat_events():
     """Retorna e limpa eventos de chat pendentes."""
     with _chat_event_lock:
-        events = _chat_event_queue.copy()
+        events = list(_chat_event_queue)
         _chat_event_queue.clear()
         return events
 

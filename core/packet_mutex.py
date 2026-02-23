@@ -76,6 +76,7 @@ class PacketMutex:
 
     # Variáveis de classe (compartilhadas entre instâncias)
     _lock = threading.Lock()
+    _released = threading.Event()  # Signaled when mutex is released
     _current_holder: Optional[str] = None
     _last_holder: Optional[str] = None  # Rastreia o último titular (para comparar grupos)
     _last_action_time: float = 0.0
@@ -196,6 +197,7 @@ class PacketMutex:
 
                         # Adquire o lock
                         self._current_holder = self.module_name
+                        self._released.clear()  # Reset event since mutex is now held
                         self._action_start_time = time.time()
                         self.acquired = True
                         self._wait_queue.pop(self.module_name, None)
@@ -214,8 +216,12 @@ class PacketMutex:
                         self._wait_queue.pop(self.module_name, None)
                         return False
 
-                # Sleep antes de tentar novamente
-                time.sleep(0.05)
+                # Wait for release signal instead of busy-polling
+                remaining = self.timeout - (time.time() - start_time)
+                if remaining <= 0:
+                    self._wait_queue.pop(self.module_name, None)
+                    return False
+                self._released.wait(timeout=min(remaining, 1.0))
 
         except Exception as e:
             print(f"[PACKET-MUTEX] ❌ Erro ao adquirir mutex ({self.module_name}): {e}")
@@ -239,6 +245,9 @@ class PacketMutex:
                 # Calcula tempo que manteve o lock
                 elapsed = time.time() - (self._action_start_time or time.time())
                 #print(f"[PACKET-MUTEX] 🔓 {self.module_name.upper()} liberou mutex (duração: {elapsed:.2f}s)")
+
+                # Wake up waiting threads
+                self._released.set()
                 return True
 
         print(f"[PACKET-MUTEX] ⚠️ {self.module_name.upper()} tentou liberar mutex que não possui")
@@ -269,6 +278,7 @@ class PacketMutex:
             cls._last_action_time = 0.0
             cls._action_start_time = None
             cls._wait_queue.clear()
+            cls._released.set()  # Wake any waiting threads
         print("[PACKET-MUTEX] ⚙️ Mutex foi resetado")
 
 
