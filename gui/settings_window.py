@@ -50,6 +50,7 @@ class SettingsCallbacks:
     # === TAB TRAINER CALLBACKS ===
     on_ignore_toggle: Callable[[bool], None]
     on_ks_toggle: Callable[[bool], None]
+    on_chase_mode_toggle: Callable[[bool], None]
 
     # === TAB RUNE CALLBACKS ===
     set_rune_pos: Callable[[str], None]  # "WORK" ou "SAFE"
@@ -592,6 +593,20 @@ class SettingsWindow:
             switch_ks.select()
 
         ctk.CTkLabel(frame_tr_ks, text="↳ Evita atacar criaturas mais próximas de outros players.",
+                    **self.UI['HINT']).pack(anchor="w", padx=40)
+
+        # Walker Chase Mode
+        frame_tr_chase = ctk.CTkFrame(tab, fg_color="transparent")
+        frame_tr_chase.pack(fill="x", padx=10, pady=5)
+
+        switch_chase = ctk.CTkSwitch(frame_tr_chase, text="Walker Chase Mode",
+                                      command=lambda: self.cb.on_chase_mode_toggle(bool(switch_chase.get())),
+                                      progress_color="#3498DB", **self.UI['BODY'])
+        switch_chase.pack(anchor="w")
+        if settings.get('chase_mode_enabled', False):
+            switch_chase.select()
+
+        ctk.CTkLabel(frame_tr_chase, text="↳ Usa walker A* para perseguir alvos (obstacle clearing, push parcels).",
                     **self.UI['HINT']).pack(anchor="w", padx=40)
 
         # === AIMBOT ===

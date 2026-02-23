@@ -20,6 +20,7 @@ from core.game_state import game_state
 from core.config_utils import make_config_getter
 from core.map_analyzer import MapAnalyzer
 from core.astar_walker import AStarWalker
+from core.creature_chaser import CreatureChaser, ChaseResult
 from core.battlelist import BattleListScanner, SpawnTracker
 from core.models import Position
 from core.overlay_renderer import renderer as overlay_renderer
@@ -655,6 +656,7 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
     mapper = None
     analyzer = None
     walker = None
+    chaser = None
 
     # PacketManager para envio de pacotes
     packet = PacketManager(pm, base_addr)
@@ -690,10 +692,12 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
         if not get_cfg('is_safe', True):
             # Cleanup follow/combat state when alarm triggers
             if is_currently_following:
+                if chaser:
+                    chaser.stop()
                 state.stop_follow()
                 is_currently_following = False
                 follow_target_id = 0
-                print("[TRAINER] 🛑 Alarm: Follow cancelado")
+                print("[TRAINER] 🛑 Alarm: Follow/chase cancelado")
 
             # Clear target (remove red square) and stop monitor
             if current_target_id != 0 or current_monitored_id != 0:
@@ -761,6 +765,9 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
         # FOLLOW_THEN_ATTACK: config independente para seguir antes de atacar
         follow_then_attack_standalone = get_cfg('follow_then_attack', FOLLOW_THEN_ATTACK)
 
+        # CHASE MODE: usar walker A* em vez de packet.follow nativo
+        chase_mode = get_cfg('chase_mode_enabled', CHASE_MODE_ENABLED)
+
         # Ativa se: standalone config OU (spear picker combo)
         follow_before_attack = follow_then_attack_standalone or (follow_before_attack_enabled and spear_picker_enabled and trigger_range > 1)
 
@@ -797,6 +804,7 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
             mapper = MemoryMap(pm, base_addr)
             analyzer = MapAnalyzer(mapper)
             walker = AStarWalker(analyzer, max_depth=150, debug=debug_mode)
+            chaser = CreatureChaser(pm, base_addr, packet, walker, analyzer, mapper, debug=debug_mode)
 
         try:
             player_id = state.get_player_id(pm, base_addr)
@@ -1179,8 +1187,12 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                                     # Usa mesma lógica de follow_before_attack
                                     if follow_before_attack and dist_to_nearest > 1:
                                         log(f"🏃 RETARGET (follow): {nearest['name']} (dist={dist_to_nearest})")
-                                        log_decision(f"🔄 RETARGET: alvo inacessível → {nearest['name']} (follow, dist:{dist_to_nearest})")
-                                        packet.follow(nearest["id"])
+                                        if chase_mode:
+                                            log_decision(f"🔄 RETARGET: alvo inacessível → {nearest['name']} (chase, dist:{dist_to_nearest})")
+                                            chaser.start_chase(nearest["id"], nearest["abs_x"], nearest["abs_y"], nearest.get("z", my_z))
+                                        else:
+                                            log_decision(f"🔄 RETARGET: alvo inacessível → {nearest['name']} (follow, dist:{dist_to_nearest})")
+                                            packet.follow(nearest["id"])
                                         state.start_follow(nearest["id"])
                                         is_currently_following = True
                                         follow_target_id = nearest["id"]
@@ -1191,6 +1203,7 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                                             time.sleep(0.5)
                                             continue
                                         if is_currently_following:
+                                            chaser.stop()
                                             state.stop_follow()
                                             is_currently_following = False
                                             follow_target_id = 0
@@ -1228,10 +1241,37 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                         rel_y = target_data["abs_y"] - my_y
                         dist_now = max(abs(rel_x), abs(rel_y))
 
+                        # === CHASE MODE: Usa walker A* para perseguir ===
+                        if chase_mode and chaser.is_active:
+                            chase_result = chaser.update(target_data["abs_x"], target_data["abs_y"], target_data.get("z", my_z))
+
+                            if debug_mode:
+                                print(f"[CHASE-DEBUG] {target_data['name']}: result={chase_result.value} dist={dist_now}")
+
+                            if chase_result == ChaseResult.REACHED:
+                                # Chegou adjacente - transiciona para attack/cancel
+                                dist_now = max(abs(target_data["abs_x"] - my_x), abs(target_data["abs_y"] - my_y))
+                                # Fall through para logica de transicao abaixo
+                            elif chase_result == ChaseResult.BLOCKED:
+                                # Caminho completamente bloqueado - retarget
+                                log(f"🚫 CHASE BLOQUEADO: {target_data['name']} inacessivel")
+                                chaser.stop()
+                                state.stop_follow()
+                                is_currently_following = False
+                                follow_target_id = 0
+                                became_unreachable_time = time.time() - RETARGET_DELAY  # Forca retarget imediato
+                                time.sleep(SCAN_DELAY_COMBAT)
+                                continue
+                            else:
+                                # WAITING, STEPPED, CLEARING, IDLE - continua no proximo tick
+                                time.sleep(SCAN_DELAY_COMBAT)
+                                continue
+
                         if debug_mode:
-                            print(f"[FOLLOW-DEBUG] Monitorando follow: {target_data['name']}")
-                            print(f"[FOLLOW-DEBUG]   Distância atual: {dist_now} tiles (rel_x={rel_x}, rel_y={rel_y})")
-                            print(f"[FOLLOW-DEBUG]   Transição para attack em: dist <= 1")
+                            mode_str = "CHASE" if chase_mode else "FOLLOW"
+                            print(f"[{mode_str}-DEBUG] Monitorando: {target_data['name']}")
+                            print(f"[{mode_str}-DEBUG]   Distância atual: {dist_now} tiles (rel_x={rel_x}, rel_y={rel_y})")
+                            print(f"[{mode_str}-DEBUG]   Transição para attack em: dist <= 1")
 
                         if dist_now <= 1:
                             # === FOLLOW → ATTACK: Verifica se criatura está atacando ===
@@ -1244,8 +1284,10 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                                 log(f"⚠️ {target_data['name']} não está atacando - cancelando follow")
                                 log_decision(f"🛑 FOLLOW CANCELADO: {target_data['name']} não está atacando (is_attacking_me=False)")
 
-                                # CRÍTICO: Envia packet.stop() para parar follow no cliente
-                                packet.stop()
+                                # Para chase/follow
+                                chaser.stop()
+                                if not chase_mode:
+                                    packet.stop()
 
                                 # Cancela follow e limpa estado completamente
                                 state.stop_follow()
@@ -1263,7 +1305,7 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                                 # should_attack_new permanece False
 
                                 if debug_mode:
-                                    print(f"[FOLLOW-DEBUG] ✓ Follow cancelado - criatura não atacando")
+                                    print(f"[FOLLOW-DEBUG] Follow/chase cancelado - criatura não atacando")
                                     print(f"[FOLLOW-DEBUG]   Cavebot pode retomar navegação")
 
                                 time.sleep(SCAN_DELAY_COMBAT)
@@ -1277,13 +1319,14 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                                 time.sleep(0.5)
                                 continue
 
-                            # Para estado de follow
+                            # Para estado de follow/chase
+                            chaser.stop()
                             state.stop_follow()
                             is_currently_following = False
                             follow_target_id = 0
 
                             if debug_mode:
-                                print(f"[FOLLOW-DEBUG] ✓ TRANSIÇÃO COMPLETA: Follow → Attack")
+                                print(f"[FOLLOW-DEBUG] TRANSIÇÃO COMPLETA: Follow/Chase → Attack")
                                 print(f"[FOLLOW-DEBUG]   Pacote ATTACK enviado (0xA1)")
                                 print(f"[FOLLOW-DEBUG]   state.is_following={state.is_following}")
 
@@ -1379,8 +1422,12 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                                             # Usa mesma lógica de follow_before_attack
                                             if follow_before_attack and dist_to_nearest > 1:
                                                 log(f"🏃 RETARGET (follow): {nearest['name']} (dist={dist_to_nearest})")
-                                                log_decision(f"🔄 RETARGET: alvo inacessível → {nearest['name']} (follow, dist:{dist_to_nearest})")
-                                                packet.follow(nearest["id"])
+                                                if chase_mode:
+                                                    log_decision(f"🔄 RETARGET: alvo inacessível → {nearest['name']} (chase, dist:{dist_to_nearest})")
+                                                    chaser.start_chase(nearest["id"], nearest["abs_x"], nearest["abs_y"], nearest.get("z", my_z))
+                                                else:
+                                                    log_decision(f"🔄 RETARGET: alvo inacessível → {nearest['name']} (follow, dist:{dist_to_nearest})")
+                                                    packet.follow(nearest["id"])
                                                 state.start_follow(nearest["id"])
                                                 is_currently_following = True
                                                 follow_target_id = nearest["id"]
@@ -1391,6 +1438,7 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                                                     time.sleep(0.5)
                                                     continue
                                                 if is_currently_following:
+                                                    chaser.stop()
                                                     state.stop_follow()
                                                     is_currently_following = False
                                                     follow_target_id = 0
@@ -1469,13 +1517,14 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                         # hp=0 but still visible - enter DYING state, wait for despawn
                         log(f"☠️ {last_target_data['name']} morto mas visível (hp=0, vis=1) - aguardando despawn")
 
-                        # Para follow se estava seguindo (criatura morreu)
+                        # Para follow/chase se estava seguindo (criatura morreu)
                         if is_currently_following:
+                            chaser.stop()
                             state.stop_follow()
                             is_currently_following = False
                             follow_target_id = 0
                             if debug_mode:
-                                print(f"[FOLLOW-DEBUG] ✓ Follow parado - criatura morreu ({last_target_data['name']})")
+                                print(f"[FOLLOW-DEBUG] Follow/chase parado - criatura morreu ({last_target_data['name']})")
                                 print(f"[FOLLOW-DEBUG]   state.is_following={state.is_following}")
 
                         # ===== MARCA INÍCIO DO CICLO DE LOOT (APENAS SE AUTO_LOOT HABILITADO) =====
@@ -1771,8 +1820,13 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                                 # Usa FOLLOW em vez de attack
                                 log(f"🏃 SEGUINDO: {best['name']} (dist={dist_to_target})")
                                 set_status(f"seguindo {best['name']}")
-                                log_decision(f"🏃 SEGUINDO: {best['name']} (dist:{dist_to_target}) - ataca ao chegar dist<=1")
-                                packet.follow(best["id"])
+
+                                if chase_mode:
+                                    log_decision(f"🏃 CHASE: {best['name']} (dist:{dist_to_target}) - walker A*")
+                                    chaser.start_chase(best["id"], best["abs_x"], best["abs_y"], best["z"])
+                                else:
+                                    log_decision(f"🏃 SEGUINDO: {best['name']} (dist:{dist_to_target}) - follow nativo")
+                                    packet.follow(best["id"])
 
                                 # Atualiza estado de follow
                                 state.start_follow(best["id"])
@@ -1780,7 +1834,8 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                                 follow_target_id = best["id"]
 
                                 if debug_mode:
-                                    print(f"[FOLLOW-DEBUG] ✓ Pacote FOLLOW enviado (0xA2) para creature_id={best['id']}")
+                                    mode_str = "CHASE (walker)" if chase_mode else "FOLLOW (0xA2)"
+                                    print(f"[FOLLOW-DEBUG] {mode_str} para creature_id={best['id']}")
                                     print(f"[FOLLOW-DEBUG]   state.is_following={state.is_following}")
                                     print(f"[FOLLOW-DEBUG]   state.is_in_combat={state.is_in_combat}")
                             else:
@@ -1793,11 +1848,12 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                                     time.sleep(0.5)
                                     continue
 
-                                # Para follow se estava seguindo
+                                # Para follow/chase se estava seguindo
                                 if is_currently_following:
+                                    chaser.stop()
                                     state.stop_follow()
                                     if debug_mode:
-                                        print(f"[FOLLOW-DEBUG] ✓ Follow parado - trocou para ATTACK")
+                                        print(f"[FOLLOW-DEBUG] Follow/chase parado - trocou para ATTACK")
                                     is_currently_following = False
                                     follow_target_id = 0
 

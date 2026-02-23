@@ -2950,6 +2950,10 @@ def create_settings_callbacks() -> SettingsCallbacks:
         BOT_SETTINGS['ks_prevention_enabled'] = enabled
         log(f"🛡️ Anti Kill-Steal: {'Ativado' if enabled else 'Desativado'}")
 
+    def on_chase_mode_toggle(enabled: bool):
+        BOT_SETTINGS['chase_mode_enabled'] = enabled
+        log(f"🏃 Walker Chase Mode: {'Ativado' if enabled else 'Desativado'}")
+
     def set_rune_pos_callback(type_pos: str):
         if pm:
             try:
@@ -2996,6 +3000,7 @@ def create_settings_callbacks() -> SettingsCallbacks:
         # Tab Trainer
         on_ignore_toggle=on_ignore_toggle,
         on_ks_toggle=on_ks_toggle,
+        on_chase_mode_toggle=on_chase_mode_toggle,
 
         # Tab Rune
         set_rune_pos=set_rune_pos_callback,
