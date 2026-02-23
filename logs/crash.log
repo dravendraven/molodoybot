@@ -1,0 +1,18 @@
+2026-02-23 14:55:45 [CRITICAL] MainThread - MolodoyBot: ============================================================
+2026-02-23 14:55:45 [CRITICAL] MainThread - MolodoyBot: CRASH NAO TRATADO!
+2026-02-23 14:55:45 [CRITICAL] MainThread - MolodoyBot: ============================================================
+2026-02-23 14:55:45 [CRITICAL] MainThread - MolodoyBot: Traceback (most recent call last):
+2026-02-23 14:55:45 [CRITICAL] MainThread - MolodoyBot:   File "c:\Users\vitor\OneDrive\Documentos\cheat engine\main.py", line 3808, in <module>
+    frame_graphs_container = main_window.frame_graphs_container
+                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-23 14:55:45 [CRITICAL] MainThread - MolodoyBot: AttributeError: 'MainWindow' object has no attribute 'frame_graphs_container'
+2026-02-23 14:55:45 [CRITICAL] MainThread - MolodoyBot: Estado do crash salvo em: c:\Users\vitor\OneDrive\Documentos\cheat engine\logs\crash_state.json
+2026-02-23 14:56:15 [CRITICAL] MainThread - MolodoyBot: ============================================================
+2026-02-23 14:56:15 [CRITICAL] MainThread - MolodoyBot: CRASH NAO TRATADO!
+2026-02-23 14:56:15 [CRITICAL] MainThread - MolodoyBot: ============================================================
+2026-02-23 14:56:15 [CRITICAL] MainThread - MolodoyBot: Traceback (most recent call last):
+2026-02-23 14:56:15 [CRITICAL] MainThread - MolodoyBot:   File "c:\Users\vitor\OneDrive\Documentos\cheat engine\main.py", line 3808, in <module>
+    frame_graphs_container = main_window.frame_graphs_container
+                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-23 14:56:15 [CRITICAL] MainThread - MolodoyBot: AttributeError: 'MainWindow' object has no attribute 'frame_graphs_container'
+2026-02-23 14:56:15 [CRITICAL] MainThread - MolodoyBot: Estado do crash salvo em: c:\Users\vitor\OneDrive\Documentos\cheat engine\logs\crash_state.json
