@@ -10,6 +10,8 @@ import time
 import random
 from enum import Enum
 
+from utils.timing import gauss_wait
+
 from core.astar_walker import AStarWalker
 from core.map_analyzer import MapAnalyzer
 from core.memory_map import MemoryMap
@@ -322,10 +324,12 @@ class CreatureChaser:
     # =========================================================================
 
     def _record_step(self, dx, dy):
-        """Registra passo no historico."""
+        """Registra passo no historico e reseta counters de stuck."""
         self._step_history.append((dx, dy))
         if len(self._step_history) > self._max_history:
             self._step_history.pop(0)
+        # Reset stuck counter apos step bem-sucedido (mesma logica do cavebot)
+        self._stuck_counter = 0
 
     def _detect_oscillation(self, dx, dy):
         """Detecta padroes de vai-volta (ex: N,S,N,S)."""
@@ -490,8 +494,8 @@ class CreatureChaser:
             if self.debug:
                 print(f"[CHASE] Moveu {item_id} de ({obs_x},{obs_y}) para ({dest_x},{dest_y})")
 
-            # Delay humanizado (0.8-1.2s)
-            time.sleep(0.8 + random.uniform(0, 0.4))
+            # Delay humanizado gaussiano (mesma distribuicao do cavebot)
+            gauss_wait(1.0, 50)
             self._next_step_time = time.time() + 0.1
             return True
 
@@ -517,7 +521,7 @@ class CreatureChaser:
         if self.debug:
             print(f"[CHASE] Moveu parcel {item_id} para pe do player ({px},{py})")
 
-        # Delay humanizado
-        time.sleep(0.8 + random.uniform(0, 0.4))
+        # Delay humanizado gaussiano (mesma distribuicao do cavebot)
+        gauss_wait(1.0, 50)
         self._next_step_time = time.time() + 0.1
         return True
