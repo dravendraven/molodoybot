@@ -327,10 +327,9 @@ _cached_player_name = ""
 is_attacking = False
 is_looting = False
 # bot_running movido para state.is_running (bot_state.py)
-pm = None 
+pm = None
 base_addr = 0
 state.is_connected = False # True apenas se: Processo Aberto + Logado no Char
-is_graph_visible = False
 gm_found = False
 full_light_enabled = False # <--- NOVO
 xray_window = None
@@ -2730,63 +2729,6 @@ def gui_updater_loop():
             except Exception as e:
                 print(f"Erro GUI: {e}")
 
-        # --- ATUALIZAÇÃO DO GRÁFICO (Se estiver visível) ---
-        if is_graph_visible:
-            try:
-                ax.clear()
-
-                sw_hist_speed = sword_tracker.get_display_data()['history']
-                sw_eff_hist = []
-
-                if len(sw_hist_speed) > 1:
-                    # Benchmark usa tipo correto baseado na vocação
-                    vocation = BOT_SETTINGS.get('vocation', 'Knight')
-                    skill_type = "Dist" if "Paladin" in vocation else "Melee"
-                    bench_sw = get_benchmark_min_per_pct(sw_lvl, vocation, skill_type)
-                    for s in sw_hist_speed:
-                        if s > 0:
-                            eff = (bench_sw / s) * 100
-                            if eff > 100: eff = 100
-                            sw_eff_hist.append(eff)
-                        else:
-                            sw_eff_hist.append(0)
-
-                    ax.plot(sw_eff_hist, color='#4EA5F9', linewidth=2, marker='.', markersize=5, label=current_primary_skill_name)
-                    ax.fill_between(range(len(sw_eff_hist)), sw_eff_hist, color='#4EA5F9', alpha=0.1)
-
-                sh_hist_speed = shield_tracker.get_display_data()['history']
-                sh_eff_hist = []
-                if len(sh_hist_speed) > 1:
-                    bench_sh = get_benchmark_min_per_pct(sh_lvl, BOT_SETTINGS['vocation'], "Shield")
-                    for s in sh_hist_speed:
-                        if s > 0:
-                            eff = (bench_sh / s) * 100
-                            if eff > 100: eff = 100
-                            sh_eff_hist.append(eff)
-                        else:
-                            sh_eff_hist.append(0)
-                    ax.plot(sh_eff_hist, color='#F9A54E', linewidth=2, marker='.', markersize=5, label='Shield')
-
-                ax.axhline(y=100, color='#00FF00', linestyle='--', linewidth=1, alpha=0.5, label='Meta')
-                
-                ax.set_title("Eficiência de Treino (%)", fontsize=7, color="gray", pad=5)
-                ax.set_ylim(0, 110) 
-                
-                ax.grid(color='#303030', linestyle='--', linewidth=0.5)
-                ax.set_facecolor('#202020')
-                ax.tick_params(colors='gray', labelsize=8)
-                ax.spines['top'].set_visible(False)
-                ax.spines['right'].set_visible(False)
-                ax.spines['bottom'].set_color('#404040')
-                ax.spines['left'].set_color('#404040')
-                
-                ax.legend(facecolor='#202020', edgecolor='#404040', labelcolor='gray', fontsize=5, loc='lower right')
-                
-                canvas.draw()
-                
-            except Exception as e:
-                print(f"Erro Plot: {e}")
-
         # --- ATUALIZAÇÃO DO STATUS PANEL (se compact UI ativo) ---
         try:
             if 'update_status_panel' in dir() or 'update_status_panel' in globals():
@@ -2802,34 +2744,11 @@ def gui_updater_loop():
 def update_stats_visibility():
     """
     Ajusta a interface baseada na vocação.
-    Delega para main_window se disponível.
+    Delega para main_window.
     """
     global main_window
     if main_window is not None:
         main_window.update_stats_visibility()
-        return
-
-    # Fallback (não deve ser chamado após a refatoração)
-    voc = BOT_SETTINGS['vocation']
-    is_mage = any(x in voc for x in ["Elder", "Master", "Druid", "Sorcerer", "Mage", "None"])
-    global is_graph_visible
-
-    if is_mage:
-        box_sword.grid_remove()
-        frame_sw_det.grid_remove()
-        box_shield.grid_remove()
-        frame_sh_det.grid_remove()
-        if is_graph_visible:
-            toggle_graph()
-        frame_graphs_container.pack_forget()
-    else:
-        box_sword.grid(row=4, column=0, padx=10, sticky="w")
-        frame_sw_det.grid(row=4, column=1, padx=10, sticky="e")
-        box_shield.grid(row=5, column=0, padx=10, sticky="w")
-        frame_sh_det.grid(row=5, column=1, padx=10, sticky="e")
-        frame_graphs_container.pack(padx=10, pady=(5, 0), fill="x", after=frame_stats)
-
-    auto_resize_window()
 
 def auto_resize_window():
     """
@@ -3175,26 +3094,6 @@ def create_main_window_callbacks() -> MainWindowCallbacks:
 # FUNÇÃO ANTIGA open_settings() - CÓDIGO REMOVIDO
 # A implementação foi movida para gui/settings_window.py
 # ==============================================================================
-
-def toggle_graph():
-    """Delega para main_window se disponível."""
-    global main_window
-    if main_window is not None:
-        main_window.toggle_graph()
-        return
-
-    # Fallback (não deve ser chamado após a refatoração)
-    global is_graph_visible
-    if is_graph_visible:
-        frame_graph.pack_forget()
-        btn_graph.configure(text="Mostrar Gráfico 📈")
-        is_graph_visible = False
-    else:
-        frame_graph.pack(side="top", fill="both", expand=True, pady=(0, 5))
-        btn_graph.configure(text="Esconder Gráfico 📉")
-        is_graph_visible = True
-    auto_resize_window()
-
 
 # [CÓDIGO ANTIGO REMOVIDO]
 # A função open_settings() (~960 linhas) foi movida para gui/settings_window.py
@@ -3803,14 +3702,6 @@ if __name__ == "__main__":
     box_shield = main_window.box_shield
     frame_sh_det = main_window.frame_sh_det
     frame_stats = main_window.frame_stats
-
-    # Graph
-    frame_graphs_container = main_window.frame_graphs_container
-    frame_graph = main_window.frame_graph
-    btn_graph = main_window.btn_graph
-    fig = main_window.fig
-    ax = main_window.ax
-    canvas = main_window.canvas
 
     # Minimap
     minimap_container = main_window.minimap_container

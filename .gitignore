@@ -92,3 +92,7 @@ unnamed.jpg
 molodoybot-src.zip
 logs/crash_dump.txt
 logs/molodoy_bot.log
+logs/crash.log
+logs/crash_state.json
+logs/crash.log
+logs/crash.log
