@@ -314,6 +314,11 @@ BOT_SETTINGS = {
     # Auto-Explore
     "auto_explore_radius": 50,      # Raio de busca de spawns (tiles)
     "auto_explore_cooldown": 120,   # Cooldown de revisita (segundos)
+
+    # Healer
+    "healer_enabled": False,
+    "healer_cooldown_ms": 2000,     # Cooldown global entre qualquer heal (exhaust do jogo)
+    "healer_rules": [],             # Lista de regras: {priority, enabled, target_type, target_name, hp_below_percent, method, spell_or_rune}
 }
 
 _cached_player_name = ""
@@ -451,6 +456,7 @@ MODULE_STATUS = {
     'fisher': "",       # Atualizado por fishing_loop via callback
     'cavebot': "",      # Lido de cavebot_instance.state_message
     'alarm': "",        # Atualizado por alarm_loop via callback
+    'healer': "",       # Atualizado por healer_loop via callback
 }
 
 MODULE_ICONS = {
@@ -459,6 +465,7 @@ MODULE_ICONS = {
     'fisher': "🎣",
     'cavebot': "🤖",
     'alarm': "🔔",
+    'healer': "💚",
 }
 
 # Widgets do Status Panel (inicializados na criação da GUI)
@@ -2428,6 +2435,71 @@ def runemaker_thread():
                 logger.exception("Stack trace detalhado:")
             time.sleep(5)
 
+def start_healer_thread():
+    """
+    Thread para o módulo de Auto-Heal.
+    Monitora HP do player e amigos, executa heals conforme regras configuradas.
+    """
+    from modules.healer import init_healer_module, get_healer_module
+
+    healer_module = None
+
+    def should_run():
+        return state.is_running and state.is_connected
+
+    def config_getter(key, default=None):
+        return BOT_SETTINGS.get(key, default)
+
+    def update_healer_status(msg):
+        MODULE_STATUS['healer'] = msg
+
+    while state.is_running:
+        if not should_run():
+            time.sleep(1)
+            continue
+
+        if pm is None:
+            time.sleep(1)
+            continue
+
+        # Initialize healer module if not done
+        if healer_module is None:
+            try:
+                healer_module = init_healer_module(
+                    pm, base_addr, config_getter,
+                    log_callback=lambda msg: (log(msg), update_healer_status(msg.split(']')[-1].strip() if ']' in msg else msg))
+                )
+                healer_module.enable()
+                log("💚 Healer module initialized")
+            except Exception as e:
+                logger.error(f"Erro ao inicializar Healer: {e}")
+                time.sleep(5)
+                continue
+
+        try:
+            # Only run cycle if switch is on
+            if switch_healer and switch_healer.get():
+                healer_module.tick()
+            else:
+                MODULE_STATUS['healer'] = ""
+
+            # 100ms cycle (10Hz)
+            time.sleep(0.1)
+
+        except MemoryError as e:
+            logger.critical(f"MEMORY ERROR em Healer Thread: {str(e)}")
+            try:
+                import gc
+                gc.collect()
+            except:
+                pass
+            time.sleep(10)
+        except Exception as e:
+            logger.error(f"Erro Healer: {e}")
+            if BOT_SETTINGS.get('logging_enabled', False):
+                logger.exception("Stack trace detalhado:")
+            time.sleep(1)
+
 def lookid_monitor_loop():
     """
     Thread que monitora o ID do item/creature ao dar Look e exibe na status bar.
@@ -3705,6 +3777,7 @@ if __name__ == "__main__":
     switch_runemaker = main_window.switch_runemaker
     switch_cavebot = main_window.switch_cavebot
     switch_cavebot_var = main_window.switch_cavebot_var
+    switch_healer = main_window.switch_healer
 
     # Stats Labels
     lbl_exp_left = main_window.lbl_exp_left
@@ -3778,6 +3851,7 @@ if __name__ == "__main__":
     threading.Thread(target=auto_stacker_thread, daemon=True, name="AutoStacker").start()
     threading.Thread(target=global_afk_pause_thread, daemon=True, name="AFK-Global").start()
     threading.Thread(target=runemaker_thread, daemon=True, name="Runemaker").start()
+    threading.Thread(target=start_healer_thread, daemon=True, name="Healer").start()
     threading.Thread(target=connection_watchdog, daemon=True, name="ConnectionWatchdog").start()
     threading.Thread(target=start_cavebot_thread, daemon=True, name="Cavebot").start()
     threading.Thread(target=lookid_monitor_loop, daemon=True, name="LookIDMonitor").start()

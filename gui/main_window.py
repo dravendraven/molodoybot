@@ -10,23 +10,6 @@ import tkinter as tk
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
-# matplotlib será carregado sob demanda (lazy loading)
-plt = None
-FigureCanvasTkAgg = None
-
-
-def setup_matplotlib():
-    """Carrega matplotlib apenas quando necessário (lazy loading)"""
-    global plt, FigureCanvasTkAgg
-    if plt is None:
-        import matplotlib
-        matplotlib.use("TkAgg")
-        import matplotlib.pyplot as plt_module
-        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg as Canvas
-        plt = plt_module
-        FigureCanvasTkAgg = Canvas
-    return plt, FigureCanvasTkAgg
-
 
 # ==============================================================================
 # CALLBACKS DATACLASS
@@ -98,16 +81,17 @@ class MainWindow:
         self.app: ctk.CTk = None
 
         # === Estado Interno ===
-        self.is_graph_visible = False
         self.log_visible = False
         self.is_paused = False
         self.paused_switch_states = {}  # {switch_name: bool}
         self.paused_settings_states = {}  # {setting_name: value}
 
         # === Performance Optimization State ===
-        self._graph_initialized = False  # Lazy load matplotlib
         self._resize_job = None  # Debounce para auto_resize
         self._last_status_hash = None  # Cache para update_status_panel
+
+        # === Stats Collapsible State ===
+        self.stats_expanded = False
 
         # === Widgets Expostos (threads precisam acessar) ===
         # Header
@@ -125,6 +109,7 @@ class MainWindow:
         self.switch_runemaker: ctk.CTkSwitch = None
         self.switch_cavebot: ctk.CTkSwitch = None
         self.switch_cavebot_var: ctk.IntVar = None
+        self.switch_healer: ctk.CTkSwitch = None
 
         # Utility Toggles
         self.switch_torch: ctk.CTkSwitch = None
@@ -156,14 +141,6 @@ class MainWindow:
         self.box_shield: ctk.CTkFrame = None
         self.frame_sh_det: ctk.CTkFrame = None
         self.frame_stats: ctk.CTkFrame = None
-
-        # Graph
-        self.frame_graphs_container: ctk.CTkFrame = None
-        self.frame_graph: ctk.CTkFrame = None
-        self.btn_graph: ctk.CTkButton = None
-        self.fig = None
-        self.ax = None
-        self.canvas = None
 
         # Minimap
         self.minimap_container: ctk.CTkFrame = None
@@ -211,8 +188,7 @@ class MainWindow:
         self._create_header()
         self._create_controls()
         self._create_utility_toggles()
-        self._create_stats()
-        self._create_graph()
+        self._create_stats()  # Stats colapsável (sem gráfico)
         self._create_minimap_panel()
         self._create_status_panel()
         self._create_log()
@@ -336,6 +312,13 @@ class MainWindow:
         )
         self.switch_cavebot.grid(row=2, column=1, sticky="w", padx=(10, 0), pady=5)
 
+        # Healer
+        self.switch_healer = ctk.CTkSwitch(
+            frame_controls, text="Healer",
+            progress_color="#FF6B6B", font=("Verdana", 11)
+        )
+        self.switch_healer.grid(row=3, column=0, sticky="w", padx=(20, 0), pady=5)
+
     def _create_utility_toggles(self):
         """Cria a linha de toggles utilitários (Tocha, Light, Spear)."""
         settings = self.callbacks.get_bot_settings()
@@ -346,7 +329,7 @@ class MainWindow:
         frame_utils.pack(padx=10, pady=(0, 5), fill="x")
         frame_utils.grid_columnconfigure(0, weight=1)
         frame_utils.grid_columnconfigure(1, weight=1)
-        frame_utils.grid_columnconfigure(2, weight=1)
+        frame_utils.grid_columnconfigure(2, weight=0)
 
         # Auto Torch
         self.switch_torch = ctk.CTkSwitch(
@@ -368,83 +351,131 @@ class MainWindow:
         if settings.get('full_light_enabled', False):
             self.switch_light.select()
 
-        # Spear Picker
+        # Spear Picker + Count
+        frame_spear = ctk.CTkFrame(frame_utils, fg_color="transparent")
+        frame_spear.grid(row=0, column=2, sticky="w", padx=(10, 0), pady=4)
+
         self.switch_spear = ctk.CTkSwitch(
-            frame_utils, text="Spear",
+            frame_spear, text="Spear", width=38,
             command=lambda: self.callbacks.on_spear_picker_toggle(bool(self.switch_spear.get())),
             progress_color="#E67E22", font=("Verdana", 11)
         )
-        self.switch_spear.grid(row=0, column=2, sticky="w", padx=(10, 0), pady=4)
+        self.switch_spear.pack(side="left")
         if settings.get('spear_picker_enabled', False):
             self.switch_spear.select()
 
+        self.entry_spear_count = ctk.CTkEntry(frame_spear, width=30, height=20, font=("Verdana", 9), justify="center")
+        self.entry_spear_count.pack(side="left", padx=(2, 0))
+        self.entry_spear_count.insert(0, str(settings.get('spear_max_count', 3)))
+
+        def on_spear_count_change(event=None):
+            try:
+                val = int(self.entry_spear_count.get())
+                val = max(1, min(100, val))
+                self.callbacks.get_bot_settings()['spear_max_count'] = val
+            except ValueError:
+                pass
+
+        self.entry_spear_count.bind("<FocusOut>", on_spear_count_change)
+        self.entry_spear_count.bind("<Return>", on_spear_count_change)
+
     def _create_stats(self):
-        """Cria o painel de estatísticas."""
+        """Cria o painel de estatísticas colapsável."""
         self.frame_stats = ctk.CTkFrame(
             self.main_frame, fg_color="transparent",
             border_color="#303030", border_width=1, corner_radius=6
         )
         self.frame_stats.pack(padx=10, pady=5, fill="x")
-        self.frame_stats.grid_columnconfigure(1, weight=1)
 
-        # LINHA 2 EXP
-        frame_exp_det = ctk.CTkFrame(self.frame_stats, fg_color="transparent")
-        frame_exp_det.grid(row=2, column=1, sticky="e", padx=10)
+        # === SUMMARY (sempre visível - 1 linha compacta) ===
+        self.stats_summary_frame = ctk.CTkFrame(self.frame_stats, fg_color="transparent")
+        self.stats_summary_frame.pack(fill="x", padx=10, pady=6)
+
+        # XP Rate (principal)
+        self.lbl_exp_rate = ctk.CTkLabel(
+            self.stats_summary_frame, text="-- xp/h",
+            font=("Verdana", 11, "bold"), text_color="#FFFFFF"
+        )
+        self.lbl_exp_rate.pack(side="left")
+
+        ctk.CTkLabel(
+            self.stats_summary_frame, text="•",
+            font=("Verdana", 11), text_color="#555555"
+        ).pack(side="left", padx=8)
+
+        # Gold Total
+        self.lbl_gold_total = ctk.CTkLabel(
+            self.stats_summary_frame, text="0 gp",
+            font=("Verdana", 11, "bold"), text_color="#FFD700"
+        )
+        self.lbl_gold_total.pack(side="left")
+
+        ctk.CTkLabel(
+            self.stats_summary_frame, text="•",
+            font=("Verdana", 11), text_color="#555555"
+        ).pack(side="left", padx=8)
+
+        # Regen Status (compacto)
+        self.lbl_regen = ctk.CTkLabel(
+            self.stats_summary_frame, text="Regen --",
+            font=("Verdana", 11), text_color="#2CC985"
+        )
+        self.lbl_regen.pack(side="left")
+
+        # Botão expand/collapse
+        self.btn_stats_toggle = ctk.CTkButton(
+            self.stats_summary_frame, text="▼", width=24, height=24,
+            fg_color="transparent", hover_color="#303030",
+            font=("Verdana", 10), command=self.toggle_stats
+        )
+        self.btn_stats_toggle.pack(side="right")
+
+        # === DETAILS (oculto por padrão) ===
+        self.stats_details_frame = ctk.CTkFrame(self.frame_stats, fg_color="transparent")
+        # NÃO pack - começa oculto
+
+        # Divisória
+        ctk.CTkFrame(self.stats_details_frame, height=1, fg_color="#303030").pack(
+            fill="x", padx=0, pady=(0, 8)
+        )
+
+        # EXP detalhado
+        frame_exp = ctk.CTkFrame(self.stats_details_frame, fg_color="transparent")
+        frame_exp.pack(fill="x")
 
         self.lbl_exp_left = ctk.CTkLabel(
-            frame_exp_det, text="--",
+            frame_exp, text="--",
             font=("Verdana", 11), text_color="gray"
         )
-        self.lbl_exp_left.pack(side="left", padx=5)
+        self.lbl_exp_left.pack(side="left")
 
-        self.lbl_exp_rate = ctk.CTkLabel(
-            frame_exp_det, text="-- xp/h",
-            font=("Verdana", 11), text_color="gray"
-        )
-        self.lbl_exp_rate.pack(side="left", padx=5)
+        ctk.CTkLabel(frame_exp, text="•", font=("Verdana", 11), text_color="#555555").pack(side="left", padx=8)
 
         self.lbl_exp_eta = ctk.CTkLabel(
-            frame_exp_det, text="--",
+            frame_exp, text="ETA --",
             font=("Verdana", 11), text_color="gray"
         )
         self.lbl_exp_eta.pack(side="left")
 
-        # Divisória
-        frame_div = ctk.CTkFrame(self.frame_stats, height=1, fg_color="#303030")
-        frame_div.grid(row=1, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 5))
-
-        # LINHA 2 REGEN
-        self.lbl_regen = ctk.CTkLabel(
-            self.frame_stats, text="🍖 --:--",
-            font=("Verdana", 11, "bold"), text_color="gray"
-        )
-        self.lbl_regen.grid(row=2, column=0, padx=10, pady=2, sticky="w")
-
-        # LINHA 3: RECURSOS (Gold + Regen Stock)
-        frame_resources = ctk.CTkFrame(self.frame_stats, fg_color="transparent")
-        frame_resources.grid(row=3, column=0, columnspan=2, sticky="ew", padx=10, pady=2)
+        # Regen + Food Stock
+        frame_regen = ctk.CTkFrame(self.stats_details_frame, fg_color="transparent")
+        frame_regen.pack(fill="x", pady=(6, 0))
 
         self.lbl_regen_stock = ctk.CTkLabel(
-            frame_resources, text="🍖 --",
+            frame_regen, text="🍖 --",
             font=("Verdana", 11)
         )
-        self.lbl_regen_stock.pack(side="left", padx=(0, 10))
+        self.lbl_regen_stock.pack(side="left")
 
         self.lbl_gold_rate = ctk.CTkLabel(
-            frame_resources, text="0 gp/h",
+            frame_regen, text="0 gp/h",
             font=("Verdana", 11), text_color="gray"
         )
         self.lbl_gold_rate.pack(side="right")
 
-        self.lbl_gold_total = ctk.CTkLabel(
-            frame_resources, text="🪙 0 gp",
-            font=("Verdana", 11), text_color="#FFD700"
-        )
-        self.lbl_gold_total.pack(side="right", padx=(10, 10))
-
-        # LINHA 4: PRIMARY SKILL (Sword/Club/Axe/Distance)
-        self.box_sword = ctk.CTkFrame(self.frame_stats, fg_color="transparent")
-        self.box_sword.grid(row=4, column=0, padx=10, sticky="w")
+        # PRIMARY SKILL (Sword/Club/Axe/Distance)
+        self.box_sword = ctk.CTkFrame(self.stats_details_frame, fg_color="transparent")
+        self.box_sword.pack(fill="x", pady=(6, 0))
 
         self.lbl_primary_skill_name = ctk.CTkLabel(
             self.box_sword, text="Sword:",
@@ -458,29 +489,26 @@ class MainWindow:
         )
         self.lbl_sword_val.pack(side="left", padx=(5, 0))
 
-        self.frame_sw_det = ctk.CTkFrame(self.frame_stats, fg_color="transparent")
-        self.frame_sw_det.grid(row=4, column=1, padx=10, sticky="e")
+        self.lbl_sword_time = ctk.CTkLabel(
+            self.box_sword, text="ETA: --",
+            font=("Verdana", 11), text_color="gray"
+        )
+        self.lbl_sword_time.pack(side="right")
 
         self.lbl_sword_rate = ctk.CTkLabel(
-            self.frame_sw_det, text="--m/%",
+            self.box_sword, text="--m/%",
             font=("Verdana", 11), text_color="gray"
         )
-        self.lbl_sword_rate.pack(side="left", padx=5)
+        self.lbl_sword_rate.pack(side="right", padx=(0, 10))
 
-        self.lbl_sword_time = ctk.CTkLabel(
-            self.frame_sw_det, text="ETA: --",
-            font=("Verdana", 11), text_color="gray"
-        )
-        self.lbl_sword_time.pack(side="left")
+        # Frame containers para compatibilidade (usado em update_stats_visibility)
+        self.frame_sw_det = self.box_sword
 
-        # LINHA 5: SHIELD
-        self.box_shield = ctk.CTkFrame(self.frame_stats, fg_color="transparent")
-        self.box_shield.grid(row=5, column=0, padx=10, sticky="w")
+        # SHIELD
+        self.box_shield = ctk.CTkFrame(self.stats_details_frame, fg_color="transparent")
+        self.box_shield.pack(fill="x", pady=(4, 0))
 
-        ctk.CTkLabel(
-            self.box_shield, text="Shield:",
-            font=("Verdana", 11)
-        ).pack(side="left")
+        ctk.CTkLabel(self.box_shield, text="Shield:", font=("Verdana", 11)).pack(side="left")
 
         self.lbl_shield_val = ctk.CTkLabel(
             self.box_shield, text="--",
@@ -488,29 +516,25 @@ class MainWindow:
         )
         self.lbl_shield_val.pack(side="left", padx=(5, 0))
 
-        self.frame_sh_det = ctk.CTkFrame(self.frame_stats, fg_color="transparent")
-        self.frame_sh_det.grid(row=5, column=1, padx=10, sticky="e")
+        self.lbl_shield_time = ctk.CTkLabel(
+            self.box_shield, text="ETA: --",
+            font=("Verdana", 11), text_color="gray"
+        )
+        self.lbl_shield_time.pack(side="right")
 
         self.lbl_shield_rate = ctk.CTkLabel(
-            self.frame_sh_det, text="--m/%",
+            self.box_shield, text="--m/%",
             font=("Verdana", 11), text_color="gray"
         )
-        self.lbl_shield_rate.pack(side="left", padx=5)
+        self.lbl_shield_rate.pack(side="right", padx=(0, 10))
 
-        self.lbl_shield_time = ctk.CTkLabel(
-            self.frame_sh_det, text="ETA: --",
-            font=("Verdana", 11), text_color="gray"
-        )
-        self.lbl_shield_time.pack(side="left")
+        self.frame_sh_det = self.box_shield
 
-        # LINHA 6: MAGIC
-        box_magic = ctk.CTkFrame(self.frame_stats, fg_color="transparent")
-        box_magic.grid(row=6, column=0, padx=10, sticky="w")
+        # MAGIC LEVEL
+        box_magic = ctk.CTkFrame(self.stats_details_frame, fg_color="transparent")
+        box_magic.pack(fill="x", pady=(4, 6))
 
-        ctk.CTkLabel(
-            box_magic, text="ML:",
-            font=("Verdana", 11)
-        ).pack(side="left")
+        ctk.CTkLabel(box_magic, text="ML:", font=("Verdana", 11)).pack(side="left")
 
         self.lbl_magic_val = ctk.CTkLabel(
             box_magic, text="--",
@@ -518,67 +542,30 @@ class MainWindow:
         )
         self.lbl_magic_val.pack(side="left", padx=(5, 0))
 
-        frame_ml_det = ctk.CTkFrame(self.frame_stats, fg_color="transparent")
-        frame_ml_det.grid(row=6, column=1, padx=10, sticky="e")
+        self.lbl_magic_time = ctk.CTkLabel(
+            box_magic, text="ETA: --",
+            font=("Verdana", 11), text_color="gray"
+        )
+        self.lbl_magic_time.pack(side="right")
 
         self.lbl_magic_rate = ctk.CTkLabel(
-            frame_ml_det, text="--m/%",
+            box_magic, text="--m/%",
             font=("Verdana", 11), text_color="gray"
         )
-        self.lbl_magic_rate.pack(side="left", padx=5)
+        self.lbl_magic_rate.pack(side="right", padx=(0, 10))
 
-        self.lbl_magic_time = ctk.CTkLabel(
-            frame_ml_det, text="ETA: --",
-            font=("Verdana", 11), text_color="gray"
-        )
-        self.lbl_magic_time.pack(side="left")
+    def toggle_stats(self):
+        """Alterna entre stats expandido e colapsado."""
+        self.stats_expanded = not self.stats_expanded
 
-    def _create_graph(self):
-        """Cria o container do gráfico - matplotlib carregado sob demanda."""
-        self.frame_graphs_container = ctk.CTkFrame(
-            self.main_frame, fg_color="transparent",
-            border_width=0, border_color="#303030", corner_radius=0
-        )
-        self.frame_graphs_container.pack(padx=10, pady=(5, 0), fill="x")
+        if self.stats_expanded:
+            self.stats_details_frame.pack(fill="x", padx=10, pady=(0, 6))
+            self.btn_stats_toggle.configure(text="▲")
+        else:
+            self.stats_details_frame.pack_forget()
+            self.btn_stats_toggle.configure(text="▼")
 
-        self.btn_graph = ctk.CTkButton(
-            self.frame_graphs_container,
-            text="Mostrar Gráfico 📈",
-            command=self.toggle_graph,
-            fg_color="#202020", hover_color="#303030",
-            height=25, corner_radius=6, border_width=0
-        )
-        self.btn_graph.pack(side="top", fill="x", padx=1, pady=0)
-
-        self.frame_graph = ctk.CTkFrame(
-            self.frame_graphs_container, fg_color="transparent", corner_radius=6
-        )
-        # matplotlib será carregado em _init_graph() na primeira vez que o gráfico for aberto
-
-    def _init_graph(self):
-        """Inicializa matplotlib sob demanda (lazy loading)."""
-        if self._graph_initialized:
-            return
-
-        plt_mod, Canvas = setup_matplotlib()
-        plt_mod.style.use('dark_background')
-
-        self.fig, self.ax = plt_mod.subplots(figsize=(4, 1.6), dpi=100, facecolor='#2B2B2B')
-        self.fig.patch.set_facecolor('#202020')
-        self.ax.set_facecolor('#202020')
-        self.ax.tick_params(axis='x', colors='gray', labelsize=6, pad=2)
-        self.ax.tick_params(axis='y', colors='gray', labelsize=6, pad=2)
-        self.ax.spines['top'].set_visible(False)
-        self.ax.spines['right'].set_visible(False)
-        self.ax.spines['bottom'].set_color('#404040')
-        self.ax.spines['left'].set_color('#404040')
-        self.ax.set_title("Eficiencia de Treino (%)", fontsize=8, color="gray")
-
-        self.canvas = Canvas(self.fig, master=self.frame_graph)
-        widget = self.canvas.get_tk_widget()
-        widget.pack(fill="both", expand=True, padx=1, pady=2)
-
-        self._graph_initialized = True
+        self.auto_resize_window()
 
     def _create_minimap_panel(self):
         """Cria o painel do minimap (mostrado quando cavebot está ativo)."""
@@ -663,43 +650,6 @@ class MainWindow:
     # MÉTODOS PÚBLICOS
     # ==========================================================================
 
-    def toggle_graph(self):
-        """Alterna visibilidade do gráfico de eficiência."""
-        if self.is_graph_visible:
-            # === MEMORY OPTIMIZATION: Liberar recursos do matplotlib ===
-            self._cleanup_graph()
-            self.frame_graph.pack_forget()
-            self.btn_graph.configure(text="Mostrar Gráfico 📈")
-            self.is_graph_visible = False
-        else:
-            # Lazy load matplotlib na primeira vez
-            self._init_graph()
-            self.frame_graph.pack(side="top", fill="both", expand=True, pady=(0, 5))
-            self.btn_graph.configure(text="Esconder Gráfico 📉")
-            self.is_graph_visible = True
-        self.auto_resize_window()
-
-    def _cleanup_graph(self):
-        """Libera recursos do matplotlib para economizar memória (~5-10 MB)."""
-        if self.fig is not None:
-            try:
-                # Destroi o canvas widget primeiro
-                if self.canvas is not None:
-                    widget = self.canvas.get_tk_widget()
-                    widget.destroy()
-                    self.canvas = None
-
-                # Fecha a figura matplotlib (libera memória)
-                plt_mod, _ = setup_matplotlib()
-                plt_mod.close(self.fig)
-                self.fig = None
-                self.ax = None
-
-                # Reset flag para permitir reinicialização
-                self._graph_initialized = False
-            except Exception as e:
-                print(f"[MainWindow] Erro ao limpar gráfico: {e}")
-
     def toggle_pause(self):
         """
         Alterna entre pausar e resumir todos os módulos.
@@ -716,6 +666,7 @@ class MainWindow:
                 'fisher': self.switch_fisher.get() if self.switch_fisher else False,
                 'runemaker': self.switch_runemaker.get() if self.switch_runemaker else False,
                 'cavebot': self.switch_cavebot_var.get() if self.switch_cavebot_var else 0,
+                'healer': self.switch_healer.get() if self.switch_healer else False,
             }
 
             # Chamar callback para salvar e desativar settings (light, spear, torch, ai)
@@ -733,6 +684,8 @@ class MainWindow:
                 self.switch_fisher.deselect()
             if self.switch_runemaker:
                 self.switch_runemaker.deselect()
+            if self.switch_healer:
+                self.switch_healer.deselect()
 
             # Cavebot precisa chamar toggle se estava ligado
             if self.paused_switch_states.get('cavebot', 0):
@@ -758,6 +711,8 @@ class MainWindow:
                 self.switch_fisher.select()
             if self.paused_switch_states.get('runemaker', False) and self.switch_runemaker:
                 self.switch_runemaker.select()
+            if self.paused_switch_states.get('healer', False) and self.switch_healer:
+                self.switch_healer.select()
 
             # Cavebot precisa chamar toggle se estava ligado antes
             if self.paused_switch_states.get('cavebot', 0):
@@ -777,37 +732,21 @@ class MainWindow:
     def update_stats_visibility(self):
         """
         Ajusta a interface baseada na vocação:
-        - Mages: Esconde Sword, Shield e o Gráfico de Melee.
-        - Knights: Mostra tudo.
+        - Mages: Esconde Sword e Shield (stats de melee)
+        - Knights/Paladins: Mostra tudo
         """
         settings = self.callbacks.get_bot_settings()
         voc = settings.get('vocation', 'Knight')
         is_mage = any(x in voc for x in ["Elder", "Master", "Druid", "Sorcerer", "Mage", "None"])
 
         if is_mage:
-            # Esconde Stats de Melee
-            self.box_sword.grid_remove()
-            self.frame_sw_det.grid_remove()
-            self.box_shield.grid_remove()
-            self.frame_sh_det.grid_remove()
-
-            # Se o gráfico estiver aberto, fecha ele primeiro
-            if self.is_graph_visible:
-                self.toggle_graph()
-
-            # Esconde o Container do Botão de Gráfico
-            self.frame_graphs_container.pack_forget()
+            # Esconde Stats de Melee (dentro do details_frame)
+            self.box_sword.pack_forget()
+            self.box_shield.pack_forget()
         else:
             # Mostra Stats de Melee
-            self.box_sword.grid(row=4, column=0, padx=10, sticky="w")
-            self.frame_sw_det.grid(row=4, column=1, padx=10, sticky="e")
-            self.box_shield.grid(row=5, column=0, padx=10, sticky="w")
-            self.frame_sh_det.grid(row=5, column=1, padx=10, sticky="e")
-
-            # Mostra o Container do Gráfico
-            self.frame_graphs_container.pack(
-                padx=10, pady=(5, 0), fill="x", after=self.frame_stats
-            )
+            self.box_sword.pack(fill="x", pady=(6, 0))
+            self.box_shield.pack(fill="x", pady=(4, 0))
 
         self.auto_resize_window()
 
@@ -842,6 +781,8 @@ class MainWindow:
                 active_modules.append('cavebot')
             if self.switch_alarm.get():
                 active_modules.append('alarm')
+            if self.switch_healer and self.switch_healer.get():
+                active_modules.append('healer')
         except:
             pass
 

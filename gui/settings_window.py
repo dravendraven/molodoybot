@@ -260,8 +260,9 @@ class SettingsWindow:
         """Cria a janela principal com lazy tab building para performance."""
         self.window = ctk.CTkToplevel(self.parent)
         self.window.title("Configurações")
+        self._min_width = 480
         self._min_height = 520
-        self.window.geometry(f"390x{self._min_height}")
+        self.window.geometry(f"{self._min_width}x{self._min_height}")
         self.window.attributes("-topmost", True)
 
         self.window.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -273,7 +274,7 @@ class SettingsWindow:
         # Cria tabs vazias (lazy loading - conteúdo construído sob demanda)
         self._tabs = {}
         self._tabs_built = set()
-        tab_names = ["Geral", "Trainer", "Alarme", "Alvos", "Loot", "Fisher", "Rune", "Cavebot"]
+        tab_names = ["Geral", "Trainer", "Alarme", "Alvos", "Loot", "Fisher", "Rune", "Healer", "Cavebot"]
         for name in tab_names:
             self._tabs[name] = tabview.add(name)
 
@@ -310,6 +311,7 @@ class SettingsWindow:
             "Loot": self._build_tab_loot,
             "Fisher": self._build_tab_fisher,
             "Rune": self._build_tab_rune,
+            "Healer": self._build_tab_healer,
             "Cavebot": self._build_tab_cavebot,
         }
 
@@ -341,7 +343,7 @@ class SettingsWindow:
             overhead = 100
             needed = content_h + overhead
             new_height = max(self._min_height, needed)
-            self.window.geometry(f"390x{new_height}")
+            self.window.geometry(f"{self._min_width}x{new_height}")
         except Exception:
             pass
 
@@ -419,25 +421,6 @@ class SettingsWindow:
         if settings.get('lookid_enabled', False):
             switch_lookid.select()
 
-        # Max Spears
-        f_spear_max = ctk.CTkFrame(frame_switches, fg_color="transparent")
-        f_spear_max.pack(anchor="w", pady=(5, 5))
-        ctk.CTkLabel(f_spear_max, text="Max Spears:", **self.UI['BODY']).pack(side="left")
-        entry_spear_max = ctk.CTkEntry(f_spear_max, width=50)
-        entry_spear_max.pack(side="left", padx=5)
-        entry_spear_max.insert(0, str(settings.get('spear_max_count', 3)))
-
-        def on_spear_max_change(event=None):
-            try:
-                val = int(entry_spear_max.get())
-                val = max(1, min(100, val))
-                self.cb.get_bot_settings()['spear_max_count'] = val
-            except ValueError:
-                pass
-
-        entry_spear_max.bind("<FocusOut>", on_spear_max_change)
-        entry_spear_max.bind("<Return>", on_spear_max_change)
-
         # AI Chat
         switch_ai_chat = ctk.CTkSwitch(frame_switches, text="Responder via IA",
                                        command=lambda: self.cb.on_ai_chat_toggle(bool(switch_ai_chat.get())),
@@ -503,10 +486,6 @@ class SettingsWindow:
             s['client_path'] = entry_client_path.get()
             entry_client_path.configure(state="disabled")
             s['ai_chat_enabled'] = bool(switch_ai_chat.get())
-            try:
-                s['spear_max_count'] = int(entry_spear_max.get())
-            except:
-                pass
             s['console_log_visible'] = bool(switch_console_log.get())
             s['logging_enabled'] = bool(switch_logging.get())
             # AFK Pauses
@@ -578,9 +557,6 @@ class SettingsWindow:
         if settings.get('ignore_first', False):
             switch_ignore.select()
 
-        ctk.CTkLabel(frame_tr_ignore, text="↳ Ignora o primeiro alvo (útil para Monk).",
-                    **self.UI['HINT']).pack(anchor="w", padx=40)
-
         # Anti Kill-Steal
         frame_tr_ks = ctk.CTkFrame(tab, fg_color="transparent")
         frame_tr_ks.pack(fill="x", padx=10, pady=5)
@@ -610,7 +586,7 @@ class SettingsWindow:
                     **self.UI['HINT']).pack(anchor="w", padx=40)
 
         # === AIMBOT ===
-        ctk.CTkLabel(frame_tr, text="Aimbot (Runas):", **self.UI['H1']).pack(anchor="w", padx=10, pady=(15, 0))
+        ctk.CTkLabel(tab, text="Aimbot (Runas):", **self.UI['H1']).pack(anchor="w", padx=10, pady=(15, 0))
 
         frame_aimbot = ctk.CTkFrame(tab, fg_color="transparent")
         frame_aimbot.pack(fill="x", padx=10, pady=5)
@@ -621,9 +597,6 @@ class SettingsWindow:
         switch_aimbot.pack(anchor="w")
         if settings.get('aimbot_enabled', False):
             switch_aimbot.select()
-
-        ctk.CTkLabel(frame_aimbot, text="↳ Usa runa no alvo atual ao pressionar a hotkey.",
-                    **self.UI['HINT']).pack(anchor="w", padx=40)
 
         # Aimbot Rune + Hotkey
         f_aimbot_opts = ctk.CTkFrame(tab, fg_color="transparent")
@@ -954,25 +927,9 @@ class SettingsWindow:
 
         frame_fish = self._create_grid_frame(tab)
 
-        # Tentativas
-        ctk.CTkLabel(frame_fish, text="Tentativas:", **self.UI['BODY']).grid(
-            row=0, column=0, sticky="e", padx=10, pady=2)
-        f_att = ctk.CTkFrame(frame_fish, fg_color="transparent")
-        f_att.grid(row=0, column=1, sticky="w")
-
-        entry_fish_min = ctk.CTkEntry(f_att, **self.UI['INPUT'])
-        entry_fish_min.pack(side="left")
-        entry_fish_min.insert(0, str(settings['fisher_min']))
-
-        ctk.CTkLabel(f_att, text="a", **self.UI['BODY']).pack(side="left", padx=5)
-
-        entry_fish_max = ctk.CTkEntry(f_att, **self.UI['INPUT'])
-        entry_fish_max.pack(side="left")
-        entry_fish_max.insert(0, str(settings['fisher_max']))
-
         # Cap Control
         ctk.CTkLabel(frame_fish, text="Min Cap:", **self.UI['BODY']).grid(
-            row=1, column=0, sticky="e", padx=10, pady=5)
+            row=0, column=0, sticky="e", padx=10, pady=5)
         entry_fish_cap_val = ctk.CTkEntry(frame_fish, **self.UI['INPUT'])
         entry_fish_cap_val.grid(row=1, column=1, sticky="w")
         entry_fish_cap_val.insert(0, str(settings.get('fisher_min_cap', 10.0)))
@@ -1011,17 +968,7 @@ class SettingsWindow:
         def save_fish():
             try:
                 s = self.cb.get_bot_settings()
-                mn = int(entry_fish_min.get())
-                mx = int(entry_fish_max.get())
                 cap_val = float(entry_fish_cap_val.get().replace(',', '.'))
-
-                if mn < 1:
-                    mn = 1
-                if mx < mn:
-                    mx = mn
-
-                s['fisher_min'] = mn
-                s['fisher_max'] = mx
                 s['fisher_min_cap'] = cap_val
                 s['fisher_check_cap'] = bool(switch_fish_cap.get())
                 s['fisher_fatigue'] = bool(switch_fatigue.get())
@@ -1180,6 +1127,229 @@ class SettingsWindow:
 
         ctk.CTkButton(tab, text="Salvar Rune", command=save_rune, height=32,
                      fg_color="#00A86B", hover_color="#008f5b").pack(side="bottom", fill="x", padx=20, pady=5)
+
+    def _build_tab_healer(self, tab: ctk.CTkFrame) -> None:
+        """Constrói a aba Healer."""
+        settings = self.cb.get_bot_settings()
+
+        # Store rule row widgets for collection on save
+        healer_rule_rows = []
+
+        # === GLOBAL COOLDOWN ===
+        ctk.CTkLabel(tab, text="Cooldown Global", **self.UI['H1']).pack(anchor="w", padx=10, pady=(10, 5))
+
+        f_cooldown = ctk.CTkFrame(tab, fg_color="transparent")
+        f_cooldown.pack(fill="x", padx=20, pady=2)
+        ctk.CTkLabel(f_cooldown, text="Cooldown entre heals (ms):", **self.UI['BODY']).pack(side="left")
+        entry_cooldown = ctk.CTkEntry(f_cooldown, **self.UI['INPUT'])
+        entry_cooldown.configure(width=80)
+        entry_cooldown.pack(side="left", padx=5)
+        entry_cooldown.insert(0, str(settings.get('healer_cooldown_ms', 2000)))
+
+        ctk.CTkLabel(tab, text="Tempo mínimo entre qualquer ação de heal",
+                    **self.UI['HINT']).pack(anchor="w", padx=25)
+
+        # === RULES SECTION ===
+        ctk.CTkLabel(tab, text="Regras de Cura", **self.UI['H1']).pack(anchor="w", padx=10, pady=(15, 5))
+        ctk.CTkLabel(tab, text="Menor prioridade = executa primeiro",
+                    **self.UI['HINT']).pack(anchor="w", padx=20, pady=2)
+
+        # Rules container
+        f_rules_container = ctk.CTkFrame(tab, fg_color="transparent")
+        f_rules_container.pack(fill="both", expand=True, padx=10, pady=5)
+
+        # Healing options based on target type
+        HEAL_OPTIONS_SELF = ["UH", "IH", "Exura Vita", "Exura Gran", "Exura"]
+        HEAL_OPTIONS_OTHER = ["UH", "IH", "Exura Sio"]
+
+        # Header row
+        f_header = ctk.CTkFrame(f_rules_container, fg_color="transparent")
+        f_header.pack(fill="x", pady=(0, 3))
+        ctk.CTkLabel(f_header, text="Prio", width=35, **self.UI['HINT']).pack(side="left", padx=2)
+        ctk.CTkLabel(f_header, text="Alvo", width=75, **self.UI['HINT']).pack(side="left", padx=2)
+        ctk.CTkLabel(f_header, text="Nome", width=70, **self.UI['HINT']).pack(side="left", padx=2)
+        ctk.CTkLabel(f_header, text="HP%", width=35, **self.UI['HINT']).pack(side="left", padx=2)
+        ctk.CTkLabel(f_header, text="Cura", width=90, **self.UI['HINT']).pack(side="left", padx=2)
+
+        # Frame for rule rows
+        f_rules_list = ctk.CTkFrame(f_rules_container, fg_color="#2b2b2b")
+        f_rules_list.pack(fill="both", expand=True)
+
+        def create_rule_row(rule_data=None):
+            """Create a single rule row with widgets."""
+            row_frame = ctk.CTkFrame(f_rules_list, fg_color="transparent")
+            row_frame.pack(fill="x", pady=2, padx=5)
+
+            # Priority
+            entry_prio = ctk.CTkEntry(row_frame, width=35, height=24, font=("Verdana", 9), justify="center")
+            entry_prio.pack(side="left", padx=2)
+            default_prio = rule_data.get('priority', 1) if rule_data else len(healer_rule_rows) + 1
+            entry_prio.insert(0, str(default_prio))
+
+            # Target type
+            combo_target = ctk.CTkComboBox(row_frame, values=["self", "friend", "creature"],
+                                            width=75, height=24, font=("Verdana", 9), state="readonly")
+            combo_target.pack(side="left", padx=2)
+            combo_target.set(rule_data.get('target_type', 'self') if rule_data else "self")
+
+            # Target name
+            entry_name = ctk.CTkEntry(row_frame, width=70, height=24, font=("Verdana", 9))
+            entry_name.pack(side="left", padx=2)
+            if rule_data and rule_data.get('target_name'):
+                entry_name.insert(0, rule_data['target_name'])
+
+            # HP%
+            entry_hp = ctk.CTkEntry(row_frame, width=35, height=24, font=("Verdana", 9), justify="center")
+            entry_hp.pack(side="left", padx=2)
+            entry_hp.insert(0, str(rule_data.get('hp_below_percent', 50) if rule_data else 50))
+
+            # Heal option (single combobox for spell/rune)
+            combo_heal = ctk.CTkComboBox(row_frame, values=HEAL_OPTIONS_SELF,
+                                          width=90, height=24, font=("Verdana", 9), state="readonly")
+            combo_heal.pack(side="left", padx=2)
+
+            # Set initial value from rule_data
+            if rule_data:
+                heal_value = rule_data.get('spell_or_rune', 'UH').upper()
+                # Normalize spell names for display
+                spell_map = {'EXURA': 'Exura', 'EXURA VITA': 'Exura Vita',
+                             'EXURA GRAN': 'Exura Gran', 'EXURA SIO': 'Exura Sio'}
+                heal_value = spell_map.get(heal_value, heal_value)
+                combo_heal.set(heal_value)
+            else:
+                combo_heal.set("UH")
+
+            # Remove button
+            def remove_row():
+                row_frame.destroy()
+                # Clean up list
+                for i, r in enumerate(healer_rule_rows):
+                    if r['frame'] == row_frame:
+                        healer_rule_rows.pop(i)
+                        break
+
+            btn_remove = ctk.CTkButton(row_frame, text="X", width=25, height=24,
+                                       fg_color="#FF5555", hover_color="#CC4444",
+                                       font=("Verdana", 9, "bold"), command=remove_row)
+            btn_remove.pack(side="left", padx=5)
+
+            # Update fields based on target type
+            def on_target_change(choice):
+                current_heal = combo_heal.get()
+                if choice == "self":
+                    entry_name.delete(0, "end")
+                    entry_name.configure(state="disabled", fg_color="#1a1a1a")
+                    combo_heal.configure(values=HEAL_OPTIONS_SELF)
+                    # Keep current value if valid, otherwise default
+                    if current_heal not in HEAL_OPTIONS_SELF:
+                        combo_heal.set("UH")
+                else:
+                    entry_name.configure(state="normal", fg_color="#343638")
+                    combo_heal.configure(values=HEAL_OPTIONS_OTHER)
+                    # Keep current value if valid, otherwise default
+                    if current_heal not in HEAL_OPTIONS_OTHER:
+                        combo_heal.set("UH")
+
+            combo_target.configure(command=on_target_change)
+            on_target_change(combo_target.get())  # Initial state
+
+            # Store widgets reference
+            row_data = {
+                'frame': row_frame,
+                'priority': entry_prio,
+                'target_type': combo_target,
+                'target_name': entry_name,
+                'hp_percent': entry_hp,
+                'heal': combo_heal
+            }
+            healer_rule_rows.append(row_data)
+            return row_data
+
+        # Load existing rules
+        for rule in settings.get('healer_rules', []):
+            if isinstance(rule, dict):
+                create_rule_row(rule)
+
+        # Add rule button
+        def add_rule():
+            create_rule_row()
+
+        ctk.CTkButton(f_rules_container, text="+ Adicionar Regra", command=add_rule,
+                     fg_color="#4A90E2", hover_color="#3A7BC8", height=28,
+                     font=("Verdana", 10)).pack(pady=(10, 5))
+
+        # === SAVE BUTTON ===
+        def save_healer():
+            try:
+                s = self.cb.get_bot_settings()
+                s['healer_cooldown_ms'] = int(entry_cooldown.get())
+
+                # Collect rules from widgets
+                parsed_rules = []
+                for row in healer_rule_rows:
+                    if not row['frame'].winfo_exists():
+                        continue
+
+                    target_type = row['target_type'].get()
+                    target_name = row['target_name'].get().strip() if target_type != "self" else ""
+
+                    try:
+                        priority = int(row['priority'].get())
+                        hp_pct = int(row['hp_percent'].get())
+                    except ValueError:
+                        self.cb.log("❌ Prioridade e HP% devem ser números")
+                        continue
+
+                    heal_option = row['heal'].get()
+                    if not heal_option:
+                        continue
+
+                    # Parse heal option into method and spell_or_rune
+                    if heal_option in ["UH", "IH"]:
+                        method = "rune"
+                        spell_or_rune = heal_option
+                    else:
+                        method = "spell"
+                        # Convert display name to spell words
+                        spell_map = {
+                            "Exura": "exura",
+                            "Exura Vita": "exura vita",
+                            "Exura Gran": "exura gran",
+                            "Exura Sio": "exura sio"
+                        }
+                        spell_or_rune = spell_map.get(heal_option, heal_option.lower())
+
+                    parsed_rules.append({
+                        'priority': priority,
+                        'enabled': True,
+                        'target_type': target_type,
+                        'target_name': target_name,
+                        'hp_below_percent': hp_pct,
+                        'method': method,
+                        'spell_or_rune': spell_or_rune,
+                    })
+
+                # Sort by priority
+                parsed_rules.sort(key=lambda r: r['priority'])
+                s['healer_rules'] = parsed_rules
+
+                self.cb.save_config_file()
+                self.cb.log(f"💚 Healer salvo: {len(parsed_rules)} regras")
+
+                # Notify healer module to reload rules
+                try:
+                    from modules.healer import get_healer_module
+                    healer = get_healer_module()
+                    if healer:
+                        healer.mark_rules_dirty()
+                except:
+                    pass
+
+            except Exception as e:
+                self.cb.log(f"❌ Erro ao salvar Healer: {e}")
+
+        ctk.CTkButton(tab, text="Salvar Healer", command=save_healer,
+                     fg_color="#2CC985", height=32).pack(side="bottom", pady=10, fill="x", padx=20)
 
     def _build_tab_cavebot(self, tab: ctk.CTkFrame) -> None:
         """Constrói a aba Cavebot."""
