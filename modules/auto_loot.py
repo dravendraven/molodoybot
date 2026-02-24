@@ -278,31 +278,29 @@ def run_auto_loot(pm, base_addr, hwnd, config=None):
 
                 # --- AUTO EAT ---
                 if item.id in FOOD_IDS and auto_eat_food:
-                    if is_player_full(pm, base_addr) and not drop_food_if_full:
-                        # Se não for dropar, apenas ignora e continua o loop para o próximo item
-                        continue
-
                     food_pos = get_container_pos(cont.index, item.slot_index)
 
-                    # Tenta comer
+                    # SEMPRE tenta comer primeiro (para detectar se está full)
                     packet.use_item(food_pos, item.id)
                     gauss_wait(*LOOT_DELAY_EAT_FOOD)
 
-                    # Verifica se está full e a config de drop
+                    # Agora verifica se está full (mensagem aparece após tentar comer)
                     if is_player_full(pm, base_addr):
-                        if drop_food_if_full:
+                        # Está full - decidir o que fazer com a comida
+                        if item.id in loot_ids:
+                            pass  # Não faz nada - deixa cair no bloco AUTO LOOT abaixo
+                        elif drop_food_if_full:
                             food_name = foods_db.get_food_name(item.id)
                             print(f"🤢 Barriga cheia! Descartando {food_name}...")
-
                             px, py, pz = get_player_pos(pm, base_addr)
                             pos_ground = get_ground_pos(px, py, pz)
-
                             packet.move_item(food_pos, pos_ground, item.id, item.count)
                             return ("DROP_FOOD", item.id, item.count)
                         else:
-                            return "EAT_FULL"
-
-                    return ("EAT", item.id)
+                            continue  # Ignora comida
+                    else:
+                        # Comeu com sucesso
+                        return ("EAT", item.id)
 
                 # --- AUTO LOOT ---
                 if item.id in loot_ids:
