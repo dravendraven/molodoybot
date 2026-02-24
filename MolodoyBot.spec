@@ -1,5 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
+from PyInstaller.building.splash import Splash
 
 datas = [
     ('world-spawn.xml', '.'),
@@ -49,8 +50,21 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 
+# Splash screen nativa (aparece ANTES da extração)
+splash = Splash(
+    'splash.png',
+    binaries=a.binaries,
+    datas=a.datas,
+    text_pos=(110, 115),         # Posição do texto de status (parte inferior)
+    text_size=10,
+    text_color='#969696',
+    text_default='Iniciando...',
+)
+
 exe = EXE(
     pyz,
+    splash,                      # Splash screen nativa
+    splash.binaries,             # Binários necessários para splash
     a.scripts,
     a.binaries,
     a.datas,

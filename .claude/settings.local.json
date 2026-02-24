@@ -25,7 +25,10 @@
       "Bash(powershell -Command \"Get-ChildItem -Recurse -File | Where-Object { $_Extension -in ''.json'',''.xml'',''.pickle'',''.pkl'' } | Sort-Object Length -Descending | Select-Object -First 10 @{N=''Size\\(MB\\)'';E={[math]::Round\\($_Length/1MB,2\\)}}, FullName\")",
       "Bash(for f in core/*.py modules/*.py gui/*.py)",
       "Bash(do [ -f \"$f\" ])",
-      "Bash(timeout 3 python:*)"
+      "Bash(timeout 3 python:*)",
+      "Bash(.venvScriptspython.exe -m PyInstaller MolodoyBot.spec --noconfirm)",
+      "Bash(cmd /c:*)",
+      "Bash(.venv/Scripts/python.exe:*)"
     ],
     "additionalDirectories": [
       "c:\\Users\\vitor\\OneDrive\\Documentos\\cheat engine"

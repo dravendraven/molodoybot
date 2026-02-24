@@ -337,32 +337,32 @@ class MainWindow:
 
         # Auto Torch
         self.switch_torch = ctk.CTkSwitch(
-            frame_utils, text="Tocha",
+            frame_utils, text="Tocha", width=35,
             command=lambda: self.callbacks.on_auto_torch_toggle(bool(self.switch_torch.get())),
-            progress_color="#F39C12", font=("Verdana", 11)
+            progress_color="#F39C12", font=("Verdana", 10)
         )
-        self.switch_torch.grid(row=0, column=0, sticky="w", padx=(15, 0), pady=4)
+        self.switch_torch.grid(row=0, column=0, sticky="w", padx=(10, 0), pady=4)
         if settings.get('auto_torch_enabled', False):
             self.switch_torch.select()
 
         # Full Light
         self.switch_light = ctk.CTkSwitch(
-            frame_utils, text="Light",
+            frame_utils, text="Light", width=35,
             command=lambda: self.callbacks.on_light_toggle(bool(self.switch_light.get())),
-            progress_color="#FFA500", font=("Verdana", 11)
+            progress_color="#FFA500", font=("Verdana", 10)
         )
-        self.switch_light.grid(row=0, column=1, sticky="w", padx=(10, 0), pady=4)
+        self.switch_light.grid(row=0, column=1, sticky="w", padx=(5, 0), pady=4)
         if settings.get('full_light_enabled', False):
             self.switch_light.select()
 
         # Spear Picker + Count
         frame_spear = ctk.CTkFrame(frame_utils, fg_color="transparent")
-        frame_spear.grid(row=0, column=2, sticky="w", padx=(10, 0), pady=4)
+        frame_spear.grid(row=0, column=2, sticky="w", padx=(0, 0), pady=4)
 
         self.switch_spear = ctk.CTkSwitch(
-            frame_spear, text="Spear", width=38,
+            frame_spear, text="Spear", width=35,
             command=lambda: self.callbacks.on_spear_picker_toggle(bool(self.switch_spear.get())),
-            progress_color="#E67E22", font=("Verdana", 11)
+            progress_color="#E67E22", font=("Verdana", 10)
         )
         self.switch_spear.pack(side="left")
         if settings.get('spear_picker_enabled', False):
@@ -400,6 +400,14 @@ class MainWindow:
         self.stats_summary_frame = ctk.CTkFrame(self.frame_stats, fg_color="transparent")
         self.stats_summary_frame.pack(fill="x", padx=10, pady=4)
 
+        # Botão expand/collapse (PRIMEIRO para garantir espaço)
+        self.btn_stats_toggle = ctk.CTkButton(
+            self.stats_summary_frame, text="▼", width=24, height=24,
+            fg_color="transparent", hover_color="#303030",
+            font=("Verdana", FONT_SUMMARY), command=self.toggle_stats
+        )
+        self.btn_stats_toggle.pack(side="right")
+
         # XP Rate
         self.lbl_exp_rate = ctk.CTkLabel(
             self.stats_summary_frame, text="-- xp/h",
@@ -408,9 +416,9 @@ class MainWindow:
         self.lbl_exp_rate.pack(side="left")
 
         ctk.CTkLabel(
-            self.stats_summary_frame, text="•",
+            self.stats_summary_frame, text="|",
             font=("Verdana", FONT_SUMMARY), text_color="#555555"
-        ).pack(side="left", padx=8)
+        ).pack(side="left", padx=2)
 
         # XP Left (no summary)
         self.lbl_exp_left_summary = ctk.CTkLabel(
@@ -420,9 +428,9 @@ class MainWindow:
         self.lbl_exp_left_summary.pack(side="left")
 
         ctk.CTkLabel(
-            self.stats_summary_frame, text="•",
+            self.stats_summary_frame, text="|",
             font=("Verdana", FONT_SUMMARY), text_color="#555555"
-        ).pack(side="left", padx=8)
+        ).pack(side="left", padx=2)
 
         # ETA Next Level (no summary)
         self.lbl_exp_eta_summary = ctk.CTkLabel(
@@ -432,9 +440,9 @@ class MainWindow:
         self.lbl_exp_eta_summary.pack(side="left")
 
         ctk.CTkLabel(
-            self.stats_summary_frame, text="•",
+            self.stats_summary_frame, text="|",
             font=("Verdana", FONT_SUMMARY), text_color="#555555"
-        ).pack(side="left", padx=8)
+        ).pack(side="left", padx=2)
 
         # Regen Status (compacto)
         self.lbl_regen = ctk.CTkLabel(
@@ -442,14 +450,6 @@ class MainWindow:
             font=("Verdana", FONT_SUMMARY), text_color="#2CC985"
         )
         self.lbl_regen.pack(side="left")
-
-        # Botão expand/collapse
-        self.btn_stats_toggle = ctk.CTkButton(
-            self.stats_summary_frame, text="▼", width=24, height=24,
-            fg_color="transparent", hover_color="#303030",
-            font=("Verdana", FONT_SUMMARY), command=self.toggle_stats
-        )
-        self.btn_stats_toggle.pack(side="right")
 
         # === DETAILS (oculto por padrão) ===
         self.stats_details_frame = ctk.CTkFrame(self.frame_stats, fg_color="transparent")
@@ -505,7 +505,7 @@ class MainWindow:
         self.lbl_sword_val.pack(side="left", padx=(5, 0))
 
         self.lbl_sword_time = ctk.CTkLabel(
-            self.box_sword, text="ETA: --",
+            self.box_sword, text="⏳ --",
             font=("Verdana", FONT_DETAILS), text_color="gray"
         )
         self.lbl_sword_time.pack(side="right")
@@ -533,7 +533,7 @@ class MainWindow:
         self.lbl_shield_val.pack(side="left", padx=(5, 0))
 
         self.lbl_shield_time = ctk.CTkLabel(
-            self.box_shield, text="ETA: --",
+            self.box_shield, text="⏳ --",
             font=("Verdana", FONT_DETAILS), text_color="gray"
         )
         self.lbl_shield_time.pack(side="right")

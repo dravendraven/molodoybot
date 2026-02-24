@@ -1,6 +1,16 @@
 # ==============================================================================
-# SPLASH SCREEN - Usa tkinter puro para não conflitar com CustomTkinter
+# SPLASH SCREEN - Suporta splash nativa do PyInstaller (instantânea) e fallback tkinter
 # ==============================================================================
+
+# Tenta usar splash nativa do PyInstaller (aparece ANTES da extração)
+_pyi_splash = None
+try:
+    import pyi_splash as _pyi_splash
+    _using_native_splash = True
+except ImportError:
+    _using_native_splash = False
+
+# Fallback: splash tkinter (para rodar como script Python)
 import tkinter as _tk_splash
 from tkinter import ttk as _ttk_splash
 
@@ -11,6 +21,11 @@ _splash_progress = None
 def _show_splash():
     """Mostra splash screen com barra de progresso enquanto carrega."""
     global _splash, _splash_label, _splash_progress
+
+    # Se já tem splash nativa do PyInstaller, não precisa criar outra
+    if _using_native_splash:
+        return
+
     _splash = _tk_splash.Tk()
     _splash.overrideredirect(True)
     _splash.attributes('-topmost', True)
@@ -41,7 +56,17 @@ def _show_splash():
 
 def _update_splash(text=None):
     """Atualiza splash e mantém responsiva."""
-    global _splash, _splash_label
+    global _splash, _splash_label, _pyi_splash
+
+    # Atualiza splash nativa do PyInstaller
+    if _using_native_splash and _pyi_splash and text:
+        try:
+            _pyi_splash.update_text(text)
+        except:
+            pass
+        return
+
+    # Atualiza splash tkinter (fallback)
     if _splash:
         if text and _splash_label:
             _splash_label.configure(text=text)
@@ -52,7 +77,17 @@ def _update_splash(text=None):
 
 def _close_splash():
     """Fecha splash screen ANTES de criar janela CTk."""
-    global _splash, _splash_progress
+    global _splash, _splash_progress, _pyi_splash
+
+    # Fecha splash nativa do PyInstaller
+    if _using_native_splash and _pyi_splash:
+        try:
+            _pyi_splash.close()
+        except:
+            pass
+        return
+
+    # Fecha splash tkinter (fallback)
     if _splash:
         try:
             if _splash_progress:
@@ -62,7 +97,7 @@ def _close_splash():
             pass
         _splash = None
 
-# Mostrar splash IMEDIATAMENTE
+# Mostrar splash IMEDIATAMENTE (apenas se não tiver splash nativa)
 _show_splash()
 
 # ==============================================================================
@@ -1789,29 +1824,29 @@ def regen_monitor_loop():
                         final_is_hungry = False
                     else:
                         if is_mana_full:
-                            status_text = "🔵 Full (Sync)"
+                            status_text = "Full (Sync)"
                             color = "#4EA5F9"
                             final_is_hungry = False
                         elif hungry_by_logic:
-                            status_text = "🔴 Hungry"
+                            status_text = "Hungry"
                             color = "#FF5555"
                             final_is_hungry = True
                         else:
-                            status_text = "🟡 Validando..."
+                            status_text = "Validando..."
                             color = "#E0E000"
                             final_is_hungry = False
                         
                 else:
                     if hungry_by_logic:
-                         status_text = "🔴 Hungry"
+                         status_text = "Hungry"
                          color = "#FF5555"
                          final_is_hungry = True 
                     elif is_totally_full:
-                        status_text = "🔵 Full"
+                        status_text = "Full"
                         color = "#4EA5F9"
                         final_is_hungry = False
                     else:
-                        status_text = "🟡 Calc..." 
+                        status_text = "Calc..." 
                         color = "gray"
                         final_is_hungry = False
                 
@@ -2650,10 +2685,10 @@ def gui_updater_loop():
                 if lbl_exp_rate.winfo_exists():
                     if xp_stats['xp_hour'] > 0:
                         lbl_exp_rate.configure(text=f"{xp_stats['xp_hour']} xp/h")
-                        lbl_exp_eta.configure(text=f"⏳{xp_stats['eta']}")
+                        lbl_exp_eta.configure(text=f"⏳ {xp_stats['eta']}")
                     else:
                         lbl_exp_rate.configure(text="-- xp/h")
-                        lbl_exp_eta.configure(text="--")
+                        lbl_exp_eta.configure(text="⏳ --")
 
                 if lbl_exp_left.winfo_exists():
                     lbl_exp_left.configure(text=f"{xp_stats['left']} xp")
