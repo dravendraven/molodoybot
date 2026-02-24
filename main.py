@@ -1253,7 +1253,7 @@ def connection_watchdog():
                         clear_player_name_cache()
                         os._exit(0) # Mata o bot
                     state.is_connected = False
-                    lbl_connection.configure(text="Cliente Fechado ❌", text_color="#FF5555")
+                    lbl_connection.configure(text="❌ Cliente Fechado", text_color="#FF5555")
                     time.sleep(2)
                     continue
 
@@ -1289,10 +1289,12 @@ def connection_watchdog():
 
                     state.is_connected = True
                     was_connected_once = True
-                    lbl_connection.configure(text="Conectado 🟢", text_color="#00FF00")
+                    # Mostra nome do personagem no status
+                    char_display = get_player_name() or "???"
+                    lbl_connection.configure(text=f"🟢 {char_display}", text_color="#00FF00")
                 else:
                     state.is_connected = False
-                    lbl_connection.configure(text="Desconectado ⚠️", text_color="#FFFF00")
+                    lbl_connection.configure(text="⚠️ Desconectado", text_color="#FFFF00")
                     clear_player_name_cache() 
                     
             except Exception:
@@ -1300,7 +1302,7 @@ def connection_watchdog():
                 state.is_connected = False
                 if was_connected_once:
                     os._exit(0)
-                lbl_connection.configure(text="Cliente Fechado ❌", text_color="#FF5555")
+                lbl_connection.configure(text="❌ Cliente Fechado", text_color="#FF5555")
                 clear_player_name_cache()
 
         except Exception as e:
@@ -2676,7 +2678,7 @@ def gui_updater_loop():
                     r_str = regen_tracker.get_display_string()
 
                     if lbl_regen_stock.winfo_exists():
-                        lbl_regen_stock.configure(text=f"🍖 Food: {r_str}")
+                        lbl_regen_stock.configure(text=f"🍖 {r_str}")
 
             except Exception as e:
                 print(f"Erro GUI: {e}")
@@ -2720,7 +2722,7 @@ def gui_updater_loop():
                     mins_left_sw = pct_left * real_sw
                     total_minutos = int(mins_left_sw)
                     horas, minutos = divmod(total_minutos, 60)
-                    lbl_sword_time.configure(text=f"ETA {horas:02d}:{minutos:02d}")
+                    lbl_sword_time.configure(text=f"⏳ {horas:02d}:{minutos:02d}")
                 else:
                     lbl_sword_rate.configure(text="-- m/%", text_color="gray")
                     lbl_sword_time.configure(text="--")
@@ -2739,7 +2741,7 @@ def gui_updater_loop():
                     pct_left = 100 - sh_data['pct']
                     mins_left_sh = pct_left * real_sh
                     horas_sh, minutos_sh = divmod(int(mins_left_sh), 60)
-                    lbl_shield_time.configure(text=f"ETA {horas_sh:02d}:{minutos_sh:02d}")
+                    lbl_shield_time.configure(text=f"⏳ {horas_sh:02d}:{minutos_sh:02d}")
                 else:
                     lbl_shield_rate.configure(text="-- m/%", text_color="gray")
                     lbl_shield_time.configure(text="--")
@@ -2937,6 +2939,8 @@ def create_settings_callbacks() -> SettingsCallbacks:
         global log_visible
         log_visible = enabled
         BOT_SETTINGS['console_log_visible'] = enabled
+        # Sincroniza com main_window.log_visible (usado por update_status_panel)
+        main_window.log_visible = enabled
         if enabled:
             if frame_status_panel:
                 frame_status_panel.pack_forget()
@@ -2948,7 +2952,8 @@ def create_settings_callbacks() -> SettingsCallbacks:
             if frame_status_panel:
                 frame_status_panel.pack(side="bottom", fill="x", padx=8, pady=3)
                 # FIX: Schedule status panel update after pack is processed
-                main_window.app.after(20, update_status_panel)
+                main_window.app.after(20, main_window.update_status_panel)
+        main_window.auto_resize_window()
         log(f"📊 Console Log: {'Visível' if enabled else 'Oculto'}")
 
     def on_ignore_toggle(enabled: bool):
@@ -3697,9 +3702,9 @@ if __name__ == "__main__":
     switch_healer = main_window.switch_healer
 
     # Stats Labels
-    lbl_exp_left = main_window.lbl_exp_left
+    lbl_exp_left = main_window.lbl_exp_left_summary
     lbl_exp_rate = main_window.lbl_exp_rate
-    lbl_exp_eta = main_window.lbl_exp_eta
+    lbl_exp_eta = main_window.lbl_exp_eta_summary
     lbl_regen = main_window.lbl_regen
     lbl_regen_stock = main_window.lbl_regen_stock
     lbl_gold_total = main_window.lbl_gold_total

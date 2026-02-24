@@ -117,9 +117,9 @@ class MainWindow:
         self.switch_spear: ctk.CTkSwitch = None
 
         # Stats Labels
-        self.lbl_exp_left: ctk.CTkLabel = None
+        self.lbl_exp_left_summary: ctk.CTkLabel = None
         self.lbl_exp_rate: ctk.CTkLabel = None
-        self.lbl_exp_eta: ctk.CTkLabel = None
+        self.lbl_exp_eta_summary: ctk.CTkLabel = None
         self.lbl_regen: ctk.CTkLabel = None
         self.lbl_regen_stock: ctk.CTkLabel = None
         self.lbl_gold_total: ctk.CTkLabel = None
@@ -205,57 +205,61 @@ class MainWindow:
         return self.app
 
     def _create_header(self):
-        """Cria o header com botões e status de conexão."""
-        frame_header = ctk.CTkFrame(self.main_frame, fg_color="transparent")
-        frame_header.pack(pady=(10, 5), fill="x", padx=10)
+        """Cria o header com status de conexão e botões."""
+        # === LINHA 1: Status de Conexão ===
+        frame_status = ctk.CTkFrame(self.main_frame, fg_color="transparent")
+        frame_status.pack(pady=(8, 2), fill="x", padx=10)
 
-        # X-Ray Button
-        self.btn_xray = ctk.CTkButton(
-            frame_header, text="Raio-X",
-            command=self.callbacks.toggle_xray,
-            width=25, height=25, fg_color="#303030",
-            font=("Verdana", 11)
+        self.lbl_connection = ctk.CTkLabel(
+            frame_status, text="🔌 Procurando...",
+            font=("Verdana", 10),
+            text_color="#FFA500"
         )
-        self.btn_xray.pack(side="right", padx=5)
+        self.lbl_connection.pack(side="left")
 
-        # Reload Button (opcional)
-        if self.callbacks.reload_button_enabled:
-            self.btn_reload = ctk.CTkButton(
-                frame_header, text="🔄",
-                command=self.callbacks.on_reload,
-                width=35, height=25,
-                fg_color="#303030", hover_color="#505050",
-                font=("Verdana", 11)
-            )
-            self.btn_reload.pack(side="right", padx=5)
+        # === LINHA 2: Botões ===
+        frame_buttons = ctk.CTkFrame(self.main_frame, fg_color="transparent")
+        frame_buttons.pack(pady=(0, 5), fill="x", padx=10)
 
         # Settings Button
         self.btn_settings = ctk.CTkButton(
-            frame_header, text="⚙️ Config.",
+            frame_buttons, text="⚙️ Config.",
             command=self.callbacks.open_settings,
-            width=70, height=30,
+            width=70, height=28,
             fg_color="#303030", hover_color="#505050",
-            font=("Verdana", 11, "bold")
+            font=("Verdana", 10, "bold")
         )
         self.btn_settings.pack(side="left")
 
         # Pause/Resume Button
         self.btn_pause = ctk.CTkButton(
-            frame_header, text="⏸️ Pausar",
+            frame_buttons, text="⏸️ Pausar",
             command=self.toggle_pause,
-            width=65, height=30,
+            width=65, height=28,
             fg_color="#303030", hover_color="#505050",
-            font=("Verdana", 11)
+            font=("Verdana", 10)
         )
         self.btn_pause.pack(side="left", padx=5)
 
-        # Connection Label
-        self.lbl_connection = ctk.CTkLabel(
-            frame_header, text="🔌 Procurando...",
-            font=("Verdana", 11),
-            text_color="#FFA500"
+        # Reload Button (opcional)
+        if self.callbacks.reload_button_enabled:
+            self.btn_reload = ctk.CTkButton(
+                frame_buttons, text="🔄",
+                command=self.callbacks.on_reload,
+                width=30, height=28,
+                fg_color="#303030", hover_color="#505050",
+                font=("Verdana", 10)
+            )
+            self.btn_reload.pack(side="left", padx=2)
+
+        # X-Ray Button
+        self.btn_xray = ctk.CTkButton(
+            frame_buttons, text="Raio-X",
+            command=self.callbacks.toggle_xray,
+            width=50, height=28, fg_color="#303030",
+            font=("Verdana", 10)
         )
-        self.lbl_connection.pack(side="right", padx=5)
+        self.btn_xray.pack(side="right")
 
     def _create_controls(self):
         """Cria os switches de controle dos módulos."""
@@ -381,6 +385,11 @@ class MainWindow:
 
     def _create_stats(self):
         """Cria o painel de estatísticas colapsável."""
+        # === CONFIGURAÇÃO DE FONTE (mudar aqui para alterar todos) ===
+        FONT_SUMMARY = 10  # Fonte do título/summary
+        FONT_DETAILS = 11  # Fonte dos detalhes expandidos
+        FONT_RATE = 9      # Fonte dos rates (m/%)
+
         self.frame_stats = ctk.CTkFrame(
             self.main_frame, fg_color="transparent",
             border_color="#303030", border_width=1, corner_radius=6
@@ -389,36 +398,48 @@ class MainWindow:
 
         # === SUMMARY (sempre visível - 1 linha compacta) ===
         self.stats_summary_frame = ctk.CTkFrame(self.frame_stats, fg_color="transparent")
-        self.stats_summary_frame.pack(fill="x", padx=10, pady=6)
+        self.stats_summary_frame.pack(fill="x", padx=10, pady=4)
 
-        # XP Rate (principal)
+        # XP Rate
         self.lbl_exp_rate = ctk.CTkLabel(
             self.stats_summary_frame, text="-- xp/h",
-            font=("Verdana", 11, "bold"), text_color="#FFFFFF"
+            font=("Verdana", FONT_SUMMARY, "bold"), text_color="#FFFFFF"
         )
         self.lbl_exp_rate.pack(side="left")
 
         ctk.CTkLabel(
             self.stats_summary_frame, text="•",
-            font=("Verdana", 11), text_color="#555555"
+            font=("Verdana", FONT_SUMMARY), text_color="#555555"
         ).pack(side="left", padx=8)
 
-        # Gold Total
-        self.lbl_gold_total = ctk.CTkLabel(
-            self.stats_summary_frame, text="0 gp",
-            font=("Verdana", 11, "bold"), text_color="#FFD700"
+        # XP Left (no summary)
+        self.lbl_exp_left_summary = ctk.CTkLabel(
+            self.stats_summary_frame, text="-- left",
+            font=("Verdana", FONT_SUMMARY), text_color="gray"
         )
-        self.lbl_gold_total.pack(side="left")
+        self.lbl_exp_left_summary.pack(side="left")
 
         ctk.CTkLabel(
             self.stats_summary_frame, text="•",
-            font=("Verdana", 11), text_color="#555555"
+            font=("Verdana", FONT_SUMMARY), text_color="#555555"
+        ).pack(side="left", padx=8)
+
+        # ETA Next Level (no summary)
+        self.lbl_exp_eta_summary = ctk.CTkLabel(
+            self.stats_summary_frame, text="⏳ --",
+            font=("Verdana", FONT_SUMMARY), text_color="gray"
+        )
+        self.lbl_exp_eta_summary.pack(side="left")
+
+        ctk.CTkLabel(
+            self.stats_summary_frame, text="•",
+            font=("Verdana", FONT_SUMMARY), text_color="#555555"
         ).pack(side="left", padx=8)
 
         # Regen Status (compacto)
         self.lbl_regen = ctk.CTkLabel(
             self.stats_summary_frame, text="Regen --",
-            font=("Verdana", 11), text_color="#2CC985"
+            font=("Verdana", FONT_SUMMARY), text_color="#2CC985"
         )
         self.lbl_regen.pack(side="left")
 
@@ -426,7 +447,7 @@ class MainWindow:
         self.btn_stats_toggle = ctk.CTkButton(
             self.stats_summary_frame, text="▼", width=24, height=24,
             fg_color="transparent", hover_color="#303030",
-            font=("Verdana", 10), command=self.toggle_stats
+            font=("Verdana", FONT_SUMMARY), command=self.toggle_stats
         )
         self.btn_stats_toggle.pack(side="right")
 
@@ -436,68 +457,62 @@ class MainWindow:
 
         # Divisória
         ctk.CTkFrame(self.stats_details_frame, height=1, fg_color="#303030").pack(
-            fill="x", padx=0, pady=(0, 8)
+            fill="x", padx=0, pady=(0, 0)
         )
 
-        # EXP detalhado
-        frame_exp = ctk.CTkFrame(self.stats_details_frame, fg_color="transparent")
-        frame_exp.pack(fill="x")
+        # Food + Gold (primeira linha do details)
+        frame_resources = ctk.CTkFrame(self.stats_details_frame, fg_color="transparent", height=20)
+        frame_resources.pack(fill="x", pady=(0, 2))
+        frame_resources.pack_propagate(False)
 
-        self.lbl_exp_left = ctk.CTkLabel(
-            frame_exp, text="--",
-            font=("Verdana", 11), text_color="gray"
-        )
-        self.lbl_exp_left.pack(side="left")
-
-        ctk.CTkLabel(frame_exp, text="•", font=("Verdana", 11), text_color="#555555").pack(side="left", padx=8)
-
-        self.lbl_exp_eta = ctk.CTkLabel(
-            frame_exp, text="ETA --",
-            font=("Verdana", 11), text_color="gray"
-        )
-        self.lbl_exp_eta.pack(side="left")
-
-        # Regen + Food Stock
-        frame_regen = ctk.CTkFrame(self.stats_details_frame, fg_color="transparent")
-        frame_regen.pack(fill="x", pady=(6, 0))
-
+        # Food (esquerda)
         self.lbl_regen_stock = ctk.CTkLabel(
-            frame_regen, text="🍖 --",
-            font=("Verdana", 11)
+            frame_resources, text="🍖 --",
+            font=("Verdana", FONT_DETAILS)
         )
         self.lbl_regen_stock.pack(side="left")
 
+        # Gold rate (direita)
         self.lbl_gold_rate = ctk.CTkLabel(
-            frame_regen, text="0 gp/h",
-            font=("Verdana", 11), text_color="gray"
+            frame_resources, text="(0/h)",
+            font=("Verdana", FONT_DETAILS), text_color="gray"
         )
         self.lbl_gold_rate.pack(side="right")
 
-        # PRIMARY SKILL (Sword/Club/Axe/Distance)
-        self.box_sword = ctk.CTkFrame(self.stats_details_frame, fg_color="transparent")
-        self.box_sword.pack(fill="x", pady=(6, 0))
-
-        self.lbl_primary_skill_name = ctk.CTkLabel(
-            self.box_sword, text="Sword:",
-            font=("Verdana", 11)
+        # Gold total (direita, antes do rate)
+        self.lbl_gold_total = ctk.CTkLabel(
+            frame_resources, text="0 gp",
+            font=("Verdana", FONT_DETAILS, "bold"), text_color="#FFD700"
         )
-        self.lbl_primary_skill_name.pack(side="left")
+        self.lbl_gold_total.pack(side="right", padx=(0, 5))
+
+        # PRIMARY SKILL (Sword/Club/Axe/Distance)
+        self.box_sword = ctk.CTkFrame(self.stats_details_frame, fg_color="transparent", height=20)
+        self.box_sword.pack(fill="x")
+        self.box_sword.pack_propagate(False)
+
+        # Emoji separado (atualizado dinamicamente)
+        self.lbl_primary_skill_emoji = ctk.CTkLabel(
+            self.box_sword, text="⚔",
+            font=("Verdana", FONT_DETAILS)
+        )
+        self.lbl_primary_skill_emoji.pack(side="left")
 
         self.lbl_sword_val = ctk.CTkLabel(
             self.box_sword, text="--",
-            font=("Verdana", 11, "bold"), text_color="#4EA5F9"
+            font=("Verdana", FONT_DETAILS, "bold"), text_color="#4EA5F9"
         )
         self.lbl_sword_val.pack(side="left", padx=(5, 0))
 
         self.lbl_sword_time = ctk.CTkLabel(
             self.box_sword, text="ETA: --",
-            font=("Verdana", 11), text_color="gray"
+            font=("Verdana", FONT_DETAILS), text_color="gray"
         )
         self.lbl_sword_time.pack(side="right")
 
         self.lbl_sword_rate = ctk.CTkLabel(
             self.box_sword, text="--m/%",
-            font=("Verdana", 11), text_color="gray"
+            font=("Verdana", FONT_RATE), text_color="gray"
         )
         self.lbl_sword_rate.pack(side="right", padx=(0, 10))
 
@@ -505,52 +520,54 @@ class MainWindow:
         self.frame_sw_det = self.box_sword
 
         # SHIELD
-        self.box_shield = ctk.CTkFrame(self.stats_details_frame, fg_color="transparent")
-        self.box_shield.pack(fill="x", pady=(4, 0))
+        self.box_shield = ctk.CTkFrame(self.stats_details_frame, fg_color="transparent", height=20)
+        self.box_shield.pack(fill="x")
+        self.box_shield.pack_propagate(False)
 
-        ctk.CTkLabel(self.box_shield, text="Shield:", font=("Verdana", 11)).pack(side="left")
+        ctk.CTkLabel(self.box_shield, text="🛡", font=("Verdana", FONT_DETAILS)).pack(side="left")
 
         self.lbl_shield_val = ctk.CTkLabel(
             self.box_shield, text="--",
-            font=("Verdana", 11, "bold"), text_color="#4EA5F9"
+            font=("Verdana", FONT_DETAILS, "bold"), text_color="#4EA5F9"
         )
         self.lbl_shield_val.pack(side="left", padx=(5, 0))
 
         self.lbl_shield_time = ctk.CTkLabel(
             self.box_shield, text="ETA: --",
-            font=("Verdana", 11), text_color="gray"
+            font=("Verdana", FONT_DETAILS), text_color="gray"
         )
         self.lbl_shield_time.pack(side="right")
 
         self.lbl_shield_rate = ctk.CTkLabel(
             self.box_shield, text="--m/%",
-            font=("Verdana", 11), text_color="gray"
+            font=("Verdana", FONT_RATE), text_color="gray"
         )
         self.lbl_shield_rate.pack(side="right", padx=(0, 10))
 
         self.frame_sh_det = self.box_shield
 
         # MAGIC LEVEL
-        box_magic = ctk.CTkFrame(self.stats_details_frame, fg_color="transparent")
-        box_magic.pack(fill="x", pady=(4, 6))
+        box_magic = ctk.CTkFrame(self.stats_details_frame, fg_color="transparent", height=20)
+        box_magic.pack(fill="x")
+        box_magic.pack_propagate(False)
 
-        ctk.CTkLabel(box_magic, text="ML:", font=("Verdana", 11)).pack(side="left")
+        ctk.CTkLabel(box_magic, text="🪄", font=("Verdana", FONT_DETAILS)).pack(side="left")
 
         self.lbl_magic_val = ctk.CTkLabel(
             box_magic, text="--",
-            font=("Verdana", 11, "bold"), text_color="#A54EF9"
+            font=("Verdana", FONT_DETAILS, "bold"), text_color="#A54EF9"
         )
         self.lbl_magic_val.pack(side="left", padx=(5, 0))
 
         self.lbl_magic_time = ctk.CTkLabel(
-            box_magic, text="ETA: --",
-            font=("Verdana", 11), text_color="gray"
+            box_magic, text="⏳ --",
+            font=("Verdana", FONT_DETAILS), text_color="gray"
         )
         self.lbl_magic_time.pack(side="right")
 
         self.lbl_magic_rate = ctk.CTkLabel(
             box_magic, text="--m/%",
-            font=("Verdana", 11), text_color="gray"
+            font=("Verdana", FONT_RATE), text_color="gray"
         )
         self.lbl_magic_rate.pack(side="right", padx=(0, 10))
 
@@ -559,7 +576,7 @@ class MainWindow:
         self.stats_expanded = not self.stats_expanded
 
         if self.stats_expanded:
-            self.stats_details_frame.pack(fill="x", padx=10, pady=(0, 6))
+            self.stats_details_frame.pack(fill="x", padx=10, pady=(0, 3))
             self.btn_stats_toggle.configure(text="▲")
         else:
             self.stats_details_frame.pack_forget()
@@ -744,9 +761,9 @@ class MainWindow:
             self.box_sword.pack_forget()
             self.box_shield.pack_forget()
         else:
-            # Mostra Stats de Melee
-            self.box_sword.pack(fill="x", pady=(6, 0))
-            self.box_shield.pack(fill="x", pady=(4, 0))
+            # Mostra Stats de Melee (sem padding extra - altura fixa de 18px)
+            self.box_sword.pack(fill="x")
+            self.box_shield.pack(fill="x")
 
         self.auto_resize_window()
 
@@ -882,7 +899,7 @@ class MainWindow:
             self._resize_job = None
             self.app.update_idletasks()
             h = self.main_frame.winfo_reqheight() + 12
-            self.app.geometry(f"320x{h}")
+            self.app.geometry(f"300x{h}")
 
         self._resize_job = self.app.after(50, do_resize)  # 50ms debounce
 
@@ -908,6 +925,14 @@ class MainWindow:
             self.btn_xray.configure(fg_color=color)
 
     def update_primary_skill_label(self, skill_name: str):
-        """Atualiza o label do skill principal (Sword/Club/Axe/Distance)."""
-        if hasattr(self, 'lbl_primary_skill_name') and self.lbl_primary_skill_name:
-            self.lbl_primary_skill_name.configure(text=f"{skill_name}:")
+        """Atualiza o emoji do skill principal (Sword/Club/Axe/Distance)."""
+        if hasattr(self, 'lbl_primary_skill_emoji') and self.lbl_primary_skill_emoji:
+            # Emojis para cada tipo de skill
+            skill_emojis = {
+                "Distance": "🏹",
+                "Sword": "⚔",
+                "Club": "🔨",
+                "Axe": "🪓"
+            }
+            emoji = skill_emojis.get(skill_name, "⚔")
+            self.lbl_primary_skill_emoji.configure(text=emoji)

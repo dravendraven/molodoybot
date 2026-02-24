@@ -16,3 +16,51 @@
                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 2026-02-23 14:56:15 [CRITICAL] MainThread - MolodoyBot: AttributeError: 'MainWindow' object has no attribute 'frame_graphs_container'
 2026-02-23 14:56:15 [CRITICAL] MainThread - MolodoyBot: Estado do crash salvo em: c:\Users\vitor\OneDrive\Documentos\cheat engine\logs\crash_state.json
+2026-02-24 13:34:24 [CRITICAL] MainThread - MolodoyBot: ============================================================
+2026-02-24 13:34:24 [CRITICAL] MainThread - MolodoyBot: CRASH NAO TRATADO!
+2026-02-24 13:34:24 [CRITICAL] MainThread - MolodoyBot: ============================================================
+2026-02-24 13:34:24 [CRITICAL] MainThread - MolodoyBot: Traceback (most recent call last):
+2026-02-24 13:34:24 [CRITICAL] MainThread - MolodoyBot:   File "c:\Users\vitor\OneDrive\Documentos\cheat engine\main.py", line 3668, in <module>
+    app = main_window.create()
+2026-02-24 13:34:24 [CRITICAL] MainThread - MolodoyBot:   File "c:\Users\vitor\OneDrive\Documentos\cheat engine\gui\main_window.py", line 191, in create
+    self._create_stats()  # Stats colapsável (sem gráfico)
+    ~~~~~~~~~~~~~~~~~~^^
+2026-02-24 13:34:24 [CRITICAL] MainThread - MolodoyBot:   File "c:\Users\vitor\OneDrive\Documentos\cheat engine\gui\main_window.py", line 460, in _create_stats
+    frame_resources.pack(fill="x", pad=(0, 5))
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+2026-02-24 13:34:24 [CRITICAL] MainThread - MolodoyBot:   File "C:\Users\vitor\OneDrive\Documentos\cheat engine\.venv\Lib\site-packages\customtkinter\windows\widgets\core_widget_classes\ctk_base_class.py", line 298, in pack
+    return super().pack(**self._apply_argument_scaling(kwargs))
+           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-24 13:34:24 [CRITICAL] MainThread - MolodoyBot:   File "C:\Users\vitor\AppData\Local\Programs\Python\Python313\Lib\tkinter\__init__.py", line 2596, in pack_configure
+    self.tk.call(
+    ~~~~~~~~~~~~^
+          ('pack', 'configure', self._w)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+          + self._options(cnf, kw))
+          ^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-24 13:34:24 [CRITICAL] MainThread - MolodoyBot: _tkinter.TclError: ambiguous option "-pad": must be -after, -anchor, -before, -expand, -fill, -in, -ipadx, -ipady, -padx, -pady, or -side
+2026-02-24 13:34:24 [CRITICAL] MainThread - MolodoyBot: Estado do crash salvo em: c:\Users\vitor\OneDrive\Documentos\cheat engine\logs\crash_state.json
+2026-02-24 13:34:28 [CRITICAL] MainThread - MolodoyBot: ============================================================
+2026-02-24 13:34:28 [CRITICAL] MainThread - MolodoyBot: CRASH NAO TRATADO!
+2026-02-24 13:34:28 [CRITICAL] MainThread - MolodoyBot: ============================================================
+2026-02-24 13:34:28 [CRITICAL] MainThread - MolodoyBot: Traceback (most recent call last):
+2026-02-24 13:34:28 [CRITICAL] MainThread - MolodoyBot:   File "c:\Users\vitor\OneDrive\Documentos\cheat engine\main.py", line 3668, in <module>
+    app = main_window.create()
+2026-02-24 13:34:28 [CRITICAL] MainThread - MolodoyBot:   File "c:\Users\vitor\OneDrive\Documentos\cheat engine\gui\main_window.py", line 191, in create
+    self._create_stats()  # Stats colapsável (sem gráfico)
+    ~~~~~~~~~~~~~~~~~~^^
+2026-02-24 13:34:28 [CRITICAL] MainThread - MolodoyBot:   File "c:\Users\vitor\OneDrive\Documentos\cheat engine\gui\main_window.py", line 460, in _create_stats
+    frame_resources.pack(fill="x", pad=(0, 5))
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+2026-02-24 13:34:28 [CRITICAL] MainThread - MolodoyBot:   File "C:\Users\vitor\OneDrive\Documentos\cheat engine\.venv\Lib\site-packages\customtkinter\windows\widgets\core_widget_classes\ctk_base_class.py", line 298, in pack
+    return super().pack(**self._apply_argument_scaling(kwargs))
+           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-24 13:34:28 [CRITICAL] MainThread - MolodoyBot:   File "C:\Users\vitor\AppData\Local\Programs\Python\Python313\Lib\tkinter\__init__.py", line 2596, in pack_configure
+    self.tk.call(
+    ~~~~~~~~~~~~^
+          ('pack', 'configure', self._w)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+          + self._options(cnf, kw))
+          ^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-24 13:34:28 [CRITICAL] MainThread - MolodoyBot: _tkinter.TclError: ambiguous option "-pad": must be -after, -anchor, -before, -expand, -fill, -in, -ipadx, -ipady, -padx, -pady, or -side
+2026-02-24 13:34:28 [CRITICAL] MainThread - MolodoyBot: Estado do crash salvo em: c:\Users\vitor\OneDrive\Documentos\cheat engine\logs\crash_state.json

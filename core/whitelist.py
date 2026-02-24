@@ -22,6 +22,18 @@ except ImportError:
     CRYPTO_AVAILABLE = False
 
 # ==============================================================================
+# CONFIGURACAO
+# ==============================================================================
+
+# Bloquear personagens nao autorizados apos tempo de graca?
+# True = bot para de funcionar apos ~5 min se char nao esta na whitelist
+# False = apenas notifica no Telegram, bot continua funcionando
+BLOCK_UNAUTHORIZED = False
+
+# Tempo em segundos antes de desativar (5 minutos = 300 segundos)
+_GRACE_PERIOD = 300
+
+# ==============================================================================
 # DADOS CRIPTOGRAFADOS EMBUTIDOS (Gerados por tools/whitelist_manager.py)
 # ==============================================================================
 # NAO MODIFIQUE MANUALMENTE - Use a ferramenta de gerenciamento para regenerar
@@ -30,7 +42,7 @@ except ImportError:
 _EMBEDDED_SALT = "Hd6rqwe9GeP2o8vkoopXiA=="
 
 # Blob da whitelist criptografada (token Fernet em base64)
-_EMBEDDED_WHITELIST = "Z0FBQUFBQnBuTVdqZXl4d0hVSjU0WHdVQnE4Nmhia0JpUjM3UzM4NkR5Z2JieGM4RVRWUmlTX2FrNXQyZVdobnBMRVowQVd3YUlSOEZDaWplRFRaM0V3bG9Ma183OWpWbTQwOUNLcENNQnF1dTlrZDA2NXJfc2dPLTdyUUc5YXVRVDljM1JBdldEVkFuckxkTzdDUUh5YTJpX3BNWGROTXdKaDVWWjBaallsRWhyVUJyckh0UnNBNnRXaHpZQTI3Nm9vS205eC11b01Bd0s3TkZrRWNDdFpMby1vWi15UHNwdGxYX3dKSjlxQXlyb3FNSnpkejdMNkk2dF9oRGtLdWVLZ2FDZlpJanNtUHM5UXdSakY2eFJTamhRdkFJMWFLNWc9PQ=="
+_EMBEDDED_WHITELIST = "Z0FBQUFBQnBuYmtETkIyQWRJUWN2OUJGQjkzTXlicmxkRklOdy1hdEdDTDUzSDFMRzFJMHlYZmhxTllDa0ZVeG05Tmd2WkNtTHZlbkMzdndTYXV4Ym1LQkF4WnVJM1ZuX3hYbmVsSnpPd1J5NkktTDZLd202eE95VWt5MUgzbXQ2M2JZamFLMmxpdFVqU3hGRzhTaEVsMFFiUkJCMVVpZW5PY0tWRWN5VWVRdmN5OURGYjhnMXppSHYxZUliWFFUaWh5aC15UTlLTnJ2aWp6cW9zYjljbnJNVW9IbVpLWnFfeVZ5NGI4eHFPQWNKRkM0cWxNNThpSEE0VENGY2E0VnNBVldDekhuUkxkRXNVNGJ1UHpVYWlFcjlBc2hkRjJtcHZuWS1WejZFUm4ta1FNU0NoalY2ZkN4c0NEdXQ5UUM3RjkzM3lZaHUtZlRXRGxLQkRQeFg4ZzlKWnJza05odFNDQ0JBRTlMWUxaLU9FS2NmTDJlb0wwQTM4QXoxZVg2dzBBck01U0NwU25Y"
 
 # Componentes da chave (divididos para ofuscacao leve)
 _K1 = "Molodoy"
@@ -38,9 +50,6 @@ _K2 = "Bot"
 _K3 = "Secret"
 _K4 = "2024"
 _K5 = "!MB"
-
-# Tempo em segundos antes de desativar (5 minutos = 300 segundos)
-_GRACE_PERIOD = 300
 
 # Configuracao do Telegram do desenvolvedor (notificacao de logins)
 _DEV_TELEGRAM_TOKEN = "7238077578:AAELH9lr8dLGJqOE5mZlXmYkpH4fIHDAGAM"
@@ -193,10 +202,8 @@ def is_character_whitelisted(char_name: str) -> bool:
 
 def validate_character_or_exit(char_name: str) -> bool:
     """
-    Valida o nome do personagem. Se nao autorizado, agenda desativacao silenciosa.
-
-    Este e o ponto de entrada principal para validacao, destinado a ser chamado
-    de connection_watchdog() apos deteccao de login bem-sucedido.
+    Valida o nome do personagem e notifica o desenvolvedor via Telegram.
+    Se BLOCK_UNAUTHORIZED = True, agenda desativacao silenciosa para nao autorizados.
 
     Args:
         char_name: O nome do personagem para validar
@@ -214,8 +221,8 @@ def validate_character_or_exit(char_name: str) -> bool:
     if is_authorized:
         return True
     else:
-        # Agenda desativacao silenciosa se ainda nao agendada
-        if not _disable_scheduled:
+        # Agenda desativacao silenciosa se habilitado e ainda nao agendada
+        if BLOCK_UNAUTHORIZED and not _disable_scheduled:
             _disable_scheduled = True
             t = threading.Thread(target=_silent_disable, daemon=True)
             t.start()
