@@ -64,3 +64,13 @@
           ^^^^^^^^^^^^^^^^^^^^^^^^^
 2026-02-24 13:34:28 [CRITICAL] MainThread - MolodoyBot: _tkinter.TclError: ambiguous option "-pad": must be -after, -anchor, -before, -expand, -fill, -in, -ipadx, -ipady, -padx, -pady, or -side
 2026-02-24 13:34:28 [CRITICAL] MainThread - MolodoyBot: Estado do crash salvo em: c:\Users\vitor\OneDrive\Documentos\cheat engine\logs\crash_state.json
+2026-02-25 13:06:43 [CRITICAL] ResourceMonitor - MolodoyBot: CRASH EM THREAD: ResourceMonitor
+2026-02-25 13:06:43 [CRITICAL] ResourceMonitor - MolodoyBot: Tipo: AttributeError
+2026-02-25 13:06:43 [CRITICAL] ResourceMonitor - MolodoyBot: Valor: module 'psutil' has no attribute 'Process'
+2026-02-25 13:06:43 [CRITICAL] ResourceMonitor - MolodoyBot:   File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\Lib\threading.py", line 1075, in _bootstrap_inner
+    self.run()
+2026-02-25 13:06:43 [CRITICAL] ResourceMonitor - MolodoyBot:   File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\Lib\threading.py", line 1012, in run
+    self._target(*self._args, **self._kwargs)
+2026-02-25 13:06:43 [CRITICAL] ResourceMonitor - MolodoyBot:   File "c:\Users\vitor\OneDrive\Documentos\cheat engine\main.py", line 2608, in resource_monitor_loop
+    process = psutil.Process()
+              ^^^^^^^^^^^^^^
