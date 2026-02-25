@@ -84,7 +84,7 @@ exe = EXE(
     strip=False,
     upx=False,
     upx_exclude=[],
-    # Extrai em %APPDATA%\MolodoyBot (evita erro de DLL)
+    # Extrai em %APPDATA%\MolodoyBot (evita erro de DLL na primeira execução)
     runtime_tmpdir=os.path.join(os.environ.get('APPDATA', '.'), 'MolodoyBot'),
     console=False,
     disable_windowed_traceback=False,

@@ -29,7 +29,8 @@
       "Bash(.venvScriptspython.exe -m PyInstaller MolodoyBot.spec --noconfirm)",
       "Bash(cmd /c:*)",
       "Bash(.venv/Scripts/python.exe:*)",
-      "Bash(ren \"c:\\\\Users\\\\vitor\\\\OneDrive\\\\Documentos\\\\cheat engine\\\\splash.png\" splash_base.png)"
+      "Bash(ren \"c:\\\\Users\\\\vitor\\\\OneDrive\\\\Documentos\\\\cheat engine\\\\splash.png\" splash_base.png)",
+      "Bash(gh release view:*)"
     ],
     "additionalDirectories": [
       "c:\\Users\\vitor\\OneDrive\\Documentos\\cheat engine"

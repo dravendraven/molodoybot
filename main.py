@@ -1,5 +1,5 @@
 # ==============================================================================
-# SPLASH SCREEN - Suporta splash nativa do PyInstaller (instantânea) e fallback tkinter
+# SPLASH SCREEN - Suporta splash nativa do PyInstaller e fallback tkinter
 # ==============================================================================
 
 # Tenta usar splash nativa do PyInstaller (aparece ANTES da extração)
@@ -18,8 +18,8 @@ from auto_update import needs_update, cleanup_legacy_files, cleanup_duplicate_ex
 
 # Remove arquivos legados e cópias do bot
 if getattr(sys, 'frozen', False):
-    cleanup_legacy_files()      # Remove launcher e version.txt
-    cleanup_duplicate_exes()    # Remove cópias como "molodoybot2.exe"
+    cleanup_legacy_files()
+    cleanup_duplicate_exes()
 
 # Verifica SE precisa atualizar (rápido, só checa versão)
 _update_needed = needs_update()
