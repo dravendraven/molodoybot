@@ -1,16 +1,4 @@
 # ==============================================================================
-# SPLASH SCREEN - Suporta splash nativa do PyInstaller e fallback tkinter
-# ==============================================================================
-
-# Tenta usar splash nativa do PyInstaller (aparece ANTES da extração)
-_pyi_splash = None
-try:
-    import pyi_splash as _pyi_splash  # type: ignore
-    _using_native_splash = True
-except ImportError:
-    _using_native_splash = False
-
-# ==============================================================================
 # AUTO-UPDATE - Verifica atualizações ANTES de carregar qualquer coisa
 # ==============================================================================
 import sys
@@ -25,22 +13,14 @@ if getattr(sys, 'frozen', False):
 _update_needed = needs_update()
 
 if _update_needed:
-    # Fecha splash do PyInstaller ANTES de mostrar janela de update
-    if _using_native_splash and _pyi_splash:
-        try:
-            _pyi_splash.close()
-        except:
-            pass
-        _pyi_splash = None
-        _using_native_splash = False
-
-    # Agora faz o update
     from auto_update import run_update
     local_ver, remote_ver = _update_needed
     run_update(local_ver, remote_ver)
     sys.exit(0)
 
-# Fallback: splash tkinter (para rodar como script Python)
+# ==============================================================================
+# SPLASH SCREEN - Splash tkinter simples
+# ==============================================================================
 import tkinter as _tk_splash
 from tkinter import ttk as _ttk_splash
 
@@ -51,10 +31,6 @@ _splash_progress = None
 def _show_splash():
     """Mostra splash screen com barra de progresso enquanto carrega."""
     global _splash, _splash_label, _splash_progress
-
-    # Se já tem splash nativa do PyInstaller, não precisa criar outra
-    if _using_native_splash:
-        return
 
     _splash = _tk_splash.Tk()
     _splash.overrideredirect(True)
@@ -86,17 +62,8 @@ def _show_splash():
 
 def _update_splash(text=None):
     """Atualiza splash e mantém responsiva."""
-    global _splash, _splash_label, _pyi_splash
+    global _splash, _splash_label
 
-    # Atualiza splash nativa do PyInstaller
-    if _using_native_splash and _pyi_splash and text:
-        try:
-            _pyi_splash.update_text(text)
-        except:
-            pass
-        return
-
-    # Atualiza splash tkinter (fallback)
     if _splash:
         if text and _splash_label:
             _splash_label.configure(text=text)
@@ -107,17 +74,8 @@ def _update_splash(text=None):
 
 def _close_splash():
     """Fecha splash screen ANTES de criar janela CTk."""
-    global _splash, _splash_progress, _pyi_splash
+    global _splash, _splash_progress
 
-    # Fecha splash nativa do PyInstaller
-    if _using_native_splash and _pyi_splash:
-        try:
-            _pyi_splash.close()
-        except:
-            pass
-        return
-
-    # Fecha splash tkinter (fallback)
     if _splash:
         try:
             if _splash_progress:
@@ -127,7 +85,7 @@ def _close_splash():
             pass
         _splash = None
 
-# Mostrar splash IMEDIATAMENTE (apenas se não tiver splash nativa)
+# Mostrar splash IMEDIATAMENTE
 _show_splash()
 
 # ==============================================================================

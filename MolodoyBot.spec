@@ -1,7 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-import os
 from PyInstaller.utils.hooks import collect_all
-from PyInstaller.building.splash import Splash
 
 # Lê versão do version.txt
 with open('version.txt', 'r') as f:
@@ -59,21 +57,9 @@ pyz = PYZ(a.pure)
 # Remove dados pesados e desnecessários
 a.datas = [x for x in a.datas if 'tzdata' not in x[0] and 'zoneinfo' not in x[0] and 'matplotlib' not in x[0]]
 
-# Splash screen nativa
-splash = Splash(
-    'splash.png',
-    binaries=a.binaries,
-    datas=a.datas,
-    text_pos=(110, 115),
-    text_size=10,
-    text_color='#969696',
-    text_default='Iniciando...',
-)
-
+# SEM SPLASH NATIVO - usa splash tkinter no main.py
 exe = EXE(
     pyz,
-    splash,
-    splash.binaries,
     a.scripts,
     a.binaries,
     a.datas,
@@ -84,8 +70,7 @@ exe = EXE(
     strip=False,
     upx=False,
     upx_exclude=[],
-    # Extrai em %APPDATA%\MolodoyBot (evita erro de DLL na primeira execução)
-    runtime_tmpdir=os.path.join(os.environ.get('APPDATA', '.'), 'MolodoyBot'),
+    runtime_tmpdir=None,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,

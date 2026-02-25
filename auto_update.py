@@ -12,7 +12,7 @@ from tkinter import ttk
 
 # ================= CONFIGURAÇÕES =================
 # Versão atual hardcoded (atualizada automaticamente pelo publicar.bat)
-CURRENT_VERSION = "7.0"
+CURRENT_VERSION = "7.2"
 
 # URLs do GitHub
 URL_VERSION = "https://raw.githubusercontent.com/dravendraven/molodoybot/refs/heads/main/version.txt"
@@ -209,13 +209,14 @@ def apply_update(new_exe_path):
         os.remove(new_exe_path)
         return
 
+    # Script batch com delays usando ping (não abre janela)
     bat_content = f'''@echo off
-:: Espera inicial (powershell é silencioso, sem janela)
-powershell -NoProfile -Command "Start-Sleep -Seconds 3" >nul 2>&1
+:: Espera inicial (ping é silencioso)
+ping 127.0.0.1 -n 4 >nul
 
 :: Mata o processo se ainda estiver rodando
 taskkill /PID {pid} /F >nul 2>&1
-powershell -NoProfile -Command "Start-Sleep -Seconds 3" >nul 2>&1
+ping 127.0.0.1 -n 4 >nul
 
 :: Verifica se o arquivo novo existe
 if not exist "{new_exe}" exit /b 1
@@ -227,14 +228,14 @@ if %count% geq 10 exit /b 1
 set /a count+=1
 del /f "{current_exe}" >nul 2>&1
 if exist "{current_exe}" (
-    powershell -NoProfile -Command "Start-Sleep -Seconds 1" >nul 2>&1
+    ping 127.0.0.1 -n 2 >nul
     goto retry_delete
 )
 
-:: Copia o novo exe com retry
+:: Copia o novo exe
 copy /y "{new_exe}" "{current_exe}" >nul 2>&1
 if %errorlevel% neq 0 (
-    powershell -NoProfile -Command "Start-Sleep -Seconds 2" >nul 2>&1
+    ping 127.0.0.1 -n 3 >nul
     copy /y "{new_exe}" "{current_exe}" >nul 2>&1
 )
 
@@ -245,7 +246,7 @@ if not exist "{current_exe}" exit /b 1
 del /f "{new_exe}" >nul 2>&1
 
 :: Espera antes de iniciar
-powershell -NoProfile -Command "Start-Sleep -Seconds 2" >nul 2>&1
+ping 127.0.0.1 -n 3 >nul
 
 :: Inicia o novo exe
 start "" "{current_exe}"
@@ -258,14 +259,19 @@ del "%~f0"
     with open(bat_path, 'w') as f:
         f.write(bat_content)
 
-    # Executa o bat silenciosamente (sem janelas)
+    # Usa VBScript para executar o .bat completamente invisível
+    vbs_content = f'CreateObject("Wscript.Shell").Run "cmd /c ""{bat_path}""", 0, False'
+    vbs_path = os.path.join(tempfile.gettempdir(), "molodoy_update.vbs")
+    with open(vbs_path, 'w') as f:
+        f.write(vbs_content)
+
+    # Executa o VBScript (que executa o .bat invisível)
     subprocess.Popen(
-        ['cmd', '/c', bat_path],
+        ['wscript', vbs_path],
         creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        close_fds=True
     )
 
     # Força saída imediata
