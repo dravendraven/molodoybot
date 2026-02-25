@@ -1,6 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
 from PyInstaller.utils.hooks import collect_all
-# from PyInstaller.building.splash import Splash  # Desabilitado - causa erro DLL
+from PyInstaller.building.splash import Splash
 
 # Lê versão do version.txt
 with open('version.txt', 'r') as f:
@@ -56,11 +57,21 @@ pyz = PYZ(a.pure)
 # Remove dados pesados e desnecessários
 a.datas = [x for x in a.datas if 'tzdata' not in x[0] and 'zoneinfo' not in x[0] and 'matplotlib' not in x[0]]
 
-# Splash screen nativa DESABILITADA - causa erro "Failed to load Python DLL"
-# O fallback tkinter em main.py será usado automaticamente
+# Splash screen nativa
+splash = Splash(
+    'splash.png',
+    binaries=a.binaries,
+    datas=a.datas,
+    text_pos=(110, 115),
+    text_size=10,
+    text_color='#969696',
+    text_default='Iniciando...',
+)
 
 exe = EXE(
     pyz,
+    splash,
+    splash.binaries,
     a.scripts,
     a.binaries,
     a.datas,
@@ -71,7 +82,8 @@ exe = EXE(
     strip=False,
     upx=False,
     upx_exclude=[],
-    runtime_tmpdir=None,
+    # Extrai em %APPDATA%\MolodoyBot (evita erro de DLL)
+    runtime_tmpdir=os.path.join(os.environ.get('APPDATA', '.'), 'MolodoyBot'),
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,

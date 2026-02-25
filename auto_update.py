@@ -12,7 +12,7 @@ from tkinter import ttk
 
 # ================= CONFIGURAÇÕES =================
 # Versão atual hardcoded (atualizada automaticamente pelo publicar.bat)
-CURRENT_VERSION = "6.5"
+CURRENT_VERSION = "6.6"
 
 # URLs do GitHub
 URL_VERSION = "https://raw.githubusercontent.com/dravendraven/molodoybot/refs/heads/main/version.txt"
@@ -210,12 +210,12 @@ def apply_update(new_exe_path):
         return
 
     bat_content = f'''@echo off
-:: Espera inicial (ping é mais silencioso que timeout)
-ping 127.0.0.1 -n 4 >nul 2>&1
+:: Espera inicial (powershell é silencioso, sem janela)
+powershell -NoProfile -Command "Start-Sleep -Seconds 3" >nul 2>&1
 
 :: Mata o processo se ainda estiver rodando
 taskkill /PID {pid} /F >nul 2>&1
-ping 127.0.0.1 -n 4 >nul 2>&1
+powershell -NoProfile -Command "Start-Sleep -Seconds 3" >nul 2>&1
 
 :: Verifica se o arquivo novo existe
 if not exist "{new_exe}" exit /b 1
@@ -227,13 +227,16 @@ if %count% geq 10 exit /b 1
 set /a count+=1
 del /f "{current_exe}" >nul 2>&1
 if exist "{current_exe}" (
-    ping 127.0.0.1 -n 2 >nul 2>&1
+    powershell -NoProfile -Command "Start-Sleep -Seconds 1" >nul 2>&1
     goto retry_delete
 )
 
-:: Copia o novo exe
+:: Copia o novo exe com retry
 copy /y "{new_exe}" "{current_exe}" >nul 2>&1
-ping 127.0.0.1 -n 2 >nul 2>&1
+if %errorlevel% neq 0 (
+    powershell -NoProfile -Command "Start-Sleep -Seconds 2" >nul 2>&1
+    copy /y "{new_exe}" "{current_exe}" >nul 2>&1
+)
 
 :: Verifica se copiou corretamente
 if not exist "{current_exe}" exit /b 1
@@ -242,7 +245,7 @@ if not exist "{current_exe}" exit /b 1
 del /f "{new_exe}" >nul 2>&1
 
 :: Espera antes de iniciar
-ping 127.0.0.1 -n 3 >nul 2>&1
+powershell -NoProfile -Command "Start-Sleep -Seconds 2" >nul 2>&1
 
 :: Inicia o novo exe
 start "" "{current_exe}"
@@ -255,10 +258,13 @@ del "%~f0"
     with open(bat_path, 'w') as f:
         f.write(bat_content)
 
-    # Executa o bat e fecha imediatamente
+    # Executa o bat silenciosamente (sem janelas)
     subprocess.Popen(
         ['cmd', '/c', bat_path],
         creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
         close_fds=True
     )
 
