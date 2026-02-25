@@ -1602,6 +1602,9 @@ def start_trainer_thread():
             'ks_prevention_enabled': BOT_SETTINGS.get('ks_prevention_enabled', True),
             'spear_picker_enabled': BOT_SETTINGS.get('spear_picker_enabled', False),
             'follow_before_attack_enabled': BOT_SETTINGS.get('follow_before_attack_enabled', False),
+
+            # Pausar módulos durante delay de ataque (simula AFK)
+            'pause_modules_during_delay': BOT_SETTINGS.get('pause_modules_during_delay', False),
         }
         # DEBUG: Loga quando range muda (ou primeira leitura)
         if cfg['range'] != _debug_range_last[0]:
