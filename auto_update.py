@@ -12,7 +12,7 @@ from tkinter import ttk
 
 # ================= CONFIGURAÇÕES =================
 # Versão atual hardcoded (atualizada automaticamente pelo publicar.bat)
-CURRENT_VERSION = "5.8"
+CURRENT_VERSION = "6.0"
 
 # URLs do GitHub
 URL_VERSION = "https://raw.githubusercontent.com/dravendraven/molodoybot/refs/heads/main/version.txt"
@@ -202,39 +202,55 @@ def apply_update(new_exe_path):
     new_exe = os.path.abspath(new_exe_path)
     pid = os.getpid()
 
-    # Script mais robusto:
-    # 1. Mata o processo pelo PID
-    # 2. Espera e tenta deletar várias vezes
-    # 3. Move o novo exe
-    # 4. Inicia o novo exe
+    # Verifica se o arquivo baixado existe e tem tamanho razoável (> 1MB)
+    if not os.path.exists(new_exe_path):
+        return
+    if os.path.getsize(new_exe_path) < 1_000_000:  # Menos de 1MB = corrompido
+        os.remove(new_exe_path)
+        return
+
     bat_content = f'''@echo off
-:: Espera inicial
-timeout /t 1 /nobreak >nul
+:: Espera inicial mais longa
+timeout /t 3 /nobreak >nul
 
 :: Mata o processo se ainda estiver rodando
 taskkill /PID {pid} /F >nul 2>&1
-timeout /t 2 /nobreak >nul
+timeout /t 3 /nobreak >nul
 
-:: Tenta deletar o exe antigo (com retry)
+:: Verifica se o arquivo novo existe
+if not exist "{new_exe}" (
+    echo Arquivo novo nao encontrado
+    exit /b 1
+)
+
+:: Tenta deletar o exe antigo (com retry, max 10 tentativas)
+set count=0
 :retry_delete
+if %count% geq 10 exit /b 1
+set /a count+=1
 del /f "{current_exe}" >nul 2>&1
 if exist "{current_exe}" (
     timeout /t 1 /nobreak >nul
     goto retry_delete
 )
 
-:: Move o novo exe
-move /y "{new_exe}" "{current_exe}" >nul 2>&1
+:: Copia o novo exe (copy é mais seguro que move)
+copy /y "{new_exe}" "{current_exe}" >nul 2>&1
+timeout /t 1 /nobreak >nul
 
-:: Verifica se moveu corretamente
+:: Verifica se copiou corretamente
 if not exist "{current_exe}" (
-    :: Se falhou, tenta copiar
-    copy /y "{new_exe}" "{current_exe}" >nul 2>&1
-    del /f "{new_exe}" >nul 2>&1
+    echo Falha ao copiar
+    exit /b 1
 )
 
+:: Deleta o arquivo .new
+del /f "{new_exe}" >nul 2>&1
+
+:: Espera antes de iniciar
+timeout /t 2 /nobreak >nul
+
 :: Inicia o novo exe
-timeout /t 1 /nobreak >nul
 start "" "{current_exe}"
 
 :: Deleta este script
@@ -270,8 +286,12 @@ def run_update(local_ver, remote_ver):
 
             download_with_progress(URL_EXE, new_exe, on_progress)
 
+            # Verifica se o download foi bem-sucedido (arquivo > 1MB)
+            if not os.path.exists(new_exe) or os.path.getsize(new_exe) < 1_000_000:
+                raise Exception("Download incompleto")
+
             window.update_progress(100, "Aplicando...")
-            window.root.after(500, lambda: apply_update(new_exe))
+            window.root.after(1000, lambda: apply_update(new_exe))
 
         except Exception as e:
             window.update_progress(0, f"Erro: {e}")
