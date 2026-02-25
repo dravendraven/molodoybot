@@ -1696,6 +1696,12 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                         target_name = final_candidates[0]['name'] if final_candidates else "alvo"
                         set_status(f"delay {delay:.1f}s → {target_name}")
 
+                        # Se configurado, pausa módulos durante delay (simula AFK)
+                        # IMPORTANTE: Só pausa se NÃO está pausado (evita conflito com AFK global)
+                        if get_cfg('pause_modules_during_delay', False) and not state.is_afk_paused:
+                            state.set_afk_pause(True, delay)
+                            log(f"⏸️ Módulos pausados por {delay:.1f}s (simulando AFK)")
+
                     if time.time() >= next_attack_time:
                         # ===== LOG DETALHADO DE DECISÃO =====
                         if debug_decisions or debug_mode:

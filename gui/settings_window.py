@@ -106,6 +106,7 @@ class SettingsWindow:
         self._tabs: Dict[str, ctk.CTkFrame] = {}  # nome -> frame da tab
         self._tabs_built: set = set()  # tabs já construídas
         self._tabview: Optional[ctk.CTkTabview] = None
+        self._tab_display_to_key: Dict[str, str] = {}  # display_name -> key
 
         # === Estilos UI (CSS-like) ===
         self.UI = {
@@ -154,9 +155,9 @@ class SettingsWindow:
                 'height': 35,
                 'font': ("Verdana", 10, "bold"),
             },
-            'PAD_SECTION': (10, 5),
-            'PAD_ITEM': 2,
-            'PAD_INDENT': 20,
+            'PAD_SECTION': (6, 3),
+            'PAD_ITEM': 1,
+            'PAD_INDENT': 15,
         }
 
     def open(self) -> bool:
@@ -260,8 +261,8 @@ class SettingsWindow:
         """Cria a janela principal com lazy tab building para performance."""
         self.window = ctk.CTkToplevel(self.parent)
         self.window.title("Configurações")
-        self._min_width = 480
-        self._min_height = 520
+        self._min_width = 450
+        self._min_height = 400
         self.window.geometry(f"{self._min_width}x{self._min_height}")
         self.window.attributes("-topmost", True)
 
@@ -274,9 +275,22 @@ class SettingsWindow:
         # Cria tabs vazias (lazy loading - conteúdo construído sob demanda)
         self._tabs = {}
         self._tabs_built = set()
-        tab_names = ["Geral", "Trainer", "Alarme", "Alvos", "Loot", "Fisher", "Rune", "Healer", "Cavebot"]
-        for name in tab_names:
-            self._tabs[name] = tabview.add(name)
+        # Tuplas: (nome_exibido, chave_interna)
+        tab_defs = [
+            ("Geral", "Geral"),
+            ("Trainer", "Trainer"),
+            ("Alarme", "Alarme"),
+            ("Alvos", "Alvos"),
+            ("Loot", "Loot"),
+            ("Fisher", "Fisher"),
+            ("Rune", "Rune"),
+            ("Healer", "Healer"),
+            ("Cavebot", "Cavebot"),
+        ]
+        self._tab_display_to_key = {}
+        for display_name, key in tab_defs:
+            self._tabs[key] = tabview.add(display_name)
+            self._tab_display_to_key[display_name] = key
 
         # Constrói apenas a primeira tab (Geral) imediatamente
         self._build_tab("Geral")
@@ -289,9 +303,11 @@ class SettingsWindow:
         """Callback quando usuário muda de tab - faz lazy build se necessário."""
         if not self._tabview:
             return
-        tab_name = self._tabview.get()
-        if tab_name not in self._tabs_built:
-            self._build_tab(tab_name)
+        display_name = self._tabview.get()
+        # Converte nome exibido para chave interna
+        tab_key = self._tab_display_to_key.get(display_name, display_name)
+        if tab_key not in self._tabs_built:
+            self._build_tab(tab_key)
         self._adjust_window_height(self._tabview)
 
     def _build_tab(self, name: str) -> None:
@@ -329,6 +345,7 @@ class SettingsWindow:
         self._tabs = {}
         self._tabs_built = set()
         self._tabview = None
+        self._tab_display_to_key = {}
 
     def _adjust_window_height(self, tabview) -> None:
         """Ajusta a altura da janela para caber o conteúdo da aba ativa, sem diminuir abaixo do mínimo."""
@@ -354,6 +371,36 @@ class SettingsWindow:
         f.grid_columnconfigure(0, weight=1)
         f.grid_columnconfigure(1, weight=2)
         return f
+
+    def _create_switch_grid(self, parent, switches: list, cols: int = 2, settings: dict = None) -> dict:
+        """
+        Cria grid de switches compacto.
+
+        Args:
+            parent: Frame pai
+            switches: Lista de tuplas (text, setting_key, color)
+            cols: Numero de colunas (default 2)
+            settings: Dict de settings para pre-selecionar switches
+
+        Returns:
+            dict de {setting_key: switch_widget}
+        """
+        frame = ctk.CTkFrame(parent, fg_color="transparent")
+        frame.pack(fill="x", padx=10, pady=3)
+
+        for i in range(cols):
+            frame.grid_columnconfigure(i, weight=1)
+
+        widgets = {}
+        for idx, (text, key, color) in enumerate(switches):
+            row, col = divmod(idx, cols)
+            sw = ctk.CTkSwitch(frame, text=text, progress_color=color, **self.UI['BODY'])
+            sw.grid(row=row, column=col, sticky="w", pady=1, padx=2)
+            if settings and settings.get(key, False):
+                sw.select()
+            widgets[key] = sw
+
+        return widgets
 
     # === TAB BUILDERS ===
 
@@ -407,75 +454,71 @@ class SettingsWindow:
             entry_client_path.insert(0, settings['client_path'])
             entry_client_path.configure(state="disabled")
 
-        # Switches
-        frame_switches = ctk.CTkFrame(tab, fg_color="transparent")
-        frame_switches.pack(pady=(5, 10))
+        # === OPÇÕES (Grid 2x2) ===
+        ctk.CTkLabel(tab, text="Opções", **self.UI['H1']).pack(anchor="w", padx=10, pady=(5, 2))
 
-        ctk.CTkLabel(frame_switches, text="Opções", **self.UI['H1']).pack(anchor="w", pady=(0, 2))
+        f_opts_grid = ctk.CTkFrame(tab, fg_color="transparent")
+        f_opts_grid.pack(fill="x", padx=10, pady=2)
+        f_opts_grid.grid_columnconfigure(0, weight=1)
+        f_opts_grid.grid_columnconfigure(1, weight=1)
 
-        # Look ID
-        switch_lookid = ctk.CTkSwitch(frame_switches, text="Exibir ID ao dar Look",
+        switch_lookid = ctk.CTkSwitch(f_opts_grid, text="Exibir ID Look",
                                       command=lambda: self.cb.on_lookid_toggle(bool(switch_lookid.get())),
                                       progress_color="#3B8ED0", **self.UI['BODY'])
-        switch_lookid.pack(anchor="w", pady=self.UI['PAD_ITEM'])
+        switch_lookid.grid(row=0, column=0, sticky="w", pady=1)
         if settings.get('lookid_enabled', False):
             switch_lookid.select()
 
-        # AI Chat
-        switch_ai_chat = ctk.CTkSwitch(frame_switches, text="Responder via IA",
+        switch_ai_chat = ctk.CTkSwitch(f_opts_grid, text="Responder IA",
                                        command=lambda: self.cb.on_ai_chat_toggle(bool(switch_ai_chat.get())),
                                        progress_color="#9B59B6", **self.UI['BODY'])
-        switch_ai_chat.pack(anchor="w", pady=self.UI['PAD_ITEM'])
+        switch_ai_chat.grid(row=0, column=1, sticky="w", pady=1)
         if settings.get('ai_chat_enabled', False):
             switch_ai_chat.select()
 
-        # Console Log
-        switch_console_log = ctk.CTkSwitch(frame_switches, text="Mostrar Console Log",
+        switch_console_log = ctk.CTkSwitch(f_opts_grid, text="Console Log",
                                            command=lambda: self.cb.on_console_log_toggle(bool(switch_console_log.get())),
                                            progress_color="#3498DB", **self.UI['BODY'])
-        switch_console_log.pack(anchor="w", pady=self.UI['PAD_ITEM'])
+        switch_console_log.grid(row=1, column=0, sticky="w", pady=1)
         if settings.get('console_log_visible', True):
             switch_console_log.select()
 
-        # Logging Detalhado
-        switch_logging = ctk.CTkSwitch(frame_switches, text="Ativar Logging Detalhado",
+        switch_logging = ctk.CTkSwitch(f_opts_grid, text="Logging",
                                        command=lambda: self.cb.on_logging_toggle(bool(switch_logging.get())),
                                        progress_color="#E74C3C", **self.UI['BODY'])
-        switch_logging.pack(anchor="w", pady=self.UI['PAD_ITEM'])
+        switch_logging.grid(row=1, column=1, sticky="w", pady=1)
         if settings.get('logging_enabled', False):
             switch_logging.select()
 
-        ctk.CTkLabel(frame_switches, text="↳ ⚠️ Desabilitar melhora performance em VPS. Crash logs ficam sempre ativos.",
-                    **self.UI['HINT']).pack(anchor="w", padx=20)
+        ctk.CTkLabel(tab, text="↳ Logging: desabilitar melhora performance. Crash logs sempre ativos.",
+                    **self.UI['HINT']).pack(anchor="w", padx=15)
 
-        # === PAUSAS AFK ALEATÓRIAS ===
-        ctk.CTkLabel(frame_switches, text="Pausas AFK Aleatórias", **self.UI['H1']).pack(anchor="w", pady=(10, 2))
+        # === PAUSAS AFK (compacto) ===
+        ctk.CTkLabel(tab, text="Pausas AFK", **self.UI['H1']).pack(anchor="w", padx=10, pady=(8, 2))
 
-        switch_afk_pause = ctk.CTkSwitch(frame_switches, text="Ativar Pausas AFK",
-                                          command=lambda: None,
+        f_afk = ctk.CTkFrame(tab, fg_color="transparent")
+        f_afk.pack(fill="x", padx=10, pady=2)
+
+        switch_afk_pause = ctk.CTkSwitch(f_afk, text="Ativar",
                                           progress_color="#9B59B6", **self.UI['BODY'])
-        switch_afk_pause.pack(anchor="w", pady=self.UI['PAD_ITEM'])
+        switch_afk_pause.pack(side="left", padx=(5, 10))
         if settings.get('afk_pause_enabled', False):
             switch_afk_pause.select()
 
-        # Tempo entre pausas (minutos)
-        f_afk_interval = ctk.CTkFrame(frame_switches, fg_color="transparent")
-        f_afk_interval.pack(anchor="w", pady=2, padx=20)
-        ctk.CTkLabel(f_afk_interval, text="Intervalo (min):", **self.UI['BODY']).pack(side="left")
-        entry_afk_interval = ctk.CTkEntry(f_afk_interval, width=50)
-        entry_afk_interval.pack(side="left", padx=5)
+        ctk.CTkLabel(f_afk, text="Int:", **self.UI['BODY']).pack(side="left")
+        entry_afk_interval = ctk.CTkEntry(f_afk, width=40, height=24, font=self.UI['BODY']['font'], justify="center")
+        entry_afk_interval.pack(side="left", padx=2)
         entry_afk_interval.insert(0, str(settings.get('afk_pause_interval', 10)))
+        ctk.CTkLabel(f_afk, text="min", **self.UI['BODY']).pack(side="left", padx=(0, 8))
 
-        # Duração da pausa (segundos)
-        f_afk_duration = ctk.CTkFrame(frame_switches, fg_color="transparent")
-        f_afk_duration.pack(anchor="w", pady=2, padx=20)
-        ctk.CTkLabel(f_afk_duration, text="Duração (seg):", **self.UI['BODY']).pack(side="left")
-        entry_afk_duration = ctk.CTkEntry(f_afk_duration, width=50)
-        entry_afk_duration.pack(side="left", padx=5)
+        ctk.CTkLabel(f_afk, text="Dur:", **self.UI['BODY']).pack(side="left")
+        entry_afk_duration = ctk.CTkEntry(f_afk, width=40, height=24, font=self.UI['BODY']['font'], justify="center")
+        entry_afk_duration.pack(side="left", padx=2)
         entry_afk_duration.insert(0, str(settings.get('afk_pause_duration', 30)))
+        ctk.CTkLabel(f_afk, text="seg", **self.UI['BODY']).pack(side="left")
 
-        ctk.CTkLabel(frame_switches, text="↳ Pausa todos os módulos (exceto Alarme) com 50% de variância.",
-                    **self.UI['HINT']).pack(anchor="w", padx=20)
+        ctk.CTkLabel(tab, text="↳ Pausa todos os módulos (exceto Alarme) com 50% variância.",
+                    **self.UI['HINT']).pack(anchor="w", padx=15)
 
         # Botão Salvar
         def save_geral():
@@ -528,8 +571,16 @@ class SettingsWindow:
         entry_tr_max.pack(side="left", padx=5)
         entry_tr_max.insert(0, str(settings.get('trainer_max_delay', 2.0)))
 
-        ctk.CTkLabel(frame_tr, text="↳ Tempo de reação para começar a atacar",
-                    **self.UI['HINT']).pack(anchor="w", padx=20)
+        # Switch em linha própria (abaixo do Min/Max)
+        switch_pause_modules = ctk.CTkSwitch(
+            frame_tr,
+            text="Treino: Pausar módulos durante delay (pausa AFK)",
+            progress_color="#9B59B6",
+            **self.UI['BODY']
+        )
+        switch_pause_modules.pack(anchor="w", padx=10, pady=(3, 0))
+        if settings.get('pause_modules_during_delay', False):
+            switch_pause_modules.select()
 
         # Range
         ctk.CTkLabel(frame_tr, text="Distância (SQM):", **self.UI['H1']).pack(anchor="w", padx=10, pady=(15, 0))
@@ -544,46 +595,35 @@ class SettingsWindow:
         ctk.CTkLabel(f_rng, text="(Distancia mínima para começar a atacar alvos)",
                     **self.UI['HINT']).pack(side="left", padx=10)
 
-        # Lógica de Alvo
-        ctk.CTkLabel(frame_tr, text="Lógica de Alvo:", **self.UI['H1']).pack(anchor="w", padx=10, pady=(15, 0))
+        # Lógica de Alvo (linha horizontal)
+        ctk.CTkLabel(frame_tr, text="Lógica de Alvo:", **self.UI['H1']).pack(anchor="w", padx=10, pady=(10, 0))
 
-        frame_tr_ignore = ctk.CTkFrame(tab, fg_color="transparent")
-        frame_tr_ignore.pack(fill="x", padx=10, pady=5)
+        f_logic = ctk.CTkFrame(tab, fg_color="transparent")
+        f_logic.pack(fill="x", padx=10, pady=3)
 
-        switch_ignore = ctk.CTkSwitch(frame_tr_ignore, text="Ignorar 1º Monstro",
+        switch_ignore = ctk.CTkSwitch(f_logic, text="Ignorar 1º",
                                       command=lambda: self.cb.on_ignore_toggle(bool(switch_ignore.get())),
                                       progress_color="#FFA500", **self.UI['BODY'])
-        switch_ignore.pack(anchor="w")
+        switch_ignore.pack(side="left", padx=(5, 10))
         if settings.get('ignore_first', False):
             switch_ignore.select()
 
-        # Anti Kill-Steal
-        frame_tr_ks = ctk.CTkFrame(tab, fg_color="transparent")
-        frame_tr_ks.pack(fill="x", padx=10, pady=5)
-
-        switch_ks = ctk.CTkSwitch(frame_tr_ks, text="Ativar Anti Kill-Steal",
+        switch_ks = ctk.CTkSwitch(f_logic, text="Anti KS",
                                   command=lambda: self.cb.on_ks_toggle(bool(switch_ks.get())),
                                   progress_color="#FF6B6B", **self.UI['BODY'])
-        switch_ks.pack(anchor="w")
+        switch_ks.pack(side="left", padx=(0, 10))
         if settings.get('ks_prevention_enabled', True):
             switch_ks.select()
 
-        ctk.CTkLabel(frame_tr_ks, text="↳ Evita atacar criaturas mais próximas de outros players.",
-                    **self.UI['HINT']).pack(anchor="w", padx=40)
-
-        # Walker Chase Mode
-        frame_tr_chase = ctk.CTkFrame(tab, fg_color="transparent")
-        frame_tr_chase.pack(fill="x", padx=10, pady=5)
-
-        switch_chase = ctk.CTkSwitch(frame_tr_chase, text="Walker Chase Mode",
+        switch_chase = ctk.CTkSwitch(f_logic, text="A* Chase Mode",
                                       command=lambda: self.cb.on_chase_mode_toggle(bool(switch_chase.get())),
                                       progress_color="#3498DB", **self.UI['BODY'])
-        switch_chase.pack(anchor="w")
+        switch_chase.pack(side="left")
         if settings.get('chase_mode_enabled', False):
             switch_chase.select()
 
-        ctk.CTkLabel(frame_tr_chase, text="↳ Usa walker A* para perseguir alvos (obstacle clearing, push parcels).",
-                    **self.UI['HINT']).pack(anchor="w", padx=40)
+        ctk.CTkLabel(tab, text="↳ Anti KS: evita criaturas perto de players. Chase: A* pathfinding.",
+                    **self.UI['HINT']).pack(anchor="w", padx=15)
 
         # === AIMBOT ===
         ctk.CTkLabel(tab, text="Aimbot (Runas):", **self.UI['H1']).pack(anchor="w", padx=10, pady=(15, 0))
@@ -622,6 +662,8 @@ class SettingsWindow:
                 s['trainer_min_delay'] = float(entry_tr_min.get().replace(',', '.'))
                 s['trainer_max_delay'] = float(entry_tr_max.get().replace(',', '.'))
                 s['trainer_range'] = int(entry_tr_range.get())
+                # Pause modules during delay
+                s['pause_modules_during_delay'] = bool(switch_pause_modules.get())
                 # Aimbot settings
                 s['aimbot_enabled'] = bool(switch_aimbot.get())
                 s['aimbot_rune_type'] = combo_aimbot_rune.get()
@@ -638,124 +680,119 @@ class SettingsWindow:
                      fg_color="#2CC985", height=32).pack(side="bottom", pady=10, fill="x", padx=20)
 
     def _build_tab_alarm(self, tab: ctk.CTkFrame) -> None:
-        """Constrói a aba Alarme."""
+        """Constrói a aba Alarme (layout compacto)."""
         settings = self.cb.get_bot_settings()
 
-        frame_alarm = self._create_grid_frame(tab)
+        # === DETECÇÃO VISUAL ===
+        ctk.CTkLabel(tab, text="Detecção Visual", **self.UI['H1']).pack(anchor="w", padx=10, pady=(5, 3))
 
-        # Tipo de Entidade
-        ctk.CTkLabel(tab, text="Detecção Visual:", **self.UI['H1']).pack(anchor="w", padx=10, pady=(5, 5))
+        # Linha 1: Players + Creatures lado a lado
+        f_detection = ctk.CTkFrame(tab, fg_color="transparent")
+        f_detection.pack(fill="x", padx=10, pady=2)
 
-        switch_alarm_players = ctk.CTkSwitch(tab, text="Alarme para Players",
-                                             command=lambda: None,
+        switch_alarm_players = ctk.CTkSwitch(f_detection, text="Alarme para Players",
                                              progress_color="#FF5555", **self.UI['BODY'])
-        switch_alarm_players.pack(anchor="w", padx=self.UI['PAD_INDENT'], pady=2)
+        switch_alarm_players.pack(side="left", padx=(5, 15))
         if settings.get('alarm_players', True):
             switch_alarm_players.select()
 
-        switch_alarm_creatures = ctk.CTkSwitch(tab, text="Alarme para Criaturas",
-                                               command=lambda: None,
+        switch_alarm_creatures = ctk.CTkSwitch(f_detection, text="Alarme para Criaturas",
                                                progress_color="#FFA500", **self.UI['BODY'])
-        switch_alarm_creatures.pack(anchor="w", padx=self.UI['PAD_INDENT'], pady=2)
+        switch_alarm_creatures.pack(side="left", padx=(0, 15))
         if settings.get('alarm_creatures', True):
             switch_alarm_creatures.select()
 
-        # Distância
-        ctk.CTkLabel(frame_alarm, text="Distância (SQM):", **self.UI['BODY']).grid(
-            row=0, column=0, sticky="e", padx=10, pady=self.UI['PAD_ITEM'])
-        dist_vals = ["1 SQM", "3 SQM", "5 SQM", "8 SQM (Padrão)", "Tela Toda"]
-        combo_alarm = ctk.CTkComboBox(frame_alarm, values=dist_vals, **self.UI['COMBO'])
-        combo_alarm.grid(row=0, column=1, sticky="w")
+        # Linha 2: Distância + Andares na mesma linha
+        f_options = ctk.CTkFrame(tab, fg_color="transparent")
+        f_options.pack(fill="x", padx=10, pady=2)
 
+        ctk.CTkLabel(f_options, text="Distância (SQM):", **self.UI['BODY']).pack(side="left", padx=(5, 2))
+        dist_vals = ["1", "3", "5", "8", "Tela"]
+        combo_alarm = ctk.CTkComboBox(f_options, values=dist_vals, width=60, height=24,
+                                      font=self.UI['BODY']['font'], state="readonly")
+        combo_alarm.pack(side="left", padx=(0, 10))
         alarm_range = settings['alarm_range']
-        curr_vis = "Tela Toda" if alarm_range >= 15 else f"{alarm_range} SQM" if alarm_range in [1, 3, 5] else "8 SQM (Padrão)"
-        combo_alarm.set(curr_vis)
+        combo_alarm.set("Tela" if alarm_range >= 15 else str(alarm_range) if alarm_range in [1, 3, 5, 8] else "8")
 
-        # Andares
-        ctk.CTkLabel(frame_alarm, text="Monitorar Andares:", **self.UI['BODY']).grid(
-            row=2, column=0, sticky="e", padx=10, pady=self.UI['PAD_ITEM'])
-        combo_floor = ctk.CTkComboBox(frame_alarm,
-                                      values=["Padrão", "Superior (+1)", "Inferior (-1)", "Todos (Raio-X)"],
-                                      **self.UI['COMBO'])
-        combo_floor.grid(row=2, column=1, sticky="w")
-        combo_floor.set(settings['alarm_floor'])
+        ctk.CTkLabel(f_options, text="Monitorar Andar:", **self.UI['BODY']).pack(side="left", padx=(0, 2))
+        combo_floor = ctk.CTkComboBox(f_options, values=["Padrão", "+1", "-1", "Raio-X"],
+                                      width=70, height=24, font=self.UI['BODY']['font'], state="readonly")
+        combo_floor.pack(side="left")
+        floor_map = {"Padrão": "Padrão", "Superior (+1)": "+1", "Inferior (-1)": "-1", "Todos (Raio-X)": "Raio-X"}
+        floor_rev = {v: k for k, v in floor_map.items()}
+        combo_floor.set(floor_map.get(settings['alarm_floor'], "Padrão"))
 
-        # HP Alarm
-        frame_hp = ctk.CTkFrame(tab, fg_color="transparent")
-        frame_hp.pack(fill="x", padx=5)
+        # === ALARMES ===
+        ctk.CTkLabel(tab, text="Alarmes", **self.UI['H1']).pack(anchor="w", padx=10, pady=(8, 3))
 
-        ctk.CTkLabel(frame_hp, text="Monitorar Vida (HP):", **self.UI['H1']).pack(anchor="w", padx=10, pady=(0, 5))
+        # Linha HP: switch + entry inline
+        f_hp = ctk.CTkFrame(tab, fg_color="transparent")
+        f_hp.pack(fill="x", padx=10, pady=2)
 
-        # Frame horizontal para switch + entry na mesma linha
-        f_hp_row = ctk.CTkFrame(frame_hp, fg_color="transparent")
-        f_hp_row.pack(anchor="w", padx=self.UI['PAD_INDENT'])
-
-        switch_hp_alarm = ctk.CTkSwitch(f_hp_row, text="Alarme HP Baixo",
-                                        progress_color="#FF5555", **self.UI['BODY'])
-        switch_hp_alarm.pack(side="left")
+        switch_hp_alarm = ctk.CTkSwitch(f_hp, text="Alarme HP Baixo", progress_color="#FF5555", **self.UI['BODY'])
+        switch_hp_alarm.pack(side="left", padx=(5, 5))
         if settings.get('alarm_hp_enabled', False):
             switch_hp_alarm.select()
 
-        ctk.CTkLabel(f_hp_row, text="   dispara se <", **self.UI['BODY']).pack(side="left")
-        entry_hp_pct = ctk.CTkEntry(f_hp_row, **self.UI['INPUT'])
-        entry_hp_pct.pack(side="left", padx=5)
+        ctk.CTkLabel(f_hp, text="dispara se <", **self.UI['BODY']).pack(side="left")
+        entry_hp_pct = ctk.CTkEntry(f_hp, width=40, height=24, font=self.UI['BODY']['font'], justify="center")
+        entry_hp_pct.pack(side="left", padx=3)
         entry_hp_pct.insert(0, str(settings.get('alarm_hp_percent', 50)))
-        ctk.CTkLabel(f_hp_row, text="%", **self.UI['BODY']).pack(side="left")
+        ctk.CTkLabel(f_hp, text="%", **self.UI['BODY']).pack(side="left")
 
-        # Mana GM Detection
-        ctk.CTkLabel(tab, text="Detecção de Mana GM:", **self.UI['H1']).pack(anchor="w", padx=10, pady=(5, 5))
-
-        switch_mana_gm = ctk.CTkSwitch(tab, text="Detectar mana artificial (GM test)",
-                                       command=lambda: None,
+        # Switches individuais em linhas separadas
+        f_mana = ctk.CTkFrame(tab, fg_color="transparent")
+        f_mana.pack(fill="x", padx=10, pady=2)
+        switch_mana_gm = ctk.CTkSwitch(f_mana, text="Detectar mana artificial (GM)",
                                        progress_color="#AA55FF", **self.UI['BODY'])
-        switch_mana_gm.pack(anchor="w", padx=self.UI['PAD_INDENT'])
+        switch_mana_gm.pack(side="left", padx=5)
         if settings.get('alarm_mana_gm_enabled', False):
             switch_mana_gm.select()
 
-        # Chat
-        ctk.CTkLabel(tab, text="Mensagens (Chat):", **self.UI['H1']).pack(anchor="w", padx=10, pady=(0, 5))
-
-        switch_chat = ctk.CTkSwitch(tab, text="Alarme de Msg Nova",
-                                    command=lambda: None,
+        f_chat = ctk.CTkFrame(tab, fg_color="transparent")
+        f_chat.pack(fill="x", padx=10, pady=2)
+        switch_chat = ctk.CTkSwitch(f_chat, text="Alarme de Msg Nova",
                                     progress_color="#FFA500", **self.UI['BODY'])
-        switch_chat.pack(anchor="w", padx=self.UI['PAD_INDENT'], pady=2)
+        switch_chat.pack(side="left", padx=5)
         if settings.get('alarm_chat_enabled', False):
             switch_chat.select()
 
-        # Movimento Inesperado
-        ctk.CTkLabel(tab, text="Movimento Inesperado:", **self.UI['H1']).pack(anchor="w", padx=10, pady=(5, 5))
+        f_stuck = ctk.CTkFrame(tab, fg_color="transparent")
+        f_stuck.pack(fill="x", padx=10, pady=2)
+        switch_stuck_detection = ctk.CTkSwitch(f_stuck, text="Alarme Cavebot Parado (3s+)",
+                                               progress_color="#FFA500", **self.UI['BODY'])
+        switch_stuck_detection.pack(side="left", padx=5)
+        if settings.get('alarm_stuck_detection_enabled', False):
+            switch_stuck_detection.select()
 
-        switch_movement = ctk.CTkSwitch(tab, text="Alarme de Movimento",
-                                         command=lambda: None,
-                                         progress_color="#FF5555", **self.UI['BODY'])
-        switch_movement.pack(anchor="w", padx=self.UI['PAD_INDENT'], pady=2)
+        # Movimento + Manter Posição agrupados (relacionados)
+        f_movimento = ctk.CTkFrame(tab, fg_color="transparent")
+        f_movimento.pack(fill="x", padx=10, pady=2)
+
+        switch_movement = ctk.CTkSwitch(f_movimento, text="Alarme de Movimento",
+                                        progress_color="#FF5555", **self.UI['BODY'])
+        switch_movement.pack(side="left", padx=5)
         if settings.get('alarm_movement_enabled', False):
             switch_movement.select()
 
-        switch_keep_pos = ctk.CTkSwitch(tab, text="Manter Posição (retornar ao ponto)",
-                                         command=lambda: None,
-                                         progress_color="#FFA500", **self.UI['BODY'])
-        switch_keep_pos.pack(anchor="w", padx=self.UI['PAD_INDENT'], pady=2)
+        ctk.CTkLabel(f_movimento, text="→", **self.UI['BODY']).pack(side="left", padx=3)
+
+        switch_keep_pos = ctk.CTkSwitch(f_movimento, text="Manter Posição",
+                                        progress_color="#FFA500", **self.UI['BODY'])
+        switch_keep_pos.pack(side="left")
         if settings.get('alarm_keep_position', False):
             switch_keep_pos.select()
 
-        # Cavebot Stuck Detection
-        ctk.CTkLabel(tab, text="Cavebot Stuck:", **self.UI['H1']).pack(anchor="w", padx=10, pady=(5, 5))
-
-        switch_stuck_detection = ctk.CTkSwitch(tab, text="Alarme de Cavebot Parado (3s+)",
-                                                command=lambda: None,
-                                                progress_color="#FFA500", **self.UI['BODY'])
-        switch_stuck_detection.pack(anchor="w", padx=self.UI['PAD_INDENT'], pady=2)
-        if settings.get('alarm_stuck_detection_enabled', False):
-            switch_stuck_detection.select()
+        ctk.CTkLabel(f_movimento, text="(retorna ao ponto)",
+                    **self.UI['HINT']).pack(side="left", padx=5)
 
         # Botão Salvar
         def save_alarm():
             try:
                 s = self.cb.get_bot_settings()
                 raw_range = combo_alarm.get()
-                s['alarm_range'] = 15 if "Tela" in raw_range else int(raw_range.split()[0])
-                s['alarm_floor'] = combo_floor.get()
+                s['alarm_range'] = 15 if raw_range == "Tela" else int(raw_range)
+                s['alarm_floor'] = floor_rev.get(combo_floor.get(), "Padrão")
                 s['alarm_hp_enabled'] = bool(switch_hp_alarm.get())
                 s['alarm_hp_percent'] = int(entry_hp_pct.get())
                 s['alarm_players'] = bool(switch_alarm_players.get())
@@ -782,7 +819,7 @@ class SettingsWindow:
         txt_targets.pack(fill="x", padx=5, pady=5)
         txt_targets.insert("0.0", "\n".join(settings['targets']))
 
-        ctk.CTkLabel(tab, text="Segura (Safe List):", **self.UI['H1']).pack(pady=(5, 0))
+        ctk.CTkLabel(tab, text="Safe List (Não irá disparar o alarme):", **self.UI['H1']).pack(pady=(5, 0))
         txt_safe = ctk.CTkTextbox(tab, height=140, font=("Consolas", 10))
         txt_safe.pack(fill="x", padx=5, pady=5)
         txt_safe.insert("0.0", "\n".join(settings['safe']))
@@ -822,21 +859,19 @@ class SettingsWindow:
         ctk.CTkLabel(frame_dest, text="(0=primeira BP, 1=segunda, etc)",
                     **self.UI['HINT']).pack(side="left", padx=(5, 0))
 
-        # Options
+        # Options (lado a lado)
         frame_loot_opts = ctk.CTkFrame(tab, fg_color="transparent")
-        frame_loot_opts.pack(fill="x", padx=10, pady=5)
+        frame_loot_opts.pack(fill="x", padx=10, pady=3)
 
-        switch_drop_food = ctk.CTkSwitch(frame_loot_opts, text="Jogar Food no chão se Full",
-                                         command=lambda: None,
+        switch_drop_food = ctk.CTkSwitch(frame_loot_opts, text="Dropar food no chão se full",
                                          progress_color="#FFA500", **self.UI['BODY'])
-        switch_drop_food.pack(anchor="center")
+        switch_drop_food.pack(side="left", padx=(5, 15))
         if settings.get('loot_drop_food', False):
             switch_drop_food.select()
 
-        switch_auto_eat = ctk.CTkSwitch(frame_loot_opts, text="Comer Food automaticamente",
-                                         command=lambda: None,
+        switch_auto_eat = ctk.CTkSwitch(frame_loot_opts, text="Auto comer food",
                                          progress_color="#32CD32", **self.UI['BODY'])
-        switch_auto_eat.pack(anchor="center")
+        switch_auto_eat.pack(side="left")
         if settings.get('loot_auto_eat', True):
             switch_auto_eat.select()
 
@@ -853,7 +888,7 @@ class SettingsWindow:
             txt_loot_names.pack(fill="x", padx=10, pady=2)
             txt_loot_names.insert("0.0", "\n".join(settings.get('loot_names', [])))
 
-            ctk.CTkLabel(tab, text="Items para Dropar:", **self.UI['H1']).pack(pady=(5, 0))
+            ctk.CTkLabel(tab, text="Items para Dropar no chão:", **self.UI['H1']).pack(pady=(5, 0))
             ctk.CTkLabel(tab, text="↳ Um item por linha. Ex: 'a mace', 'leather helmet'",
                         **self.UI['HINT']).pack(pady=(0, 2))
 
@@ -925,45 +960,49 @@ class SettingsWindow:
         """Constrói a aba Fisher."""
         settings = self.cb.get_bot_settings()
 
-        frame_fish = self._create_grid_frame(tab)
+        # === CAPACIDADE ===
+        ctk.CTkLabel(tab, text="Capacidade (Cap):", **self.UI['H1']).pack(anchor="w", padx=10, pady=(10, 3))
 
-        # Cap Control
-        ctk.CTkLabel(frame_fish, text="Min Cap:", **self.UI['BODY']).grid(
-            row=0, column=0, sticky="e", padx=10, pady=5)
-        entry_fish_cap_val = ctk.CTkEntry(frame_fish, **self.UI['INPUT'])
-        entry_fish_cap_val.grid(row=1, column=1, sticky="w")
+        f_cap = ctk.CTkFrame(tab, fg_color="transparent")
+        f_cap.pack(fill="x", padx=10, pady=2)
+
+        ctk.CTkLabel(f_cap, text="Min Cap:", **self.UI['BODY']).pack(side="left", padx=(5, 2))
+        entry_fish_cap_val = ctk.CTkEntry(f_cap, width=50, height=24, font=self.UI['BODY']['font'], justify="center")
+        entry_fish_cap_val.pack(side="left", padx=(0, 15))
         entry_fish_cap_val.insert(0, str(settings.get('fisher_min_cap', 10.0)))
 
-        # Switches
-        frame_fish_opts = ctk.CTkFrame(tab, fg_color="transparent")
-        frame_fish_opts.pack(pady=10)
-
-        switch_fish_cap = ctk.CTkSwitch(frame_fish_opts, text="Pausar se Cap Baixa",
-                                        command=lambda: None,
+        switch_fish_cap = ctk.CTkSwitch(f_cap, text="Pausar se cap baixa",
                                         progress_color="#FFA500", **self.UI['BODY'])
-        switch_fish_cap.pack(anchor="w", padx=self.UI['PAD_INDENT'], pady=2)
+        switch_fish_cap.pack(side="left")
         if settings.get('fisher_check_cap', True):
             switch_fish_cap.select()
 
-        switch_fatigue = ctk.CTkSwitch(frame_fish_opts, text="Simular Fadiga Humana",
-                                       command=lambda: None,
+        ctk.CTkLabel(tab, text="↳ Pausa pesca quando capacidade < valor definido",
+                    **self.UI['HINT']).pack(anchor="w", padx=15)
+
+        # === HUMANIZAÇÃO ===
+        ctk.CTkLabel(tab, text="Humanização:", **self.UI['H1']).pack(anchor="w", padx=10, pady=(15, 3))
+
+        switch_fatigue = ctk.CTkSwitch(tab, text="Fadiga Humana",
                                        progress_color="#FFA500", **self.UI['BODY'])
-        switch_fatigue.pack(anchor="w", padx=self.UI['PAD_INDENT'], pady=2)
+        switch_fatigue.pack(anchor="w", padx=15, pady=2)
         if settings.get('fisher_fatigue', True):
             switch_fatigue.select()
 
-        ctk.CTkLabel(frame_fish_opts, text="↳ Cria pausas e lentidão progressiva.",
-                    **self.UI['HINT']).pack(anchor="w", padx=45)
+        ctk.CTkLabel(tab, text="↳ Simula cansaço: pausas progressivas que aumentam com o tempo",
+                    **self.UI['HINT']).pack(anchor="w", padx=20)
 
-        switch_fisher_eat = ctk.CTkSwitch(frame_fish_opts, text="Auto-Comer (Fishing)",
-                                          command=lambda: None,
-                                          progress_color="#FFA500", **self.UI['BODY'])
-        switch_fisher_eat.pack(anchor="w", padx=self.UI['PAD_INDENT'], pady=2)
+        # === AUTO-COMER ===
+        ctk.CTkLabel(tab, text="Alimentação:", **self.UI['H1']).pack(anchor="w", padx=10, pady=(15, 3))
+
+        switch_fisher_eat = ctk.CTkSwitch(tab, text="Auto-Comer",
+                                          progress_color="#32CD32", **self.UI['BODY'])
+        switch_fisher_eat.pack(anchor="w", padx=15, pady=2)
         if settings.get('fisher_auto_eat', False):
             switch_fisher_eat.select()
 
-        ctk.CTkLabel(frame_fish_opts, text="↳ Tenta comer a cada 2s até ficar full (60s de pausa).",
-                    **self.UI['HINT']).pack(anchor="w", padx=45)
+        ctk.CTkLabel(tab, text="↳ Come comida automaticamente a cada 2s até ficar full",
+                    **self.UI['HINT']).pack(anchor="w", padx=20)
 
         def save_fish():
             try:
@@ -1135,22 +1174,17 @@ class SettingsWindow:
         # Store rule row widgets for collection on save
         healer_rule_rows = []
 
-        # === GLOBAL COOLDOWN ===
-        ctk.CTkLabel(tab, text="Cooldown Global", **self.UI['H1']).pack(anchor="w", padx=10, pady=(10, 5))
-
+        # Cooldown inline
         f_cooldown = ctk.CTkFrame(tab, fg_color="transparent")
-        f_cooldown.pack(fill="x", padx=20, pady=2)
-        ctk.CTkLabel(f_cooldown, text="Cooldown entre heals (ms):", **self.UI['BODY']).pack(side="left")
-        entry_cooldown = ctk.CTkEntry(f_cooldown, **self.UI['INPUT'])
-        entry_cooldown.configure(width=80)
-        entry_cooldown.pack(side="left", padx=5)
+        f_cooldown.pack(fill="x", padx=10, pady=(8, 3))
+        ctk.CTkLabel(f_cooldown, text="Cooldown:", **self.UI['BODY']).pack(side="left", padx=(5, 2))
+        entry_cooldown = ctk.CTkEntry(f_cooldown, width=60, height=24, font=self.UI['BODY']['font'], justify="center")
+        entry_cooldown.pack(side="left", padx=2)
         entry_cooldown.insert(0, str(settings.get('healer_cooldown_ms', 2000)))
-
-        ctk.CTkLabel(tab, text="Tempo mínimo entre qualquer ação de heal",
-                    **self.UI['HINT']).pack(anchor="w", padx=25)
+        ctk.CTkLabel(f_cooldown, text="ms entre heals", **self.UI['BODY']).pack(side="left", padx=2)
 
         # === RULES SECTION ===
-        ctk.CTkLabel(tab, text="Regras de Cura", **self.UI['H1']).pack(anchor="w", padx=10, pady=(15, 5))
+        ctk.CTkLabel(tab, text="Regras de Cura", **self.UI['H1']).pack(anchor="w", padx=10, pady=(8, 3))
         ctk.CTkLabel(tab, text="Menor prioridade = executa primeiro",
                     **self.UI['HINT']).pack(anchor="w", padx=20, pady=2)
 
@@ -1410,23 +1444,30 @@ class SettingsWindow:
         frame_wp_content = ctk.CTkFrame(frame_waypoints, fg_color="transparent")
         frame_wp_content.pack(fill="x", expand=True, padx=10, pady=(0, 10))
 
-        # Coluna Botões
+        # Coluna Botões (compacto mas funcional)
         frame_buttons = ctk.CTkFrame(frame_wp_content, fg_color="transparent")
-        frame_buttons.pack(side="left", fill="y", padx=(0, 8))
+        frame_buttons.pack(side="left", fill="y", padx=(0, 5))
 
-        ctk.CTkButton(frame_buttons, text="Adicionar WP", fg_color="#2CC985", width=90,
-                     hover_color="#1FA86E", command=self.cb.record_current_pos, height=36,
-                     font=("Verdana", 10)).pack(fill="x", pady=(0, 10))
-        ctk.CTkButton(frame_buttons, text="▲ Subir", width=90, command=self.cb.move_waypoint_up,
-                     **self.UI['BUTTON_SM']).pack(fill="x", pady=2)
-        ctk.CTkButton(frame_buttons, text="▼ Descer", width=90, command=self.cb.move_waypoint_down,
-                     **self.UI['BUTTON_SM']).pack(fill="x", pady=2)
-        ctk.CTkButton(frame_buttons, text="❌ Remover", width=90, fg_color="#FF5555",
-                     hover_color="#CC4444", command=self.cb.remove_selected_waypoint,
-                     **self.UI['BUTTON_SM']).pack(fill="x", pady=2)
-        ctk.CTkButton(frame_buttons, text="🗑️ Limpar", width=90, fg_color="#e74c3c",
-                     hover_color="#c0392b", command=self.cb.clear_waypoints,
-                     **self.UI['BUTTON_SM']).pack(fill="x", pady=2)
+        # Botão principal
+        ctk.CTkButton(frame_buttons, text="+ Adicionar", fg_color="#2CC985", width=80,
+                     hover_color="#1FA86E", command=self.cb.record_current_pos, height=28,
+                     font=("Verdana", 9)).pack(fill="x", pady=(0, 3))
+
+        # Botões de navegação em linha
+        f_nav = ctk.CTkFrame(frame_buttons, fg_color="transparent")
+        f_nav.pack(fill="x", pady=2)
+        ctk.CTkButton(f_nav, text="▲", width=38, height=22, command=self.cb.move_waypoint_up,
+                     font=("Verdana", 9)).pack(side="left", padx=(0, 2))
+        ctk.CTkButton(f_nav, text="▼", width=38, height=22, command=self.cb.move_waypoint_down,
+                     font=("Verdana", 9)).pack(side="left")
+
+        # Botões de ação em linha
+        f_act = ctk.CTkFrame(frame_buttons, fg_color="transparent")
+        f_act.pack(fill="x", pady=2)
+        ctk.CTkButton(f_act, text="Rem", width=38, height=22, fg_color="#FF5555",
+                     command=self.cb.remove_selected_waypoint, font=("Verdana", 8)).pack(side="left", padx=(0, 2))
+        ctk.CTkButton(f_act, text="Limpar", width=38, height=22, fg_color="#e74c3c",
+                     command=self.cb.clear_waypoints, font=("Verdana", 8)).pack(side="left")
 
         # Coluna Listbox
         frame_listbox = ctk.CTkFrame(frame_wp_content, fg_color="transparent")

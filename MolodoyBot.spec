@@ -26,6 +26,9 @@ hiddenimports = [
 tmp_ret = collect_all('customtkinter')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
+# Remove dados de timezone do Tcl (pesados e desnecessários)
+datas = [(src, dest) for src, dest in datas if 'tzdata' not in src and 'zoneinfo' not in src]
+
 
 a = Analysis(
     ['main.py'],
