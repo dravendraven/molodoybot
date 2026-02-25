@@ -1,15 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_all, collect_dynamic_libs
-from PyInstaller.building.splash import Splash
-import sys
-import os
-
-# Coleta DLLs do Python para garantir que sejam incluídas
-python_dlls = []
-python_dir = os.path.dirname(sys.executable)
-for dll in os.listdir(python_dir):
-    if dll.endswith('.dll'):
-        python_dlls.append((os.path.join(python_dir, dll), '.'))
+from PyInstaller.utils.hooks import collect_all
+# from PyInstaller.building.splash import Splash  # Desabilitado - causa erro DLL
 
 # Lê versão do version.txt
 with open('version.txt', 'r') as f:
@@ -24,7 +15,7 @@ datas = [
     ('floor_transitions.json', '.'),
     ('spawn_graph.json', '.'),
 ]
-binaries = python_dlls  # Inclui DLLs do Python
+binaries = []
 hiddenimports = [
     'cryptography',
     'cryptography.fernet',
@@ -65,21 +56,11 @@ pyz = PYZ(a.pure)
 # Remove dados pesados e desnecessários
 a.datas = [x for x in a.datas if 'tzdata' not in x[0] and 'zoneinfo' not in x[0] and 'matplotlib' not in x[0]]
 
-# Splash screen nativa (aparece ANTES da extração)
-splash = Splash(
-    'splash.png',
-    binaries=a.binaries,
-    datas=a.datas,
-    text_pos=(110, 115),         # Posição do texto de status (parte inferior)
-    text_size=10,
-    text_color='#969696',
-    text_default='Iniciando...',
-)
+# Splash screen nativa DESABILITADA - causa erro "Failed to load Python DLL"
+# O fallback tkinter em main.py será usado automaticamente
 
 exe = EXE(
     pyz,
-    splash,                      # Splash screen nativa
-    splash.binaries,             # Binários necessários para splash
     a.scripts,
     a.binaries,
     a.datas,
