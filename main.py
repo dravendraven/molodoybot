@@ -5,7 +5,7 @@
 # Tenta usar splash nativa do PyInstaller (aparece ANTES da extração)
 _pyi_splash = None
 try:
-    import pyi_splash as _pyi_splash
+    import pyi_splash as _pyi_splash  # type: ignore
     _using_native_splash = True
 except ImportError:
     _using_native_splash = False

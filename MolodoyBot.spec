@@ -1,6 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, collect_dynamic_libs
 from PyInstaller.building.splash import Splash
+import sys
+import os
+
+# Coleta DLLs do Python para garantir que sejam incluídas
+python_dlls = []
+python_dir = os.path.dirname(sys.executable)
+for dll in os.listdir(python_dir):
+    if dll.endswith('.dll'):
+        python_dlls.append((os.path.join(python_dir, dll), '.'))
 
 # Lê versão do version.txt
 with open('version.txt', 'r') as f:
@@ -15,7 +24,7 @@ datas = [
     ('floor_transitions.json', '.'),
     ('spawn_graph.json', '.'),
 ]
-binaries = []
+binaries = python_dlls  # Inclui DLLs do Python
 hiddenimports = [
     'cryptography',
     'cryptography.fernet',
