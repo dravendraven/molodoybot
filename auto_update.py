@@ -12,7 +12,7 @@ from tkinter import ttk
 
 # ================= CONFIGURAÇÕES =================
 # Versão atual hardcoded (atualizada automaticamente pelo publicar.bat)
-CURRENT_VERSION = "6.2"
+CURRENT_VERSION = "6.3"
 
 # URLs do GitHub
 URL_VERSION = "https://raw.githubusercontent.com/dravendraven/molodoybot/refs/heads/main/version.txt"
@@ -210,18 +210,15 @@ def apply_update(new_exe_path):
         return
 
     bat_content = f'''@echo off
-:: Espera inicial mais longa
-timeout /t 3 /nobreak >nul
+:: Espera inicial (ping é mais silencioso que timeout)
+ping 127.0.0.1 -n 4 >nul 2>&1
 
 :: Mata o processo se ainda estiver rodando
 taskkill /PID {pid} /F >nul 2>&1
-timeout /t 3 /nobreak >nul
+ping 127.0.0.1 -n 4 >nul 2>&1
 
 :: Verifica se o arquivo novo existe
-if not exist "{new_exe}" (
-    echo Arquivo novo nao encontrado
-    exit /b 1
-)
+if not exist "{new_exe}" exit /b 1
 
 :: Tenta deletar o exe antigo (com retry, max 10 tentativas)
 set count=0
@@ -230,25 +227,22 @@ if %count% geq 10 exit /b 1
 set /a count+=1
 del /f "{current_exe}" >nul 2>&1
 if exist "{current_exe}" (
-    timeout /t 1 /nobreak >nul
+    ping 127.0.0.1 -n 2 >nul 2>&1
     goto retry_delete
 )
 
-:: Copia o novo exe (copy é mais seguro que move)
+:: Copia o novo exe
 copy /y "{new_exe}" "{current_exe}" >nul 2>&1
-timeout /t 1 /nobreak >nul
+ping 127.0.0.1 -n 2 >nul 2>&1
 
 :: Verifica se copiou corretamente
-if not exist "{current_exe}" (
-    echo Falha ao copiar
-    exit /b 1
-)
+if not exist "{current_exe}" exit /b 1
 
 :: Deleta o arquivo .new
 del /f "{new_exe}" >nul 2>&1
 
 :: Espera antes de iniciar
-timeout /t 2 /nobreak >nul
+ping 127.0.0.1 -n 3 >nul 2>&1
 
 :: Inicia o novo exe
 start "" "{current_exe}"

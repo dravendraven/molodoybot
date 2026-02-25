@@ -26,10 +26,6 @@ hiddenimports = [
 tmp_ret = collect_all('customtkinter')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
-# Remove dados de timezone do Tcl (pesados e desnecessários)
-datas = [(src, dest) for src, dest in datas if 'tzdata' not in src and 'zoneinfo' not in src]
-
-
 a = Analysis(
     ['main.py'],
     pathex=[],
@@ -41,7 +37,7 @@ a = Analysis(
     runtime_hooks=[],
     excludes=[
         # Libs externas pesadas não utilizadas
-        'numpy', 'pandas', 'scipy', 'sklearn',
+        'numpy', 'pandas', 'scipy', 'sklearn', 'matplotlib',
         'torch', 'tensorflow', 'keras', 'cv2',
         # Módulos de teste
         'unittest', 'pytest', 'nose',
@@ -56,6 +52,9 @@ a = Analysis(
     optimize=2,
 )
 pyz = PYZ(a.pure)
+
+# Remove dados pesados e desnecessários
+a.datas = [x for x in a.datas if 'tzdata' not in x[0] and 'zoneinfo' not in x[0] and 'matplotlib' not in x[0]]
 
 # Splash screen nativa (aparece ANTES da extração)
 splash = Splash(
