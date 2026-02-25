@@ -16,6 +16,14 @@ if %errorlevel% neq 0 (
     exit /b
 )
 
+:: Gera splash.png com a versao
+python generate_splash.py
+if %errorlevel% neq 0 (
+    echo ERRO: Falha ao gerar splash.png!
+    pause
+    exit /b
+)
+
 :: 1. Compilar o Bot
 echo [1/3] Compilando o .exe...
 pyinstaller MolodoyBot.spec

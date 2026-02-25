@@ -28,7 +28,8 @@
       "Bash(timeout 3 python:*)",
       "Bash(.venvScriptspython.exe -m PyInstaller MolodoyBot.spec --noconfirm)",
       "Bash(cmd /c:*)",
-      "Bash(.venv/Scripts/python.exe:*)"
+      "Bash(.venv/Scripts/python.exe:*)",
+      "Bash(ren \"c:\\\\Users\\\\vitor\\\\OneDrive\\\\Documentos\\\\cheat engine\\\\splash.png\" splash_base.png)"
     ],
     "additionalDirectories": [
       "c:\\Users\\vitor\\OneDrive\\Documentos\\cheat engine"

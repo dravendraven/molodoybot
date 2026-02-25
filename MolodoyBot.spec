@@ -2,6 +2,10 @@
 from PyInstaller.utils.hooks import collect_all
 from PyInstaller.building.splash import Splash
 
+# Lê versão do version.txt
+with open('version.txt', 'r') as f:
+    VERSION = f.read().strip()
+
 datas = [
     ('world-spawn.xml', '.'),
     ('archway1.txt', '.'),

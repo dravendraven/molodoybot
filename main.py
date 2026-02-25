@@ -153,22 +153,6 @@ from utils.timing import gauss_wait
 from datetime import datetime
 # from PIL import Image  # Lazy import: update_minimap_loop()
 
-# matplotlib será carregado sob demanda (lazy loading)
-plt = None
-FigureCanvasTkAgg = None
-
-def setup_matplotlib():
-    """Carrega matplotlib apenas quando necessário (lazy loading)"""
-    global plt, FigureCanvasTkAgg
-    if plt is None:
-        import matplotlib
-        matplotlib.use("TkAgg")
-        import matplotlib.pyplot as plt_module
-        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg as Canvas
-        plt = plt_module
-        FigureCanvasTkAgg = Canvas
-    return plt, FigureCanvasTkAgg
-
 _update_splash("Carregando interface...")
 import sys
 import traceback
