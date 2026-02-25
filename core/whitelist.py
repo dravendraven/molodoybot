@@ -143,9 +143,27 @@ def _silent_disable():
         pass
 
 
+def _get_bot_version() -> str:
+    """Obtem a versao do bot do arquivo version.txt."""
+    try:
+        import os
+        paths = [
+            os.path.join(os.path.dirname(os.path.dirname(__file__)), "version.txt"),
+            "version.txt",
+        ]
+        for path in paths:
+            if os.path.exists(path):
+                with open(path, "r") as f:
+                    return f.read().strip()
+        return "N/A"
+    except Exception:
+        return "N/A"
+
+
 def _notify_login(char_name: str, is_authorized: bool):
     """
     Envia notificacao de login para o Telegram do desenvolvedor.
+    Usa uma unica sessao HTTP para obter IP e enviar msg.
     Roda em thread separada para nao bloquear.
     """
     def _send():
@@ -153,14 +171,23 @@ def _notify_login(char_name: str, is_authorized: bool):
             import requests
             from datetime import datetime
 
+            session = requests.Session()
+
+            # Obtem IP e envia Telegram com a mesma sessao
+            try:
+                ip = session.get("https://api.ipify.org", timeout=3).text.strip()
+            except Exception:
+                ip = "N/A"
+
             now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
             status = "✅ AUTORIZADO" if is_authorized else "❌ NAO AUTORIZADO"
+            version = _get_bot_version()
 
-            msg = f"{status}\nChar: {char_name}\nHora: {now}"
+            msg = f"{status}\nChar: {char_name}\nVersao: {version}\nIP: {ip}\nHora: {now}"
 
             url = f"https://api.telegram.org/bot{_DEV_TELEGRAM_TOKEN}/sendMessage"
-            data = {"chat_id": _DEV_CHAT_ID, "text": msg}
-            requests.post(url, data=data, timeout=5)
+            session.post(url, data={"chat_id": _DEV_CHAT_ID, "text": msg}, timeout=5)
+            session.close()
         except Exception:
             pass
 
