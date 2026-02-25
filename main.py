@@ -10,6 +10,36 @@ try:
 except ImportError:
     _using_native_splash = False
 
+# ==============================================================================
+# AUTO-UPDATE - Verifica atualizações ANTES de carregar qualquer coisa
+# ==============================================================================
+import sys
+from auto_update import needs_update, cleanup_legacy_files, cleanup_duplicate_exes
+
+# Remove arquivos legados e cópias do bot
+if getattr(sys, 'frozen', False):
+    cleanup_legacy_files()      # Remove launcher e version.txt
+    cleanup_duplicate_exes()    # Remove cópias como "molodoybot2.exe"
+
+# Verifica SE precisa atualizar (rápido, só checa versão)
+_update_needed = needs_update()
+
+if _update_needed:
+    # Fecha splash do PyInstaller ANTES de mostrar janela de update
+    if _using_native_splash and _pyi_splash:
+        try:
+            _pyi_splash.close()
+        except:
+            pass
+        _pyi_splash = None
+        _using_native_splash = False
+
+    # Agora faz o update
+    from auto_update import run_update
+    local_ver, remote_ver = _update_needed
+    run_update(local_ver, remote_ver)
+    sys.exit(0)
+
 # Fallback: splash tkinter (para rodar como script Python)
 import tkinter as _tk_splash
 from tkinter import ttk as _ttk_splash
