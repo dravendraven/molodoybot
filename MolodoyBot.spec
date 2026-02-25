@@ -23,6 +23,8 @@ hiddenimports = [
     'cryptography.hazmat.primitives',
     'cryptography.hazmat.primitives.hashes',
     'cryptography.hazmat.primitives.kdf.pbkdf2',
+    'packaging',
+    'packaging.version',
 ]
 tmp_ret = collect_all('customtkinter')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
