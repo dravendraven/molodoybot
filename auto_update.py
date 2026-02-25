@@ -26,6 +26,11 @@ LEGACY_FILES = ["MolodoyLauncher.exe", "version.txt"]
 
 def cleanup_legacy_files():
     """Remove arquivos do sistema antigo (launcher) para forçar uso do auto-update."""
+    import time
+
+    # Pequeno delay para garantir que o launcher já fechou
+    time.sleep(0.5)
+
     for filename in LEGACY_FILES:
         if os.path.exists(filename):
             try:
