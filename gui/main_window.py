@@ -10,6 +10,8 @@ import tkinter as tk
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
+from auto_update import CURRENT_VERSION
+
 
 # ==============================================================================
 # CALLBACKS DATACLASS
@@ -171,7 +173,7 @@ class MainWindow:
         ctk.set_default_color_theme("blue")
 
         self.app = ctk.CTk()
-        self.app.title("Molodoy Bot Pro")
+        self.app.title(f"Molodoy Bot Pro v{CURRENT_VERSION}")
         self.app.resizable(True, True)
         self.app.configure(fg_color="#202020")
 
