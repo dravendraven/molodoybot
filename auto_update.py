@@ -202,6 +202,9 @@ def apply_update(new_exe_path):
     new_exe = os.path.abspath(new_exe_path)
     pid = os.getpid()
 
+    # Get the _MEI folder path for this process (PyInstaller --onefile extraction dir)
+    mei_dir = getattr(sys, '_MEIPASS', '')
+
     # Verifica se o arquivo baixado existe e tem tamanho razoável (> 1MB)
     if not os.path.exists(new_exe_path):
         return
@@ -209,7 +212,20 @@ def apply_update(new_exe_path):
         os.remove(new_exe_path)
         return
 
-    # Script batch com limpeza de pastas _MEI do PyInstaller
+    # Validate the downloaded file is a valid PE executable (MZ header)
+    try:
+        with open(new_exe_path, 'rb') as f:
+            if f.read(2) != b'MZ':
+                os.remove(new_exe_path)
+                return
+    except (IOError, OSError):
+        try:
+            os.remove(new_exe_path)
+        except:
+            pass
+        return
+
+    # Script batch com delays usando ping (não abre janela)
     bat_content = f'''@echo off
 :: Espera o processo fechar
 ping 127.0.0.1 -n 6 >nul
@@ -221,6 +237,15 @@ ping 127.0.0.1 -n 6 >nul
 :: IMPORTANTE: Limpa pastas _MEI* antigas do PyInstaller
 :: Isso evita conflitos de DLL quando o novo exe iniciar
 for /d %%G in ("%TEMP%\\_MEI*") do rd /s /q "%%G" 2>nul
+
+:: Clean up PyInstaller _MEI folder to prevent PID reuse conflicts
+if exist "{mei_dir}" rd /s /q "{mei_dir}" >nul 2>&1
+
+:: Also clean up any other orphaned _MEI folders in TEMP
+for /d %%D in ("%TEMP%\\_MEI*") do (
+    rd /s /q "%%D" >nul 2>&1
+)
+ping 127.0.0.1 -n 2 >nul
 
 :: Verifica se o arquivo novo existe
 if not exist "{new_exe}" exit /b 1
@@ -279,8 +304,8 @@ del "%~f0"
         stderr=subprocess.DEVNULL,
     )
 
-    # Força saída imediata
-    os._exit(0)
+    # Shut down cleanly so PyInstaller bootloader can clean up _MEI folder
+    sys.exit(0)
 
 
 def run_update(local_ver, remote_ver):
@@ -313,6 +338,52 @@ def run_update(local_ver, remote_ver):
     thread.start()
 
     window.mainloop()
+
+
+def cleanup_stale_mei_folders():
+    """
+    Remove orphaned _MEI folders from TEMP that don't belong to running processes.
+    PyInstaller --onefile creates _MEI{pid} folders; if the process exits uncleanly
+    (e.g., os._exit), these folders are left behind and can cause conflicts via PID reuse.
+    """
+    import glob
+    import re
+
+    temp_dir = tempfile.gettempdir()
+    mei_pattern = os.path.join(temp_dir, '_MEI*')
+
+    current_pid = os.getpid()
+
+    for mei_path in glob.glob(mei_pattern):
+        folder_name = os.path.basename(mei_path)
+        match = re.match(r'_MEI(\d+)', folder_name)
+        if not match:
+            continue
+
+        mei_pid = int(match.group(1))
+
+        # Don't delete our own _MEI folder
+        if mei_pid == current_pid:
+            continue
+
+        # Check if a process with this PID is still running
+        try:
+            import ctypes
+            kernel32 = ctypes.windll.kernel32
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, mei_pid)
+            if handle:
+                kernel32.CloseHandle(handle)
+                continue  # Process exists, skip this folder
+        except:
+            pass
+
+        # Process doesn't exist, safe to remove the orphaned folder
+        try:
+            import shutil
+            shutil.rmtree(mei_path, ignore_errors=True)
+        except:
+            pass
 
 
 def check_and_update():
