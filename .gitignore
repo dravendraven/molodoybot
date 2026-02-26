@@ -101,3 +101,4 @@ _teste_update/MolodoyBot.exe
 _teste_update/logs/crash_dump.txt
 _teste_update/logs/crash.log
 splash.png
+tools/.whitelist_data.json

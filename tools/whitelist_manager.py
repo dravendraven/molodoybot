@@ -1,54 +1,49 @@
 #!/usr/bin/env python3
 # tools/whitelist_manager.py
 """
-Ferramenta de Gerenciamento de Whitelist para MolodoyBot
-Interface interativa para gerenciar personagens autorizados.
+Gerenciador de Whitelist para MolodoyBot
+Gera o JSON para upload no GitHub Gist.
+
+Uso:
+    python whitelist_manager.py          # Modo interativo
+    python whitelist_manager.py add X    # Adiciona char
+    python whitelist_manager.py remove X # Remove char
+    python whitelist_manager.py list     # Lista chars
+    python whitelist_manager.py json     # Gera JSON para o Gist
 """
 
-import base64
 import os
 import sys
 import json
 from pathlib import Path
-
-from cryptography.fernet import Fernet
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 # ==============================================================================
 # CONFIGURACAO
 # ==============================================================================
 
 WHITELIST_FILE = Path(__file__).parent / ".whitelist_data.json"
-PASSPHRASE = "MolodoySecretBot2024!MB"
+
+DEFAULT_CONFIG = {
+    "enabled": True,
+    "block_unauthorized": False,
+    "grace_period": 300,
+    "characters": []
+}
 
 # ==============================================================================
-# FUNCOES DE CRIPTOGRAFIA
-# ==============================================================================
-
-def derive_key(passphrase: str, salt: bytes) -> bytes:
-    kdf = PBKDF2HMAC(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=salt,
-        iterations=480000,
-    )
-    return base64.urlsafe_b64encode(kdf.derive(passphrase.encode()))
-
-
-def generate_salt() -> bytes:
-    return os.urandom(16)
-
-
-# ==============================================================================
-# ARMAZENAMENTO
+# ARMAZENAMENTO LOCAL
 # ==============================================================================
 
 def load_whitelist() -> dict:
     if WHITELIST_FILE.exists():
         with open(WHITELIST_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return {"names": [], "salt": None}
+            data = json.load(f)
+            # Garante campos obrigatorios
+            for key, val in DEFAULT_CONFIG.items():
+                if key not in data:
+                    data[key] = val
+            return data
+    return DEFAULT_CONFIG.copy()
 
 
 def save_whitelist(data: dict):
@@ -61,102 +56,111 @@ def save_whitelist(data: dict):
 # ==============================================================================
 
 def add_char(name: str) -> bool:
-    """Adiciona um personagem. Retorna True se adicionou."""
     data = load_whitelist()
-    names = data.get("names", [])
+    chars = data.get("characters", [])
     normalized = name.strip()
 
     if not normalized:
         return False
 
-    if any(n.lower() == normalized.lower() for n in names):
+    if any(c.lower() == normalized.lower() for c in chars):
         print(f"  [!] '{name}' ja existe")
         return False
 
-    names.append(normalized)
-    data["names"] = names
+    chars.append(normalized)
+    data["characters"] = chars
     save_whitelist(data)
     print(f"  [+] Adicionado: {normalized}")
     return True
 
 
 def remove_char(name: str) -> bool:
-    """Remove um personagem. Retorna True se removeu."""
     data = load_whitelist()
-    names = data.get("names", [])
+    chars = data.get("characters", [])
     normalized_lower = name.strip().lower()
-    original_count = len(names)
-    names = [n for n in names if n.lower() != normalized_lower]
+    original_count = len(chars)
+    chars = [c for c in chars if c.lower() != normalized_lower]
 
-    if len(names) == original_count:
+    if len(chars) == original_count:
         print(f"  [!] '{name}' nao encontrado")
         return False
 
-    data["names"] = names
+    data["characters"] = chars
     save_whitelist(data)
     print(f"  [-] Removido: {name}")
     return True
 
 
 def list_chars():
-    """Lista todos os personagens."""
     data = load_whitelist()
-    names = data.get("names", [])
+    chars = data.get("characters", [])
 
     print()
-    if not names:
+    print(f"  Configuracao atual:")
+    print(f"  - enabled: {data.get('enabled', True)}")
+    print(f"  - block_unauthorized: {data.get('block_unauthorized', False)}")
+    print(f"  - grace_period: {data.get('grace_period', 300)}s")
+    print()
+
+    if not chars:
         print("  (whitelist vazia)")
     else:
-        print(f"  Personagens autorizados ({len(names)}):")
+        print(f"  Personagens ({len(chars)}):")
         print("  " + "-" * 30)
-        for i, name in enumerate(sorted(names), 1):
+        for i, name in enumerate(sorted(chars), 1):
             print(f"  {i:2}. {name}")
     print()
 
 
-def generate_blob():
-    """Gera e mostra o blob criptografado."""
+def generate_json():
     data = load_whitelist()
-    names = data.get("names", [])
 
-    if not names:
-        print("\n  [!] Whitelist vazia. Adicione personagens primeiro.\n")
-        return
-
-    salt = data.get("salt")
-    if salt:
-        salt = base64.b64decode(salt)
-    else:
-        salt = generate_salt()
-        data["salt"] = base64.b64encode(salt).decode('ascii')
-        save_whitelist(data)
-
-    plaintext = "\n".join(names)
-    key = derive_key(PASSPHRASE, salt)
-    fernet = Fernet(key)
-    encrypted = fernet.encrypt(plaintext.encode('utf-8'))
-
-    salt_b64 = base64.b64encode(salt).decode('ascii')
-    encrypted_b64 = base64.b64encode(encrypted).decode('ascii')
+    output = json.dumps(data, indent=2, ensure_ascii=False)
 
     print()
     print("  " + "=" * 60)
-    print("  COPIE PARA core/whitelist.py:")
+    print("  JSON PARA O GITHUB GIST:")
     print("  " + "=" * 60)
     print()
-    print(f'  _EMBEDDED_SALT = "{salt_b64}"')
-    print()
-    print(f'  _EMBEDDED_WHITELIST = "{encrypted_b64}"')
+    print(output)
     print()
     print("  " + "=" * 60)
-    print(f"  {len(names)} personagem(ns) criptografado(s)")
-    print("  " + "=" * 60)
     print()
+    print("  INSTRUCOES:")
+    print("  1. Va em https://gist.github.com")
+    print("  2. Cole o JSON acima")
+    print("  3. Nomeie o arquivo como 'whitelist.json'")
+    print("  4. Clique em 'Create secret gist'")
+    print("  5. Clique em 'Raw' e copie a URL")
+    print("  6. Cole a URL em core/whitelist.py na linha _REMOTE_WHITELIST_URL")
+    print()
+
+
+def toggle_enabled():
+    data = load_whitelist()
+    data["enabled"] = not data.get("enabled", True)
+    save_whitelist(data)
+    status = "ATIVADA" if data["enabled"] else "DESATIVADA"
+    print(f"  [!] Whitelist {status}")
+
+
+def toggle_block():
+    data = load_whitelist()
+    data["block_unauthorized"] = not data.get("block_unauthorized", False)
+    save_whitelist(data)
+    status = "ATIVADO" if data["block_unauthorized"] else "DESATIVADO"
+    print(f"  [!] Bloqueio {status}")
+
+
+def set_grace(seconds: int):
+    data = load_whitelist()
+    data["grace_period"] = seconds
+    save_whitelist(data)
+    print(f"  [!] Grace period: {seconds}s")
 
 
 def clear_all():
-    """Limpa toda a whitelist."""
-    data = {"names": [], "salt": None}
+    data = DEFAULT_CONFIG.copy()
     save_whitelist(data)
     print("  [!] Whitelist limpa")
 
@@ -171,13 +175,15 @@ def clear_screen():
 
 def print_header():
     data = load_whitelist()
-    count = len(data.get("names", []))
+    count = len(data.get("characters", []))
+    enabled = "ON" if data.get("enabled", True) else "OFF"
+    block = "ON" if data.get("block_unauthorized", False) else "OFF"
 
     print()
     print("  ╔════════════════════════════════════════╗")
-    print("  ║     WHITELIST MANAGER - MolodoyBot     ║")
+    print("  ║   WHITELIST MANAGER (Online/Gist)      ║")
     print("  ╠════════════════════════════════════════╣")
-    print(f"  ║  Personagens autorizados: {count:3}          ║")
+    print(f"  ║  Chars: {count:3}  |  Enabled: {enabled:3}  |  Block: {block:3} ║")
     print("  ╚════════════════════════════════════════╝")
     print()
 
@@ -185,18 +191,20 @@ def print_header():
 def print_menu():
     print("  Comandos:")
     print("  ─────────────────────────────────────────")
-    print("  [nome]     Adiciona personagem")
-    print("  -[nome]    Remove personagem (ex: -Hacker)")
-    print("  list       Lista todos")
-    print("  gen        Gera codigo criptografado")
-    print("  clear      Limpa tudo")
-    print("  exit       Sair")
+    print("  [nome]      Adiciona personagem")
+    print("  -[nome]     Remove personagem")
+    print("  list        Lista todos + config")
+    print("  json        Gera JSON para o Gist")
+    print("  toggle      Liga/desliga whitelist")
+    print("  block       Liga/desliga bloqueio")
+    print("  grace [s]   Define tempo de graca")
+    print("  clear       Limpa tudo")
+    print("  exit        Sair")
     print("  ─────────────────────────────────────────")
     print()
 
 
 def interactive_mode():
-    """Modo interativo principal."""
     clear_screen()
     print_header()
     list_chars()
@@ -212,7 +220,8 @@ def interactive_mode():
         if not cmd:
             continue
 
-        cmd_lower = cmd.lower()
+        parts = cmd.split(maxsplit=1)
+        cmd_lower = parts[0].lower()
 
         if cmd_lower in ['exit', 'quit', 'q', 'sair']:
             print("  Bye!")
@@ -221,14 +230,26 @@ def interactive_mode():
         elif cmd_lower in ['list', 'ls', 'l']:
             list_chars()
 
-        elif cmd_lower in ['gen', 'generate', 'g']:
-            generate_blob()
+        elif cmd_lower in ['json', 'j', 'gen', 'generate']:
+            generate_json()
+
+        elif cmd_lower == 'toggle':
+            toggle_enabled()
+
+        elif cmd_lower == 'block':
+            toggle_block()
+
+        elif cmd_lower == 'grace' and len(parts) > 1:
+            try:
+                seconds = int(parts[1])
+                set_grace(seconds)
+            except ValueError:
+                print("  [!] Uso: grace <segundos>")
 
         elif cmd_lower in ['clear', 'limpar']:
             confirm = input("  Tem certeza? (s/n): ").strip().lower()
             if confirm in ['s', 'sim', 'y', 'yes']:
                 clear_all()
-                list_chars()
 
         elif cmd_lower in ['help', 'h', '?']:
             print_menu()
@@ -238,13 +259,11 @@ def interactive_mode():
             print_header()
 
         elif cmd.startswith('-'):
-            # Remove personagem
             name = cmd[1:].strip()
             if name:
                 remove_char(name)
 
         else:
-            # Adiciona personagem
             add_char(cmd)
 
 
@@ -253,7 +272,6 @@ def interactive_mode():
 # ==============================================================================
 
 def main():
-    # Se tiver argumentos, usa modo CLI tradicional
     if len(sys.argv) > 1:
         cmd = sys.argv[1].lower()
 
@@ -263,19 +281,17 @@ def main():
             remove_char(" ".join(sys.argv[2:]))
         elif cmd == "list":
             list_chars()
-        elif cmd in ["gen", "generate"]:
-            generate_blob()
+        elif cmd == "json":
+            generate_json()
+        elif cmd == "toggle":
+            toggle_enabled()
+        elif cmd == "block":
+            toggle_block()
         elif cmd == "clear":
             clear_all()
         else:
-            print("Uso: python whitelist_manager.py [comando]")
-            print("  Sem argumentos = modo interativo")
-            print("  add <nome>    = adiciona personagem")
-            print("  remove <nome> = remove personagem")
-            print("  list          = lista todos")
-            print("  gen           = gera blob")
+            print(__doc__)
     else:
-        # Modo interativo
         interactive_mode()
 
 

@@ -1,146 +1,79 @@
 # core/whitelist.py
 """
 Modulo de validacao de whitelist para MolodoyBot.
-Valida nomes de personagens contra uma lista criptografada embutida.
+Valida nomes de personagens contra uma whitelist remota (GitHub Gist).
 
-IMPORTANTE: A whitelist criptografada e o salt estao embutidos neste arquivo.
-Apenas o desenvolvedor pode modifica-los usando tools/whitelist_manager.py.
+A whitelist e baixada do Gist quando o personagem loga.
+Se offline, bloqueia todos (bot nao funciona sem internet).
 """
 
-import base64
 import threading
-import time
-import random
-
-# Tenta importar cryptography; fornece erro se nao disponivel
-try:
-    from cryptography.fernet import Fernet, InvalidToken
-    from cryptography.hazmat.primitives import hashes
-    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-    CRYPTO_AVAILABLE = True
-except ImportError:
-    CRYPTO_AVAILABLE = False
+import json
 
 # ==============================================================================
-# CONFIGURACAO
+# CONFIGURACAO REMOTA
 # ==============================================================================
 
-# Bloquear personagens nao autorizados apos tempo de graca?
-# True = bot para de funcionar apos ~5 min se char nao esta na whitelist
-# False = apenas notifica no Telegram, bot continua funcionando
-BLOCK_UNAUTHORIZED = False
+# URL do GitHub Gist com a whitelist (raw content)
+# Formato: https://gist.githubusercontent.com/USER/GIST_ID/raw/whitelist.json
+_REMOTE_WHITELIST_URL = "https://gist.githubusercontent.com/dravendraven/ad97803a41ced04587a3f4904448a87b/raw/whitelist.json"
 
-# Tempo em segundos antes de desativar (5 minutos = 300 segundos)
-_GRACE_PERIOD = 300
+# Timeout para baixar whitelist (segundos)
+_FETCH_TIMEOUT = 5
 
 # ==============================================================================
-# DADOS CRIPTOGRAFADOS EMBUTIDOS (Gerados por tools/whitelist_manager.py)
+# CONFIGURACAO DO TELEGRAM (notificacao de logins)
 # ==============================================================================
-# NAO MODIFIQUE MANUALMENTE - Use a ferramenta de gerenciamento para regenerar
 
-# Salt para derivacao de chave (base64, 16 bytes)
-_EMBEDDED_SALT = "Hd6rqwe9GeP2o8vkoopXiA=="
-
-# Blob da whitelist criptografada (token Fernet em base64)
-_EMBEDDED_WHITELIST = "Z0FBQUFBQnBuYmtETkIyQWRJUWN2OUJGQjkzTXlicmxkRklOdy1hdEdDTDUzSDFMRzFJMHlYZmhxTllDa0ZVeG05Tmd2WkNtTHZlbkMzdndTYXV4Ym1LQkF4WnVJM1ZuX3hYbmVsSnpPd1J5NkktTDZLd202eE95VWt5MUgzbXQ2M2JZamFLMmxpdFVqU3hGRzhTaEVsMFFiUkJCMVVpZW5PY0tWRWN5VWVRdmN5OURGYjhnMXppSHYxZUliWFFUaWh5aC15UTlLTnJ2aWp6cW9zYjljbnJNVW9IbVpLWnFfeVZ5NGI4eHFPQWNKRkM0cWxNNThpSEE0VENGY2E0VnNBVldDekhuUkxkRXNVNGJ1UHpVYWlFcjlBc2hkRjJtcHZuWS1WejZFUm4ta1FNU0NoalY2ZkN4c0NEdXQ5UUM3RjkzM3lZaHUtZlRXRGxLQkRQeFg4ZzlKWnJza05odFNDQ0JBRTlMWUxaLU9FS2NmTDJlb0wwQTM4QXoxZVg2dzBBck01U0NwU25Y"
-
-# Componentes da chave (divididos para ofuscacao leve)
-_K1 = "Molodoy"
-_K2 = "Bot"
-_K3 = "Secret"
-_K4 = "2024"
-_K5 = "!MB"
-
-# Configuracao do Telegram do desenvolvedor (notificacao de logins)
 _DEV_TELEGRAM_TOKEN = "7238077578:AAELH9lr8dLGJqOE5mZlXmYkpH4fIHDAGAM"
 _DEV_CHAT_ID = "452514119"
+
+# ==============================================================================
+# ESTADO INTERNO
+# ==============================================================================
+
+_remote_config = None  # Cache da config remota
+_fetch_failed = False  # Flag se falhou ao baixar
 
 # ==============================================================================
 # FUNCOES INTERNAS
 # ==============================================================================
 
-def _get_key_material() -> str:
+def _fetch_remote_whitelist() -> dict:
     """
-    Monta o material da chave a partir dos componentes divididos.
-    Fornece ofuscacao leve - nao e seguranca criptografica, mas dificulta
-    inspecao casual.
-    """
-    parts = [_K1, _K3, _K2, _K4, _K5]
-    return "".join(parts)
-
-
-def _derive_key(passphrase: str, salt: bytes) -> bytes:
-    """
-    Deriva uma chave compativel com Fernet a partir de passphrase e salt usando PBKDF2.
-
-    Args:
-        passphrase: A frase secreta
-        salt: Valor salt de 16 bytes
+    Baixa a whitelist do GitHub Gist.
 
     Returns:
-        Chave de 32 bytes adequada para Fernet (codificada em base64 urlsafe)
+        Dict com a configuracao remota, ou None se falhar.
+        Formato esperado:
+        {
+            "enabled": true,
+            "block_unauthorized": false,
+            "grace_period": 300,
+            "characters": ["Char1", "Char2"]
+        }
     """
-    kdf = PBKDF2HMAC(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=salt,
-        iterations=480000,  # Alto numero de iteracoes para seguranca
-    )
-    key = base64.urlsafe_b64encode(kdf.derive(passphrase.encode()))
-    return key
+    global _fetch_failed
 
-
-def _decrypt_whitelist() -> set:
-    """
-    Descriptografa a whitelist embutida e retorna um set de nomes em minusculo.
-
-    Returns:
-        Set de nomes de personagens autorizados (minusculo)
-        Set vazio se a descriptografia falhar
-    """
-    if not CRYPTO_AVAILABLE:
-        return set()
-
-    if not _EMBEDDED_SALT or not _EMBEDDED_WHITELIST:
-        return set()
+    if not _REMOTE_WHITELIST_URL:
+        print("[WHITELIST] URL remota nao configurada")
+        _fetch_failed = True
+        return None
 
     try:
-        salt = base64.b64decode(_EMBEDDED_SALT)
-        passphrase = _get_key_material()
-        key = _derive_key(passphrase, salt)
+        import requests
+        response = requests.get(_REMOTE_WHITELIST_URL, timeout=_FETCH_TIMEOUT)
+        response.raise_for_status()
 
-        fernet = Fernet(key)
-        encrypted_data = base64.b64decode(_EMBEDDED_WHITELIST)
-        decrypted = fernet.decrypt(encrypted_data)
+        config = response.json()
+        print(f"[WHITELIST] Whitelist remota carregada: {len(config.get('characters', []))} chars")
+        _fetch_failed = False
+        return config
 
-        # Parse dos dados descriptografados (nomes separados por newline)
-        names = decrypted.decode('utf-8').strip().split('\n')
-        # Normaliza para minusculo e remove espacos
-        return {name.strip().lower() for name in names if name.strip()}
-
-    except InvalidToken:
-        return set()
-    except Exception:
-        return set()
-
-
-def _silent_disable():
-    """
-    Thread que aguarda o periodo de graca e depois desativa silenciosamente o bot.
-    Simula comportamento de "bug" aleatorio para nao levantar suspeitas.
-    """
-    # Adiciona variacao aleatoria ao tempo (4-6 minutos)
-    jitter = random.randint(-60, 60)
-    wait_time = _GRACE_PERIOD + jitter
-
-    time.sleep(wait_time)
-
-    try:
-        from core.bot_state import state
-        # Desativa o bot silenciosamente
-        state._bot_running = False
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[WHITELIST] Falha ao baixar whitelist: {e}")
+        _fetch_failed = True
+        return None
 
 
 def _get_bot_version() -> str:
@@ -160,10 +93,9 @@ def _get_bot_version() -> str:
         return "N/A"
 
 
-def _notify_login(char_name: str, is_authorized: bool):
+def _notify_login(char_name: str, is_authorized: bool, offline: bool = False):
     """
     Envia notificacao de login para o Telegram do desenvolvedor.
-    Usa uma unica sessao HTTP para obter IP e enviar msg.
     Roda em thread separada para nao bloquear.
     """
     def _send():
@@ -173,15 +105,21 @@ def _notify_login(char_name: str, is_authorized: bool):
 
             session = requests.Session()
 
-            # Obtem IP e envia Telegram com a mesma sessao
+            # Obtem IP
             try:
                 ip = session.get("https://api.ipify.org", timeout=3).text.strip()
             except Exception:
                 ip = "N/A"
 
             now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-            status = "✅ AUTORIZADO" if is_authorized else "❌ NAO AUTORIZADO"
             version = _get_bot_version()
+
+            if offline:
+                status = "🔴 OFFLINE (bloqueado)"
+            elif is_authorized:
+                status = "✅ AUTORIZADO"
+            else:
+                status = "❌ NAO AUTORIZADO"
 
             msg = f"{status}\nChar: {char_name}\nVersao: {version}\nIP: {ip}\nHora: {now}"
 
@@ -195,18 +133,33 @@ def _notify_login(char_name: str, is_authorized: bool):
     t.start()
 
 
+def _silent_disable(grace_period: int):
+    """
+    Thread que aguarda o periodo de graca e depois desativa silenciosamente o bot.
+    """
+    import time
+    import random
+
+    # Adiciona variacao aleatoria ao tempo
+    jitter = random.randint(-60, 60)
+    wait_time = grace_period + jitter
+
+    time.sleep(wait_time)
+
+    try:
+        from core.bot_state import state
+        state._bot_running = False
+    except Exception:
+        pass
+
+
 # ==============================================================================
 # API PUBLICA
 # ==============================================================================
 
-# Cache da whitelist descriptografada (calculado uma vez no primeiro uso)
-_whitelist_cache = None
-_disable_scheduled = False
-
-
 def is_character_whitelisted(char_name: str) -> bool:
     """
-    Verifica se um nome de personagem esta na whitelist.
+    Verifica se um nome de personagem esta na whitelist remota.
 
     Args:
         char_name: O nome do personagem para validar
@@ -214,43 +167,93 @@ def is_character_whitelisted(char_name: str) -> bool:
     Returns:
         True se autorizado, False caso contrario
     """
-    global _whitelist_cache
+    global _remote_config
 
     if not char_name:
         return False
 
-    # Inicializacao lazy do cache
-    if _whitelist_cache is None:
-        _whitelist_cache = _decrypt_whitelist()
+    # Baixa config remota se ainda nao baixou
+    if _remote_config is None:
+        _remote_config = _fetch_remote_whitelist()
 
-    # Comparacao case-insensitive
-    return char_name.strip().lower() in _whitelist_cache
+    # Se falhou ao baixar, retorna False (bloqueia todos)
+    if _remote_config is None:
+        return False
+
+    # Se whitelist desabilitada remotamente, todos passam
+    if not _remote_config.get("enabled", True):
+        return True
+
+    # Verifica se char esta na lista (case-insensitive)
+    characters = _remote_config.get("characters", [])
+    char_lower = char_name.strip().lower()
+
+    return any(c.strip().lower() == char_lower for c in characters)
 
 
 def validate_character_or_exit(char_name: str) -> bool:
     """
-    Valida o nome do personagem e notifica o desenvolvedor via Telegram.
-    Se BLOCK_UNAUTHORIZED = True, agenda desativacao silenciosa para nao autorizados.
+    Valida o nome do personagem via whitelist remota.
+    Se offline, bloqueia (bot para).
+    Se nao autorizado e block_unauthorized=True, agenda desativacao.
 
     Args:
         char_name: O nome do personagem para validar
 
     Returns:
-        True sempre (para nao revelar que existe whitelist)
+        True se deve continuar, False se deve parar
     """
-    global _disable_scheduled
+    global _remote_config
 
+    # Baixa config remota
+    if _remote_config is None:
+        _remote_config = _fetch_remote_whitelist()
+
+    # OFFLINE: bloqueia todos
+    if _remote_config is None or _fetch_failed:
+        _notify_login(char_name, False, offline=True)
+        print("[WHITELIST] Sem conexao - bloqueando bot")
+
+        # Para o bot
+        try:
+            from core.bot_state import state
+            state._bot_running = False
+        except Exception:
+            pass
+
+        return False
+
+    # WHITELIST DESABILITADA: todos passam
+    if not _remote_config.get("enabled", True):
+        _notify_login(char_name, True)
+        print("[WHITELIST] Whitelist desabilitada remotamente - todos autorizados")
+        return True
+
+    # VERIFICA AUTORIZACAO
     is_authorized = is_character_whitelisted(char_name)
-
-    # Notifica o desenvolvedor sobre o login
     _notify_login(char_name, is_authorized)
 
     if is_authorized:
+        print(f"[WHITELIST] Personagem autorizado: {char_name}")
         return True
     else:
-        # Agenda desativacao silenciosa se habilitado e ainda nao agendada
-        if BLOCK_UNAUTHORIZED and not _disable_scheduled:
-            _disable_scheduled = True
-            t = threading.Thread(target=_silent_disable, daemon=True)
+        print(f"[WHITELIST] Personagem NAO autorizado: {char_name}")
+
+        # Se block_unauthorized = True, agenda desativacao
+        if _remote_config.get("block_unauthorized", False):
+            grace_period = _remote_config.get("grace_period", 300)
+            t = threading.Thread(target=_silent_disable, args=(grace_period,), daemon=True)
             t.start()
-        return True  # Retorna True para nao levantar suspeitas
+
+        return True  # Retorna True para nao revelar a whitelist
+
+
+def refresh_whitelist():
+    """
+    Forca refresh da whitelist remota.
+    Util para recarregar sem reiniciar o bot.
+    """
+    global _remote_config, _fetch_failed
+    _remote_config = None
+    _fetch_failed = False
+    _remote_config = _fetch_remote_whitelist()

@@ -1,20 +1,21 @@
 {
-  "names": [
+  "enabled": true,
+  "block_unauthorized": false,
+  "grace_period": 300,
+  "characters": [
     "Newton",
     "Lau",
     "Nilson",
+    "Minotaur Hammerman",
     "Minotaur Shaman",
-    "Wendy",
-    "Smoke Spearman",
     "Ninja",
     "Wizard Spearman",
+    "Druid Spearman",
     "Elf Spearman",
-    "Minotaur Hammerman",
+    "Wendy",
+    "Smoke Spearman",
     "Eremo Spearman",
-    "Fizok spearman",
-    "Shaves",
-    "Druid spearman",
-    "& \"c:\\Users\\vitor\\OneDrive\\Documentos\\cheat engine\\.venv\\Scripts\\Activate.ps1\""
-  ],
-  "salt": "Hd6rqwe9GeP2o8vkoopXiA=="
+    "Fizok Spearman",
+    "Shaves"
+  ]
 }

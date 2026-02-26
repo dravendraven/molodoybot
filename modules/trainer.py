@@ -1515,7 +1515,6 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                         if debug_mode:
                             print("DEBUG: DYING phase")
                         # hp=0 but still visible - enter DYING state, wait for despawn
-                        log(f"☠️ {last_target_data['name']} morto mas visível (hp=0, vis=1) - aguardando despawn")
 
                         # Para follow/chase se estava seguindo (criatura morreu)
                         if is_currently_following:

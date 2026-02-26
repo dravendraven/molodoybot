@@ -12,7 +12,7 @@ from tkinter import ttk
 
 # ================= CONFIGURAÇÕES =================
 # Versão atual hardcoded (atualizada automaticamente pelo publicar.bat)
-CURRENT_VERSION = "7.5"
+CURRENT_VERSION = "7.6"
 
 # URLs do GitHub
 URL_VERSION = "https://raw.githubusercontent.com/dravendraven/molodoybot/refs/heads/main/version.txt"
