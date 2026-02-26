@@ -2,10 +2,11 @@
 # AUTO-UPDATE - Verifica atualizações ANTES de carregar qualquer coisa
 # ==============================================================================
 import sys
-from auto_update import needs_update, cleanup_legacy_files, cleanup_duplicate_exes
+from auto_update import needs_update, cleanup_legacy_files, cleanup_duplicate_exes, cleanup_stale_mei_folders
 
-# Remove arquivos legados e cópias do bot
+# Remove arquivos legados, cópias do bot, e pastas _MEI órfãs
 if getattr(sys, 'frozen', False):
+    cleanup_stale_mei_folders()
     cleanup_legacy_files()
     cleanup_duplicate_exes()
 
