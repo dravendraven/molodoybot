@@ -12,7 +12,7 @@ from tkinter import ttk
 
 # ================= CONFIGURAÇÕES =================
 # Versão atual hardcoded (atualizada automaticamente pelo publicar.bat)
-CURRENT_VERSION = "7.8"
+CURRENT_VERSION = "7.5"
 
 # URLs do GitHub
 URL_VERSION = "https://raw.githubusercontent.com/dravendraven/molodoybot/refs/heads/main/version.txt"
@@ -349,9 +349,6 @@ del /f /q "{os.path.dirname(current_exe)}\\MolodoyBot_old.exe" >nul 2>&1
 :: Fecha splash screen
 taskkill /IM mshta.exe /F >nul 2>&1
 
-:: Limpa pastas _MEI orfas (evita erro "Failed to load Python DLL")
-for /d %%i in ("%TEMP%\\_MEI*") do rd /s /q "%%i" 2>nul
-
 :: Espera breve antes de iniciar (1 segundo)
 ping 127.0.0.1 -n 2 >nul
 
@@ -501,9 +498,6 @@ def check_and_update():
             os.remove(marker_file)
         except:
             pass
-
-    # Limpa pastas _MEI órfãs (evita erro "Failed to load Python DLL")
-    cleanup_stale_mei_folders()
 
     # Remove arquivos legados do launcher antigo
     cleanup_legacy_files()
