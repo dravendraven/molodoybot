@@ -12,7 +12,7 @@ from tkinter import ttk
 
 # ================= CONFIGURAÇÕES =================
 # Versão atual hardcoded (atualizada automaticamente pelo publicar.bat)
-CURRENT_VERSION = "7.2"
+CURRENT_VERSION = "7.3"
 
 # URLs do GitHub
 URL_VERSION = "https://raw.githubusercontent.com/dravendraven/molodoybot/refs/heads/main/version.txt"
@@ -209,49 +209,54 @@ def apply_update(new_exe_path):
         os.remove(new_exe_path)
         return
 
-    # Script batch com delays usando ping (não abre janela)
+    # Script batch com limpeza de pastas _MEI do PyInstaller
     bat_content = f'''@echo off
-:: Espera inicial (ping é silencioso)
-ping 127.0.0.1 -n 4 >nul
+:: Espera o processo fechar
+ping 127.0.0.1 -n 6 >nul
 
 :: Mata o processo se ainda estiver rodando
 taskkill /PID {pid} /F >nul 2>&1
-ping 127.0.0.1 -n 4 >nul
+ping 127.0.0.1 -n 6 >nul
+
+:: IMPORTANTE: Limpa pastas _MEI* antigas do PyInstaller
+:: Isso evita conflitos de DLL quando o novo exe iniciar
+for /d %%G in ("%TEMP%\\_MEI*") do rd /s /q "%%G" 2>nul
 
 :: Verifica se o arquivo novo existe
 if not exist "{new_exe}" exit /b 1
 
-:: Tenta deletar o exe antigo (com retry, max 10 tentativas)
-set count=0
+:: Tenta deletar o exe antigo (com retry)
 :retry_delete
-if %count% geq 10 exit /b 1
-set /a count+=1
-del /f "{current_exe}" >nul 2>&1
+del /f /q "{current_exe}" >nul 2>&1
 if exist "{current_exe}" (
-    ping 127.0.0.1 -n 2 >nul
+    ping 127.0.0.1 -n 3 >nul
     goto retry_delete
 )
 
-:: Copia o novo exe
-copy /y "{new_exe}" "{current_exe}" >nul 2>&1
+:: MOVE é atômico e mais confiável que COPY
+move /y "{new_exe}" "{current_exe}" >nul 2>&1
 if %errorlevel% neq 0 (
     ping 127.0.0.1 -n 3 >nul
-    copy /y "{new_exe}" "{current_exe}" >nul 2>&1
+    move /y "{new_exe}" "{current_exe}" >nul 2>&1
 )
 
-:: Verifica se copiou corretamente
+:: Verifica se moveu corretamente
 if not exist "{current_exe}" exit /b 1
 
-:: Deleta o arquivo .new
-del /f "{new_exe}" >nul 2>&1
+:: Espera para garantir que Windows liberou tudo
+ping 127.0.0.1 -n 5 >nul
 
-:: Espera antes de iniciar
-ping 127.0.0.1 -n 3 >nul
+:: Limpa _MEI* novamente antes de iniciar (garantia extra)
+for /d %%G in ("%TEMP%\\_MEI*") do rd /s /q "%%G" 2>nul
+
+:: Muda para o diretório do exe (IMPORTANTE para PyInstaller encontrar DLLs)
+cd /d "{os.path.dirname(current_exe)}"
 
 :: Inicia o novo exe
-start "" "{current_exe}"
+start "" "{os.path.basename(current_exe)}"
 
 :: Deleta este script
+ping 127.0.0.1 -n 2 >nul
 del "%~f0"
 '''
 
