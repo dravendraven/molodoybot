@@ -51,6 +51,22 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('win32')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
+# pywin32 DLLs essenciais (pythoncom e pywintypes)
+import os
+import sys
+site_packages = os.path.join(os.path.dirname(sys.executable), 'Lib', 'site-packages')
+pywin32_sys32 = os.path.join(site_packages, 'pywin32_system32')
+if os.path.exists(pywin32_sys32):
+    for dll in os.listdir(pywin32_sys32):
+        if dll.endswith('.dll'):
+            binaries.append((os.path.join(pywin32_sys32, dll), '.'))
+# win32 .pyd files
+win32_path = os.path.join(site_packages, 'win32')
+if os.path.exists(win32_path):
+    for pyd in os.listdir(win32_path):
+        if pyd.endswith('.pyd'):
+            binaries.append((os.path.join(win32_path, pyd), 'win32'))
+
 a = Analysis(
     ['main.py'],
     pathex=[],
