@@ -30,7 +30,10 @@
       "Bash(cmd /c:*)",
       "Bash(.venv/Scripts/python.exe:*)",
       "Bash(ren \"c:\\\\Users\\\\vitor\\\\OneDrive\\\\Documentos\\\\cheat engine\\\\splash.png\" splash_base.png)",
-      "Bash(gh release view:*)"
+      "Bash(gh release view:*)",
+      "Bash(powershell -Command \"Set-Content -Path ''c:\\\\Users\\\\vitor\\\\OneDrive\\\\Documentos\\\\cheat engine\\\\version.txt'' -Value ''7.3'' -NoNewline; cd ''c:\\\\Users\\\\vitor\\\\OneDrive\\\\Documentos\\\\cheat engine''; pyinstaller MolodoyBot.spec --noconfirm 2>&1 | Select-Object -Last 5\")",
+      "Bash(powershell -Command \"Copy-Item ''c:\\\\Users\\\\vitor\\\\OneDrive\\\\Documentos\\\\cheat engine\\\\dist\\\\MolodoyBot.exe'' ''c:\\\\teste\\\\'' -Force; ''Pronto!''\")",
+      "Bash(powershell -Command \"cd ''c:\\\\Users\\\\vitor\\\\OneDrive\\\\Documentos\\\\cheat engine''; pyinstaller MolodoyBot.spec --noconfirm 2>&1 | Select-Object -Last 3\")"
     ],
     "additionalDirectories": [
       "c:\\Users\\vitor\\OneDrive\\Documentos\\cheat engine"

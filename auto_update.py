@@ -12,7 +12,7 @@ from tkinter import ttk
 
 # ================= CONFIGURAÇÕES =================
 # Versão atual hardcoded (atualizada automaticamente pelo publicar.bat)
-CURRENT_VERSION = "7.3"
+CURRENT_VERSION = "7.5"
 
 # URLs do GitHub
 URL_VERSION = "https://raw.githubusercontent.com/dravendraven/molodoybot/refs/heads/main/version.txt"
@@ -202,9 +202,6 @@ def apply_update(new_exe_path):
     new_exe = os.path.abspath(new_exe_path)
     pid = os.getpid()
 
-    # Get the _MEI folder path for this process (PyInstaller --onefile extraction dir)
-    mei_dir = getattr(sys, '_MEIPASS', '')
-
     # Verifica se o arquivo baixado existe e tem tamanho razoável (> 1MB)
     if not os.path.exists(new_exe_path):
         return
@@ -225,62 +222,141 @@ def apply_update(new_exe_path):
             pass
         return
 
-    # Script batch com delays usando ping (não abre janela)
+    # Cria arquivo HTA para splash durante update
+    hta_path = os.path.join(tempfile.gettempdir(), "molodoy_splash.hta")
+    hta_content = '''<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<title>MolodoyBot</title>
+<HTA:APPLICATION
+    ID="MoloDoySplash"
+    APPLICATIONNAME="MolodoyBot Update"
+    BORDER="none"
+    BORDERSTYLE="none"
+    CAPTION="no"
+    SHOWINTASKBAR="no"
+    SINGLEINSTANCE="yes"
+    SYSMENU="no"
+    WINDOWSTATE="normal"
+    SCROLL="no"
+/>
+<style>
+body {
+    margin: 0;
+    padding: 0;
+    background: #1a1a1a;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100%;
+    font-family: Verdana, sans-serif;
+}
+.container {
+    text-align: center;
+    color: #3B8ED0;
+}
+.title {
+    font-size: 16px;
+    font-weight: bold;
+    margin-bottom: 10px;
+}
+.status {
+    font-size: 12px;
+    color: #CCCCCC;
+}
+.dots {
+    display: inline-block;
+    width: 20px;
+    text-align: left;
+}
+</style>
+<script>
+window.resizeTo(280, 100);
+var w = (screen.width - 280) / 2;
+var h = (screen.height - 100) / 2;
+window.moveTo(w, h);
+
+var dots = 0;
+setInterval(function() {
+    dots = (dots + 1) % 4;
+    var d = "";
+    for (var i = 0; i < dots; i++) d += ".";
+    document.getElementById("dots").innerText = d;
+}, 400);
+</script>
+</head>
+<body>
+<div class="container">
+    <div class="title">MolodoyBot</div>
+    <div class="status">Finalizando atualizacao<span id="dots" class="dots"></span></div>
+</div>
+</body>
+</html>'''
+
+    with open(hta_path, 'w', encoding='utf-8-sig') as f:
+        f.write(hta_content)
+
+    # Script batch otimizado com splash
     bat_content = f'''@echo off
-:: Espera o processo fechar
-ping 127.0.0.1 -n 6 >nul
+:: Inicia splash screen
+start "" mshta.exe "{hta_path}"
+ping 127.0.0.1 -n 2 >nul
 
-:: Mata o processo se ainda estiver rodando
+:: Espera processo fechar (3 segundos)
+ping 127.0.0.1 -n 4 >nul
+
+:: Mata o processo
 taskkill /PID {pid} /F >nul 2>&1
-ping 127.0.0.1 -n 6 >nul
+ping 127.0.0.1 -n 2 >nul
 
-:: IMPORTANTE: Limpa pastas _MEI* antigas do PyInstaller
-:: Isso evita conflitos de DLL quando o novo exe iniciar
-for /d %%G in ("%TEMP%\\_MEI*") do rd /s /q "%%G" 2>nul
-
-:: Clean up PyInstaller _MEI folder to prevent PID reuse conflicts
-if exist "{mei_dir}" rd /s /q "{mei_dir}" >nul 2>&1
-
-:: Also clean up any other orphaned _MEI folders in TEMP
-for /d %%D in ("%TEMP%\\_MEI*") do (
-    rd /s /q "%%D" >nul 2>&1
-)
+:: Mata QUALQUER instância do MolodoyBot
+taskkill /IM MolodoyBot.exe /F >nul 2>&1
 ping 127.0.0.1 -n 2 >nul
 
 :: Verifica se o arquivo novo existe
-if not exist "{new_exe}" exit /b 1
+if not exist "{new_exe}" (
+    taskkill /IM mshta.exe /F >nul 2>&1
+    exit /b 1
+)
 
-:: Tenta deletar o exe antigo (com retry)
+:: Tenta deletar o exe antigo (max 5 tentativas)
+set retry=0
 :retry_delete
+set /a retry+=1
+if %retry% gtr 5 goto force_rename
 del /f /q "{current_exe}" >nul 2>&1
 if exist "{current_exe}" (
-    ping 127.0.0.1 -n 3 >nul
+    ping 127.0.0.1 -n 2 >nul
     goto retry_delete
 )
+goto do_move
 
-:: MOVE é atômico e mais confiável que COPY
+:force_rename
+ren "{current_exe}" "MolodoyBot_old.exe" >nul 2>&1
+
+:do_move
 move /y "{new_exe}" "{current_exe}" >nul 2>&1
-if %errorlevel% neq 0 (
-    ping 127.0.0.1 -n 3 >nul
-    move /y "{new_exe}" "{current_exe}" >nul 2>&1
-)
 
 :: Verifica se moveu corretamente
-if not exist "{current_exe}" exit /b 1
+if not exist "{current_exe}" (
+    taskkill /IM mshta.exe /F >nul 2>&1
+    exit /b 1
+)
 
-:: Espera para garantir que Windows liberou tudo
-ping 127.0.0.1 -n 5 >nul
+:: Deleta o arquivo antigo renomeado
+del /f /q "{os.path.dirname(current_exe)}\\MolodoyBot_old.exe" >nul 2>&1
 
-:: Limpa _MEI* novamente antes de iniciar (garantia extra)
-for /d %%G in ("%TEMP%\\_MEI*") do rd /s /q "%%G" 2>nul
+:: Fecha splash screen
+taskkill /IM mshta.exe /F >nul 2>&1
 
-:: Muda para o diretório do exe (IMPORTANTE para PyInstaller encontrar DLLs)
-cd /d "{os.path.dirname(current_exe)}"
+:: Espera breve antes de iniciar (1 segundo)
+ping 127.0.0.1 -n 2 >nul
 
 :: Inicia o novo exe
-start "" "{os.path.basename(current_exe)}"
+explorer.exe "{current_exe}"
 
-:: Deleta este script
+:: Limpa arquivos temporários
+del /f /q "{hta_path}" >nul 2>&1
 ping 127.0.0.1 -n 2 >nul
 del "%~f0"
 '''
@@ -294,6 +370,11 @@ del "%~f0"
     vbs_path = os.path.join(tempfile.gettempdir(), "molodoy_update.vbs")
     with open(vbs_path, 'w') as f:
         f.write(vbs_content)
+
+    # Cria marcador para evitar loop de update
+    marker_file = os.path.join(tempfile.gettempdir(), "molodoy_update_done.txt")
+    with open(marker_file, 'w') as f:
+        f.write("update")
 
     # Executa o VBScript (que executa o .bat invisível)
     subprocess.Popen(
@@ -310,11 +391,20 @@ del "%~f0"
 
 def run_update(local_ver, remote_ver):
     """Executa o processo de update com UI."""
+    # Fecha splash nativo do PyInstaller (se existir) para não cobrir a GUI de update
+    try:
+        import pyi_splash
+        pyi_splash.close()
+    except ImportError:
+        pass
+
     window = UpdateWindow(local_ver, remote_ver)
 
     def do_update():
         try:
-            new_exe = EXE_NAME + ".new"
+            # Baixa para o mesmo diretório do exe atual (NÃO o diretório de trabalho!)
+            exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+            new_exe = os.path.join(exe_dir, EXE_NAME + ".new")
 
             # Download com progresso
             def on_progress(percent):
@@ -395,11 +485,29 @@ def check_and_update():
     if not getattr(sys, 'frozen', False):
         return False
 
+    # Verifica se update acabou de acontecer (evita loop)
+    marker_file = os.path.join(tempfile.gettempdir(), "molodoy_update_done.txt")
+    if os.path.exists(marker_file):
+        try:
+            # Se marcador tem menos de 60 segundos, pula update
+            import time
+            age = time.time() - os.path.getmtime(marker_file)
+            if age < 60:
+                os.remove(marker_file)
+                return False  # Pula update, acabou de atualizar
+            os.remove(marker_file)
+        except:
+            pass
+
     # Remove arquivos legados do launcher antigo
     cleanup_legacy_files()
 
+    # Remove cópias duplicadas do exe
+    cleanup_duplicate_exes()
+
     # Limpa arquivo .new de update anterior interrompido
-    new_file = EXE_NAME + ".new"
+    exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+    new_file = os.path.join(exe_dir, EXE_NAME + ".new")
     if os.path.exists(new_file):
         try:
             os.remove(new_file)

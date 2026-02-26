@@ -2,92 +2,40 @@
 # AUTO-UPDATE - Verifica atualizações ANTES de carregar qualquer coisa
 # ==============================================================================
 import sys
-from auto_update import needs_update, cleanup_legacy_files, cleanup_duplicate_exes, cleanup_stale_mei_folders
+from auto_update import check_and_update
 
-# Remove arquivos legados, cópias do bot, e pastas _MEI órfãs
+# check_and_update() faz tudo:
+# 1. Verifica marcador anti-loop (pula se update acabou de acontecer)
+# 2. Limpa arquivos legados
+# 3. Verifica versão e atualiza se necessário
 if getattr(sys, 'frozen', False):
-    cleanup_stale_mei_folders()
-    cleanup_legacy_files()
-    cleanup_duplicate_exes()
-
-# Verifica SE precisa atualizar (rápido, só checa versão)
-_update_needed = needs_update()
-
-if _update_needed:
-    from auto_update import run_update
-    local_ver, remote_ver = _update_needed
-    run_update(local_ver, remote_ver)
-    sys.exit(0)
+    if check_and_update():
+        sys.exit(0)  # Update iniciado, não continuar
 
 # ==============================================================================
-# SPLASH SCREEN - Splash tkinter simples
+# SPLASH SCREEN - Splash nativo do PyInstaller
 # ==============================================================================
-import tkinter as _tk_splash
-from tkinter import ttk as _ttk_splash
-
-_splash = None
-_splash_label = None
-_splash_progress = None
-
-def _show_splash():
-    """Mostra splash screen com barra de progresso enquanto carrega."""
-    global _splash, _splash_label, _splash_progress
-
-    _splash = _tk_splash.Tk()
-    _splash.overrideredirect(True)
-    _splash.attributes('-topmost', True)
-    _splash.configure(bg="#1a1a1a")
-
-    w, h = 300, 100
-    x = (_splash.winfo_screenwidth() // 2) - (w // 2)
-    y = (_splash.winfo_screenheight() // 2) - (h // 2)
-    _splash.geometry(f"{w}x{h}+{x}+{y}")
-
-    _splash_label = _tk_splash.Label(_splash, text="Carregando MolodoyBot...",
-                                      font=("Verdana", 11), bg="#1a1a1a", fg="#3B8ED0")
-    _splash_label.pack(expand=True, pady=(20, 5))
-
-    # Estilo da barra de progresso
-    style = _ttk_splash.Style(_splash)
-    style.theme_use('clam')
-    style.configure("splash.Horizontal.TProgressbar",
-                    background="#3B8ED0", troughcolor="#333333",
-                    bordercolor="#1a1a1a", lightcolor="#3B8ED0", darkcolor="#3B8ED0")
-
-    _splash_progress = _ttk_splash.Progressbar(_splash, style="splash.Horizontal.TProgressbar",
-                                                length=220, mode='indeterminate')
-    _splash_progress.pack(pady=(0, 20))
-    _splash_progress.start(15)
-
-    _splash.update()
+try:
+    import pyi_splash
+    _has_splash = True
+except ImportError:
+    _has_splash = False
 
 def _update_splash(text=None):
-    """Atualiza splash e mantém responsiva."""
-    global _splash, _splash_label
-
-    if _splash:
-        if text and _splash_label:
-            _splash_label.configure(text=text)
+    """Atualiza texto do splash nativo."""
+    if _has_splash and text:
         try:
-            _splash.update()
+            pyi_splash.update_text(text)
         except:
             pass
 
 def _close_splash():
-    """Fecha splash screen ANTES de criar janela CTk."""
-    global _splash, _splash_progress
-
-    if _splash:
+    """Fecha splash screen nativo."""
+    if _has_splash:
         try:
-            if _splash_progress:
-                _splash_progress.stop()
-            _splash.destroy()
+            pyi_splash.close()
         except:
             pass
-        _splash = None
-
-# Mostrar splash IMEDIATAMENTE
-_show_splash()
 
 # ==============================================================================
 # IMPORTS PESADOS (splash já está visível)

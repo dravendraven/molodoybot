@@ -3,24 +3,19 @@ echo ==========================================
 echo      MOLODOY BOT - PUBLICADOR AUTOMATICO
 echo ==========================================
 
-:: Ativa o venv
-call .venv\Scripts\activate.bat
+:: Python 32-bit (necessario para o bot funcionar com Tibia 32-bit)
+set PYTHON32=C:\Users\vitor\AppData\Local\Programs\Python\Python313-32\python.exe
 
 :: 0. Ler versao do version.txt e atualizar auto_update.py
 echo [0/3] Atualizando versao no codigo...
 set /p VERSION=<version.txt
 echo Versao: %VERSION%
 
-:: Atualiza CURRENT_VERSION no auto_update.py
-.venv\Scripts\python.exe update_version.py
-if %errorlevel% neq 0 (
-    echo ERRO: Falha ao atualizar versao no auto_update.py!
-    pause
-    exit /b
-)
+:: Atualiza CURRENT_VERSION no auto_update.py (feito automaticamente pelo spec)
+:: %PYTHON32% update_version.py
 
 :: Gera splash.png com a versao
-.venv\Scripts\python.exe generate_splash.py
+%PYTHON32% generate_splash.py
 if %errorlevel% neq 0 (
     echo ERRO: Falha ao gerar splash.png!
     pause
@@ -29,7 +24,7 @@ if %errorlevel% neq 0 (
 
 :: 1. Compilar o Bot
 echo [1/3] Compilando o .exe...
-.venv\Scripts\python.exe -m PyInstaller MolodoyBot.spec
+%PYTHON32% -m PyInstaller MolodoyBot.spec --noconfirm
 if %errorlevel% neq 0 (
     echo ERRO: Falha na compilacao!
     pause
