@@ -133,24 +133,35 @@ def _notify_login(char_name: str, is_authorized: bool, offline: bool = False):
     t.start()
 
 
-def _silent_disable(grace_period: int):
+def _unauthorized_exit():
     """
-    Thread que aguarda o periodo de graca e depois desativa silenciosamente o bot.
+    Aguarda 10-20 segundos e fecha o bot com popup de erro.
     """
     import time
     import random
+    import os
 
-    # Adiciona variacao aleatoria ao tempo
-    jitter = random.randint(-60, 60)
-    wait_time = grace_period + jitter
-
+    # Aguarda tempo aleatorio entre 10-20 segundos
+    wait_time = random.uniform(10, 20)
     time.sleep(wait_time)
 
+    # Exibe popup de erro
     try:
-        from core.bot_state import state
-        state._bot_running = False
+        import tkinter as tk
+        from tkinter import messagebox
+
+        root = tk.Tk()
+        root.withdraw()  # Esconde janela principal
+        messagebox.showerror(
+            "Acesso Negado",
+            "Voce nao tem permissao para usar o Molodoy Bot."
+        )
+        root.destroy()
     except Exception:
-        pass
+        pass  # Se falhar o popup, apenas fecha
+
+    # Forca encerramento do processo
+    os._exit(1)
 
 
 # ==============================================================================
@@ -239,10 +250,9 @@ def validate_character_or_exit(char_name: str) -> bool:
     else:
         print(f"[WHITELIST] Personagem NAO autorizado: {char_name}")
 
-        # Se block_unauthorized = True, agenda desativacao
+        # Se block_unauthorized = True, agenda fechamento com popup
         if _remote_config.get("block_unauthorized", False):
-            grace_period = _remote_config.get("grace_period", 300)
-            t = threading.Thread(target=_silent_disable, args=(grace_period,), daemon=True)
+            t = threading.Thread(target=_unauthorized_exit, daemon=True)
             t.start()
 
         return True  # Retorna True para nao revelar a whitelist
