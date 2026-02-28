@@ -532,59 +532,77 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
                         last_movement_alert_time = 0
 
             # =================================================================
-            # F. VERIFICAÇÃO DE CAVEBOT STUCK
+            # F. VERIFICAÇÃO DE STUCK (3+ segundos parado)
             # =================================================================
-            # Detecta quando cavebot deveria estar andando mas personagem está parado
+            # Dispara alarme se parado por 3+ segundos, EXCETO em pausas legítimas
             stuck_alarm_enabled = get_cfg('alarm_stuck_detection_enabled', False)
 
-            if stuck_alarm_enabled and state.cavebot_active:
-                cavebot_state = state.cavebot_current_state
+            if stuck_alarm_enabled:
+                # Lê posição do player (pode já ter sido lida na seção C)
+                if not visual_enabled:
+                    my_x, my_y, my_z = get_player_pos(pm, base_addr)
 
-                # Estados que indicam "deveria estar andando"
-                WALKING_STATES = ["walking", "stuck"]
+                # Determina se está em pausa legítima (não deve disparar alarme)
+                legitimate_pause = False
 
-                if cavebot_state in WALKING_STATES:
-                    # Verifica se player está se movendo
+                # 1. Looting
+                if state.has_open_loot or state.is_processing_loot:
+                    legitimate_pause = True
+
+                # 2. Runemaker
+                elif state.is_runemaking:
+                    legitimate_pause = True
+
+                # 3. Spear picking
+                elif state.is_spear_pickup_pending:
+                    legitimate_pause = True
+
+                # 4. Combate com criatura adjacente
+                elif state.is_in_combat:
+                    target_id = pm.read_int(base_addr + TARGET_ID_PTR)
+                    if target_id > 0:
+                        target = scanner.get_creature_by_id(target_id)
+                        if target:
+                            dist = max(abs(my_x - target.position.x), abs(my_y - target.position.y))
+                            same_floor = (target.position.z == my_z)
+                            if dist <= 1 and same_floor:
+                                legitimate_pause = True  # Adjacente - OK
+
+                if legitimate_pause:
+                    # Reseta timer - pausa legítima
+                    stuck_detection_start_time = None
+                else:
+                    # Verifica se player está parado (não movendo)
                     try:
                         player_moving = is_player_moving(pm, base_addr)
                     except Exception:
                         player_moving = True  # Assume moving em caso de erro
 
                     if player_moving:
-                        # Player está se movendo - resetar timer
                         stuck_detection_start_time = None
                     else:
-                        # Player parado + deveria estar andando = potencial stuck
+                        # Player parado - inicia/verifica timer
                         current_time = time.time()
 
                         if stuck_detection_start_time is None:
-                            # Primeira detecção - iniciar timer
                             stuck_detection_start_time = current_time
                         else:
-                            # Verificar tempo decorrido
                             elapsed = current_time - stuck_detection_start_time
 
                             if elapsed >= STUCK_DETECTION_THRESHOLD_SECONDS:
-                                # ALARME! Stuck detectado por 3+ segundos
-                                stuck_detection_start_time = None  # Reset para não repetir imediatamente
+                                stuck_detection_start_time = None  # Reset para não repetir
 
-                                msg = f"⚠️ CAVEBOT STUCK: Parado há {elapsed:.1f}s (estado: {cavebot_state})"
+                                msg = f"⚠️ STUCK: Parado há {elapsed:.1f}s"
                                 log_msg(msg)
                                 set_status(msg)
 
-                                # Som de alerta (frequência média - não é crítico como GM)
                                 winsound.Beep(1500, 500)
 
-                                # Telegram se habilitado
                                 telegram_enabled = get_cfg('telegram_enabled', False)
                                 if telegram_enabled and (time.time() - last_telegram_time) > TELEGRAM_INTERVAL_NORMAL:
-                                    send_telegram(f"⚠️ Cavebot Stuck! Parado há {elapsed:.1f}s")
+                                    send_telegram(f"⚠️ Stuck! Parado há {elapsed:.1f}s")
                                     last_telegram_time = time.time()
-                else:
-                    # Estado não é de navegação ativa - resetar timer
-                    stuck_detection_start_time = None
             else:
-                # Alarme desabilitado ou cavebot inativo - resetar timer
                 stuck_detection_start_time = None
 
             # =================================================================
