@@ -14,7 +14,8 @@ import time
 from typing import Optional, Callable, Dict
 
 # Importa offset para leitura do player ID
-from config import OFFSET_PLAYER_ID
+from config import OFFSET_PLAYER_ID, CLIENT_TYPE
+from core.player_core import get_player_id as player_core_get_player_id
 
 
 class BotState:
@@ -78,6 +79,15 @@ class BotState:
 
         # ===== Cavebot State (for Alarm Stuck Detection) =====
         self._cavebot_current_state: str = ""      # Estado atual do cavebot (STATE_WALKING, STATE_PAUSED, etc)
+
+        # ===== Combat Movement (Experimental) =====
+        self._combat_movement_enabled: bool = False  # Toggle para movimentação humanizada em combate
+        self._route_context: dict = {                 # Contexto da rota (cavebot → trainer)
+            'current_wp': None,      # {'x': int, 'y': int, 'z': int}
+            'next_wp': None,         # Próximo waypoint
+            'route_direction': None, # (dx, dy) normalizado
+            'wp_visible': False,     # Waypoint dentro do viewport?
+        }
 
         # ===== Alarm Movement Detection =====
         self._alarm_origin_pos: tuple = None  # (x, y, z) posição de origem ao ligar alarme
@@ -301,9 +311,9 @@ class BotState:
             if self._char_id != 0:
                 return self._char_id
 
-        # Lê da memória (fora do lock para não bloquear)
+        # Usa player_core que suporta Mas Vis (busca por nome) e Tibia (offset direto)
         try:
-            player_id = pm.read_int(base_addr + OFFSET_PLAYER_ID)
+            player_id = player_core_get_player_id(pm, base_addr)
             if player_id != 0:
                 with self._lock:
                     self._char_id = player_id
@@ -614,6 +624,67 @@ class BotState:
             self._cavebot_current_state = state_name
 
     # =========================================================================
+    # COMBAT MOVEMENT (EXPERIMENTAL)
+    # =========================================================================
+
+    @property
+    def combat_movement_enabled(self) -> bool:
+        """Retorna True se Combat Movement está habilitado."""
+        with self._lock:
+            return self._combat_movement_enabled
+
+    def set_combat_movement_enabled(self, enabled: bool):
+        """
+        Ativa/desativa movimentação humanizada em combate.
+        Chamado pelo settings quando toggle é alterada.
+        """
+        with self._lock:
+            self._combat_movement_enabled = enabled
+
+    def set_route_context(self, current_wp: dict, next_wp: dict, player_pos: tuple):
+        """
+        Atualiza contexto da rota para uso do Combat Movement.
+        Chamado pelo cavebot antes de pausar para combate.
+
+        Args:
+            current_wp: Waypoint atual {'x': int, 'y': int, 'z': int}
+            next_wp: Próximo waypoint
+            player_pos: Posição atual do player (x, y, z)
+        """
+        # Calcular direção da rota
+        if current_wp and next_wp:
+            dx = next_wp['x'] - current_wp['x']
+            dy = next_wp['y'] - current_wp['y']
+            # Normalizar para -1, 0, ou 1
+            route_dir = (
+                1 if dx > 0 else (-1 if dx < 0 else 0),
+                1 if dy > 0 else (-1 if dy < 0 else 0)
+            )
+        else:
+            route_dir = (0, 0)
+
+        # Verificar se waypoint está visível (±7 tiles)
+        wp_visible = (current_wp is not None and
+                      abs(current_wp['x'] - player_pos[0]) <= 7 and
+                      abs(current_wp['y'] - player_pos[1]) <= 7)
+
+        with self._lock:
+            self._route_context = {
+                'current_wp': current_wp,
+                'next_wp': next_wp,
+                'route_direction': route_dir,
+                'wp_visible': wp_visible,
+            }
+
+    def get_route_context(self) -> dict:
+        """
+        Retorna contexto da rota atual.
+        Usado pelo trainer para movimentação em combate.
+        """
+        with self._lock:
+            return self._route_context.copy()
+
+    # =========================================================================
     # MÉTODOS DE CONVENIÊNCIA
     # =========================================================================
     
@@ -669,6 +740,7 @@ class BotState:
                 'is_spear_pickup_pending': self._is_spear_pickup_pending,
                 'has_visible_targets': self._has_visible_targets,
                 'cavebot_current_state': self._cavebot_current_state,
+                'combat_movement_enabled': self._combat_movement_enabled,
                 'suspicious_creature_count': self.get_suspicious_creature_count(),
             }
     
@@ -699,6 +771,13 @@ class BotState:
             self._is_spear_pickup_pending = False
             self._has_visible_targets = False
             self._cavebot_current_state = ""
+            self._combat_movement_enabled = False
+            self._route_context = {
+                'current_wp': None,
+                'next_wp': None,
+                'route_direction': None,
+                'wp_visible': False,
+            }
             self._alarm_origin_pos = None
             # NÃO reseta _bot_running
 

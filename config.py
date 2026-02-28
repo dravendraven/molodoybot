@@ -16,9 +16,9 @@ DEBUG_BOT_STATE_INTERVAL = 0.1              # Intervalo de atualização (segund
 DEBUG_BOT_STATE_AUTO_DISABLE_ON_ALARM = False # Desabilitar HUD automaticamente com alarme
 
 # Pathfinding & Navigation
-DEBUG_PATHFINDING = True  # Ativa logs detalhados do A* quando não encontra caminho
+DEBUG_PATHFINDING = False  # Ativa logs detalhados do A* quando não encontra caminho
 DEBUG_MEMORY_MAP = False  # Caro de performance, ativar apenas quando necessário
-DEBUG_GLOBAL_MAP = True  # Ativa logs quando GlobalMap tenta encontrar rotas
+DEBUG_GLOBAL_MAP = False  # Ativa logs quando GlobalMap tenta encontrar rotas
 
 # Obstacle & Stack Clearing
 DEBUG_OBSTACLE_CLEARING = False   # Ativa logs detalhados do obstacle clearing
@@ -30,6 +30,9 @@ DEBUG_CHAT_HANDLER = False           # Logs detalhados do sistema de chat
 
 # Trainer
 TRAINER_DEBUG_DECISIONS_ONLY = True  # Loga apenas decisões: atacar, retarget, morte, etc.
+
+# Combat Movement (Experimental)
+DEBUG_COMBAT_MOVEMENT = True  # Logs detalhados do sistema de movimento em combate
 
 # ==============================================================================
 # 1. GERAIS E CONEXÃO
@@ -47,8 +50,20 @@ OFFSET_CONNECTION = 0x31C588
 # 1. CONFIGURAÇÕES PADRÃO
 # ==============================================================================
 
-PROCESS_NAME = "Tibia.exe"
-MY_PLAYER_NAME = "It is Molodoy"
+# Selecione o cliente: "TIBIA" ou "MAS_VIS"
+CLIENT_TYPE = "TIBIA"
+
+# Configurações por cliente
+if CLIENT_TYPE == "MAS_VIS":
+    PROCESS_NAME = "Mas Vis Client.exe"
+    MY_PLAYER_NAME = "Babau"
+    WINDOW_CLASS = "TibiaClient"  # Classe da janela (verificar com Spy++ se diferente)
+    WINDOW_TITLE = "Mas Vis"      # Título da janela (fallback)
+else:
+    PROCESS_NAME = "Tibia.exe"
+    MY_PLAYER_NAME = "It is Molodoy"
+    WINDOW_CLASS = "TibiaClient"
+    WINDOW_TITLE = "Tibia"
 TELEGRAM_TOKEN = "7238077578:AAELH9lr8dLGJqOE5mZlXmYkpH4fIHDAGAM"
 TELEGRAM_CHAT_ID = ""  # Vazio por padrão - configurar no bot para receber alertas
 
@@ -64,11 +79,24 @@ RELOAD_BUTTON = False  # Exibe botão de reload na interface (desabilitar para r
 TARGET_MONSTERS = ["Rotworm", "Minotaur"]
 SAFE_CREATURES = ["Minotaur", "Rotworm", "Troll", "Wolf", "Deer", "Rabbit", "Spider", "Poison Spider", "Bug", "Rat", "Bear", "Wasp", "Orc"]
 
-OFFSET_PLAYER_ID = 0x1C684C
-OFFSET_PLAYER_HP = 0x1C6848
-OFFSET_PLAYER_HP_MAX = 0x1C6844
-OFFSET_PLAYER_MANA = 0x1C682C
-OFFSET_PLAYER_MANA_MAX = 0x1C6828
+# ==============================================================================
+# OFFSETS POR CLIENTE - Status do Player
+# ==============================================================================
+if CLIENT_TYPE == "MAS_VIS":
+    # Offsets do Mas Vis Client (encontrados via Cheat Engine)
+    OFFSET_PLAYER_ID = 0x31C58C
+    # Endereco absoluto 0x00F9E784 - Base 0x00400000 = Offset 0xB9E784
+    OFFSET_PLAYER_HP = 0xB9E784
+    OFFSET_PLAYER_HP_MAX = 0xB9E784 + 4  # TODO: Confirmar no Cheat Engine
+    OFFSET_PLAYER_MANA = 0x1C682C  # TODO: Confirmar no Cheat Engine
+    OFFSET_PLAYER_MANA_MAX = 0x1C6828  # TODO: Confirmar no Cheat Engine
+else:
+    # Offsets do Tibia.exe original 7.72
+    OFFSET_PLAYER_ID = 0x1C684C
+    OFFSET_PLAYER_HP = 0x1C6848
+    OFFSET_PLAYER_HP_MAX = 0x1C6844
+    OFFSET_PLAYER_MANA = 0x1C682C
+    OFFSET_PLAYER_MANA_MAX = 0x1C6828
 
 # ==============================================================================
 # SKILLS OFFSETS (Tibia 7.72)
@@ -106,12 +134,25 @@ OFFSET_EXP         = 0x1C6840
 
 OFFSET_MAP_POINTER = 0x1D4C20
 
-PLAYER_X_ADDRESS = 0x005D16F0
-PLAYER_Y_ADDRESS = 0x005D16EC
-PLAYER_Z_ADDRESS = 0x005D16E8
-
-BATTLELIST_BEGIN_ADDRESS = 0x1C68B0
-TARGET_ID_PTR = 0x1C681C
+# ==============================================================================
+# OFFSETS POR CLIENTE - Posição do Player
+# ==============================================================================
+if CLIENT_TYPE == "MAS_VIS":
+    # Offsets do Mas Vis Client (encontrados via Cheat Engine)
+    # Estrutura: X, Y+4, Z+8 (diferente do Tibia original)
+    PLAYER_X_ADDRESS = 0x1C6970
+    PLAYER_Y_ADDRESS = 0x1C6974
+    PLAYER_Z_ADDRESS = 0x1C6978  # TODO: Confirmar no Cheat Engine
+    BATTLELIST_BEGIN_ADDRESS = 0x1C68B0  # TODO: Confirmar no Cheat Engine
+    TARGET_ID_PTR = 0x1C681C  # TODO: Confirmar no Cheat Engine
+else:
+    # Offsets do Tibia.exe original 7.72 (relativos ao base_addr)
+    # Convertido de absoluto: 0x005D16F0 - 0x400000 = 0x1D16F0
+    PLAYER_X_ADDRESS = 0x1D16F0
+    PLAYER_Y_ADDRESS = 0x1D16EC
+    PLAYER_Z_ADDRESS = 0x1D16E8
+    BATTLELIST_BEGIN_ADDRESS = 0x1C68B0
+    TARGET_ID_PTR = 0x1C681C
 REL_FIRST_ID = 0x94
 STEP_SIZE = 156
 OFFSET_ID = 0
@@ -593,6 +634,12 @@ CHAT_PAUSE_DURATION = 10.0          # Segundos de pausa após última mensagem
 # Independente do spear_picker - útil para testes e combate melee
 FOLLOW_THEN_ATTACK = True  # True = segue antes de atacar
 CHASE_MODE_ENABLED = False  # True = usa walker A* para perseguir (em vez de packet.follow nativo)
+
+# ==============================================================================
+# COMBAT MOVEMENT CONFIG (EXPERIMENTAL)
+# ==============================================================================
+# Movimentação humanizada durante combate - move na direção da rota enquanto ataca
+COMBAT_MOVEMENT_ENABLED = False  # Default OFF - ativar via Settings para testar
 
 # ==============================================================================
 # AUTO-EXPLORE CONFIG (CAVEBOT)

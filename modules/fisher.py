@@ -7,6 +7,7 @@ from core.packet import PacketManager, get_inventory_pos, get_container_pos, get
 from config import *
 from core.inventory_core import find_item_in_containers, find_item_in_equipment
 from core.map_core import get_player_pos
+from core.player_core import get_player_id
 from modules.stacker import auto_stack_items
 from database import fishing_db
 from core.memory_map import MemoryMap
@@ -323,7 +324,7 @@ def fishing_loop(pm, base_addr, hwnd, check_running=None, log_callback=None,
 
             if player_id == 0:
                 try:
-                    player_id = pm.read_int(base_addr + OFFSET_PLAYER_ID)
+                    player_id = get_player_id(pm, base_addr)
                     if player_id == 0: time.sleep(1); continue
                 except: time.sleep(1); continue
 

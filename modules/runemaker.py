@@ -500,6 +500,42 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
         # 4. Fabricação de Runas
         try:
             curr_mana = pm.read_int(base_addr + OFFSET_PLAYER_MANA)
+            blank_id = get_cfg('blank_id', 3147)
+
+            # LOGOUT COUNTDOWN: Se já iniciou, continua mesmo sem checar blanks
+            # Isso evita spam de DEBUG no terminal
+            if logout_no_blanks_start is not None:
+                logout_on_no_blanks = get_cfg('logout_on_no_blanks', False)
+                if logout_on_no_blanks:
+                    current_pos = get_player_pos(pm, base_addr)
+
+                    # Verificar se jogador se moveu
+                    if current_pos != logout_no_blanks_pos:
+                        log_msg("🚶 Movimento detectado - logout cancelado, aguardando novo ciclo...")
+                        logout_no_blanks_start = None
+                        logout_no_blanks_pos = None
+                    else:
+                        # Verificar se passou o tempo de espera
+                        elapsed = time.time() - logout_no_blanks_start
+                        remaining = LOGOUT_NO_BLANKS_DELAY - elapsed
+
+                        if remaining <= 0:
+                            log_msg("🚪 LOGOUT: Sem blanks e parado por 15s - deslogando...")
+                            set_status("deslogando...")
+                            try:
+                                packet.quit_game()
+                                time.sleep(2)
+                                return
+                            except Exception as e:
+                                log_msg(f"❌ Erro ao deslogar: {e}")
+                        else:
+                            set_status(f"sem blanks - logout em {int(remaining)}s")
+                            time.sleep(0.5)
+                            continue
+                else:
+                    # Logout desabilitado, reseta estado
+                    logout_no_blanks_start = None
+                    logout_no_blanks_pos = None
 
             if curr_mana >= mana_req:
                 if next_cast_time == 0:
@@ -515,60 +551,36 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                     state.set_runemaking(True)
 
                     try:
+                        # === CONFIGURAÇÃO DE CICLOS ===
                         hand_mode = get_cfg('hand_mode', 'DIREITA')
-                        hands_to_use = []
-                        if hand_mode == "AMBAS": hands_to_use = [SLOT_LEFT, SLOT_RIGHT]
-                        elif hand_mode == "ESQUERDA": hands_to_use = [SLOT_LEFT]
-                        else: hands_to_use = [SLOT_RIGHT]
+                        rune_count = get_cfg('rune_count', 1)  # 1, 2, 3 ou 4 runas
 
-                        # Verifica se temos blank runes no inventário ANTES de desarmar
-                        blank_id = get_cfg('blank_id', 3147)
-                        blank_data = find_item_in_containers(pm, base_addr, blank_id)
-                        if not blank_data:
-                            # Feature: Logout automático após período sem blanks
-                            logout_on_no_blanks = get_cfg('logout_on_no_blanks', False)
+                        # Mapear mão selecionada
+                        selected_hand = SLOT_LEFT if hand_mode == "ESQUERDA" else SLOT_RIGHT
 
-                            if logout_on_no_blanks:
-                                current_pos = get_player_pos(pm, base_addr)
+                        # Definir ciclos baseado na quantidade
+                        # Qtd 1: usa mão selecionada (esquerda ou direita)
+                        # Qtd 2: usa ambas as mãos
+                        # Qtd 3: ambas + mão selecionada (esquerda ou direita)
+                        # Qtd 4: ambas × 2
+                        if rune_count == 1:
+                            cycles = [[selected_hand]]
+                        elif rune_count == 2:
+                            cycles = [[SLOT_LEFT, SLOT_RIGHT]]
+                        elif rune_count == 3:
+                            cycles = [[SLOT_LEFT, SLOT_RIGHT], [selected_hand]]
+                        elif rune_count == 4:
+                            cycles = [[SLOT_LEFT, SLOT_RIGHT], [SLOT_LEFT, SLOT_RIGHT]]
+                        else:
+                            cycles = [[selected_hand]]  # fallback
 
-                                # Primeira detecção: salvar estado
-                                if logout_no_blanks_start is None:
-                                    logout_no_blanks_start = time.time()
-                                    logout_no_blanks_pos = current_pos
-                                    log_msg(f"⚠️ Sem Blanks na BP! Logout em {LOGOUT_NO_BLANKS_DELAY}s se permanecer parado...")
-                                    set_status(f"sem blanks - logout em {LOGOUT_NO_BLANKS_DELAY}s")
-                                else:
-                                    # Verificar se jogador se moveu
-                                    if current_pos != logout_no_blanks_pos:
-                                        log_msg("🚶 Movimento detectado - logout cancelado, aguardando novo ciclo...")
-                                        logout_no_blanks_start = None
-                                        logout_no_blanks_pos = None
-                                    else:
-                                        # Verificar se passou o tempo de espera
-                                        elapsed = time.time() - logout_no_blanks_start
-                                        remaining = LOGOUT_NO_BLANKS_DELAY - elapsed
+                        # Calcular todas as mãos para unequip inicial (união de todos os ciclos)
+                        all_hands_to_unequip = set()
+                        for cycle_hands in cycles:
+                            all_hands_to_unequip.update(cycle_hands)
+                        all_hands_to_unequip = list(all_hands_to_unequip)
 
-                                        if remaining <= 0:
-                                            log_msg("🚪 LOGOUT: Sem blanks e parado por 15s - deslogando...")
-                                            set_status("deslogando...")
-                                            try:
-                                                packet.quit_game()
-                                                time.sleep(2)  # Aguarda logout processar
-                                                return  # Encerra o loop
-                                            except Exception as e:
-                                                log_msg(f"❌ Erro ao deslogar: {e}")
-                                        else:
-                                            set_status(f"sem blanks - logout em {int(remaining)}s")
-                            else:
-                                log_msg(f"⚠️ Sem Blanks na BP!")
-
-                            next_cast_time = 0
-                            state.set_runemaking(False)
-                            continue
-
-                        # Reset logout state - blanks foram encontradas
-                        logout_no_blanks_start = None
-                        logout_no_blanks_pos = None
+                        log_msg(f"Conjurando {rune_count} runa(s) em {len(cycles)} ciclo(s)")
 
                         # PACKET MUTEX: Wrap entire runemaking cycle (unequip -> blank -> cast -> return -> reequip)
                         with PacketMutex("runemaker"):
@@ -580,11 +592,11 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                                 continue  # Volta ao início do loop
                             time.sleep(0.1)  # Pequena margem adicional
 
-                            # PHASE 1: Unequip all hands and store their items
-                            # Usa busca inteligente de container com espaco
+                            # PHASE 1: Unequip ALL hands that will be used in ANY cycle
+                            # Executa apenas uma vez no início
                             unequipped_items = {}  # slot_enum → dict com item_id, container_idx, slot_idx
                             phase1_failed = False
-                            for slot_enum in hands_to_use:
+                            for slot_enum in all_hands_to_unequip:
                                 if is_safe_callback and not is_safe_callback():
                                     phase1_failed = True
                                     break
@@ -605,131 +617,158 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                                 state.set_runemaking(False)
                                 continue
 
-                            # PHASE 2: Equip blank runes COM VALIDACAO
-                            active_runes = []
-                            phase2_failed = False
+                            # === LOOP DE CICLOS ===
+                            all_cycles_success = True
+                            for cycle_idx, hands_in_cycle in enumerate(cycles):
+                                is_last_cycle = (cycle_idx == len(cycles) - 1)
+                                cycle_num = cycle_idx + 1
+                                total_cycles = len(cycles)
 
-                            for slot_enum in hands_to_use:
-                                if is_safe_callback and not is_safe_callback():
-                                    phase2_failed = True
-                                    break
+                                if total_cycles > 1:
+                                    log_msg(f"--- Ciclo {cycle_num}/{total_cycles} ---")
 
-                                # Re-busca blank rune (pode ter mudado de posicao)
-                                blank_data = find_item_in_containers(pm, base_addr, blank_id)
-                                if not blank_data:
-                                    log_msg(f"Sem blank runes para equipar na mao {slot_enum}")
-                                    phase2_failed = True
-                                    break
+                                # PHASE 2: Equip blank runes COM VALIDACAO (apenas para mãos deste ciclo)
+                                active_runes = []
+                                phase2_failed = False
 
-                                # Move Blank -> Mao
-                                pos_from = get_container_pos(blank_data['container_index'], blank_data['slot_index'])
-                                pos_to = get_inventory_pos(slot_enum)
+                                for slot_enum in hands_in_cycle:
+                                    if is_safe_callback and not is_safe_callback():
+                                        phase2_failed = True
+                                        break
 
-                                # Executa com retry e validacao
-                                def do_equip_blank():
-                                    packet.move_item(pos_from, pos_to, blank_id, 1)
+                                    # Re-busca blank rune (pode ter mudado de posicao)
+                                    blank_data = find_item_in_containers(pm, base_addr, blank_id)
+                                    if not blank_data:
+                                        log_msg(f"Sem blank runes para equipar na mao {slot_enum}")
+                                        # Iniciar timer de logout se feature está habilitada
+                                        if get_cfg('logout_on_no_blanks', False) and logout_no_blanks_start is None:
+                                            logout_no_blanks_start = time.time()
+                                            logout_no_blanks_pos = get_player_pos(pm, base_addr)
+                                            log_msg(f"⚠️ Sem blanks! Logout em {LOGOUT_NO_BLANKS_DELAY}s se continuar parado...")
+                                        phase2_failed = True
+                                        break
 
-                                equip_success = execute_with_retry(
-                                    action_fn=do_equip_blank,
-                                    validate_fn=lambda se=slot_enum: verify_blank_equipped(pm, base_addr, se, blank_id),
-                                    max_retries=3,
-                                    delay=0.6,
-                                    description=f"equipar blank na mao {slot_enum}"
-                                )
+                                    # Move Blank -> Mao
+                                    pos_from = get_container_pos(blank_data['container_index'], blank_data['slot_index'])
+                                    pos_to = get_inventory_pos(slot_enum)
 
-                                if not equip_success:
-                                    log_msg(f"Falha ao equipar blank na mao {slot_enum}, abortando ciclo")
-                                    phase2_failed = True
-                                    break
+                                    # Executa com retry e validacao
+                                    def do_equip_blank():
+                                        packet.move_item(pos_from, pos_to, blank_id, 1)
 
-                                # Adiciona a lista de runes ativas
-                                unequip_data = unequipped_items.get(slot_enum)
-                                restorable_item = unequip_data['item_id'] if unequip_data else None
-
-                                active_runes.append({
-                                    "hand_pos": pos_to,
-                                    "origin_idx": blank_data['container_index'],
-                                    "slot_enum": slot_enum,
-                                    "restorable_item": restorable_item,
-                                    "unequip_data": unequip_data  # Guarda info completa
-                                })
-                                log_msg(f"Blank equipada na mao {slot_enum}")
-                                time.sleep(0.8)
-
-                            if phase2_failed:
-                                log_msg("PHASE 2 falhou, tentando restaurar itens...")
-                                # Tenta restaurar itens que foram desequipados
-                                for slot_enum, data in unequipped_items.items():
-                                    if data and data.get('item_id'):
-                                        reequip_hand(pm, base_addr, data['item_id'], slot_enum, packet=packet)
-                                state.set_runemaking(False)
-                                next_cast_time = 0
-                                continue
-
-                            if active_runes:
-                                # PHASE 3: Cast spell
-                                log_msg(f"Pressionando {hotkey_str}...")
-                                press_hotkey(hwnd, vk_hotkey)
-                                time.sleep(1.2)
-
-                                # Verifica se runas foram conjuradas (informativo)
-                                for info in active_runes:
-                                    if verify_rune_conjured(pm, base_addr, info['slot_enum'], blank_id):
-                                        detected_id = get_item_id_in_hand(pm, base_addr, info['slot_enum'])
-                                        log_msg(f"Runa conjurada na mao {info['slot_enum']}: ID {detected_id}")
-                                    else:
-                                        log_msg(f"Runa pode nao ter sido conjurada na mao {info['slot_enum']}")
-
-                                # PHASE 4: Return ALL runes to backpack COM VALIDACAO
-                                for info in active_runes:
-                                    slot_enum = info['slot_enum']
-
-                                    # Identifica o que esta na mao
-                                    detected_id = get_item_id_in_hand(pm, base_addr, slot_enum)
-                                    rune_id_to_move = detected_id if detected_id > 0 else blank_id
-
-                                    # Busca container com espaco para devolver
-                                    dest_idx, dest_slot = find_container_with_space(pm, base_addr, info['origin_idx'])
-                                    if dest_idx is None:
-                                        log_msg(f"Todos containers cheios! Nao e possivel devolver runa da mao {slot_enum}")
-                                        continue
-
-                                    pos_dest = get_container_pos(dest_idx, dest_slot)
-
-                                    # Move runa com retry e validacao
-                                    def do_return_rune():
-                                        packet.move_item(info['hand_pos'], pos_dest, rune_id_to_move, 1)
-
-                                    return_success = execute_with_retry(
-                                        action_fn=do_return_rune,
-                                        validate_fn=lambda se=slot_enum: verify_hand_empty(pm, base_addr, se),
+                                    equip_success = execute_with_retry(
+                                        action_fn=do_equip_blank,
+                                        validate_fn=lambda se=slot_enum: verify_blank_equipped(pm, base_addr, se, blank_id),
                                         max_retries=3,
                                         delay=0.6,
-                                        description=f"devolver runa da mao {slot_enum}"
+                                        description=f"equipar blank na mao {slot_enum}"
                                     )
 
-                                    if return_success:
-                                        log_msg(f"Devolvido: Runa {rune_id_to_move} -> Container {dest_idx}")
-                                    else:
-                                        log_msg(f"Falha ao devolver runa da mao {slot_enum}")
+                                    if not equip_success:
+                                        log_msg(f"Falha ao equipar blank na mao {slot_enum}, abortando ciclo")
+                                        phase2_failed = True
+                                        break
 
-                                    time.sleep(0.5)
+                                    # Adiciona a lista de runes ativas deste ciclo
+                                    unequip_data = unequipped_items.get(slot_enum)
+                                    restorable_item = unequip_data['item_id'] if unequip_data else None
 
-                                # PHASE 5: Re-equip ALL original items (ja tem validacao interna)
-                                items_to_restore = [i for i in active_runes if i['restorable_item']]
-                                if items_to_restore:
-                                    log_msg(f"Restaurando {len(items_to_restore)} item(ns) original(is)...")
-                                    for info in items_to_restore:
-                                        log_msg(f"Tentando re-equipar {info['restorable_item']} na mao {info['slot_enum']}...")
-                                        success = reequip_hand(pm, base_addr, info['restorable_item'], info['slot_enum'], packet=packet)
-                                        if success:
-                                            log_msg(f"Item {info['restorable_item']} re-equipado com sucesso!")
+                                    active_runes.append({
+                                        "hand_pos": pos_to,
+                                        "origin_idx": blank_data['container_index'],
+                                        "slot_enum": slot_enum,
+                                        "restorable_item": restorable_item,
+                                        "unequip_data": unequip_data  # Guarda info completa
+                                    })
+                                    log_msg(f"Blank equipada na mao {slot_enum}")
+                                    time.sleep(0.8)
+
+                                if phase2_failed:
+                                    log_msg("PHASE 2 falhou, tentando restaurar itens...")
+                                    # Tenta restaurar itens que foram desequipados
+                                    for slot_enum, data in unequipped_items.items():
+                                        if data and data.get('item_id'):
+                                            reequip_hand(pm, base_addr, data['item_id'], slot_enum, packet=packet)
+                                    all_cycles_success = False
+                                    break  # Sai do loop de ciclos
+
+                                if active_runes:
+                                    # PHASE 3: Cast spell
+                                    log_msg(f"Pressionando {hotkey_str}...")
+                                    press_hotkey(hwnd, vk_hotkey)
+                                    time.sleep(1.2)
+
+                                    # Verifica se runas foram conjuradas (informativo)
+                                    for info in active_runes:
+                                        if verify_rune_conjured(pm, base_addr, info['slot_enum'], blank_id):
+                                            detected_id = get_item_id_in_hand(pm, base_addr, info['slot_enum'])
+                                            log_msg(f"Runa conjurada na mao {info['slot_enum']}: ID {detected_id}")
                                         else:
-                                            log_msg(f"Falha ao re-equipar {info['restorable_item']}")
+                                            log_msg(f"Runa pode nao ter sido conjurada na mao {info['slot_enum']}")
+
+                                    # PHASE 4: Return ALL runes to backpack COM VALIDACAO
+                                    for info in active_runes:
+                                        slot_enum = info['slot_enum']
+
+                                        # Identifica o que esta na mao
+                                        detected_id = get_item_id_in_hand(pm, base_addr, slot_enum)
+                                        rune_id_to_move = detected_id if detected_id > 0 else blank_id
+
+                                        # Busca container com espaco para devolver
+                                        dest_idx, dest_slot = find_container_with_space(pm, base_addr, info['origin_idx'])
+                                        if dest_idx is None:
+                                            log_msg(f"Todos containers cheios! Nao e possivel devolver runa da mao {slot_enum}")
+                                            continue
+
+                                        pos_dest = get_container_pos(dest_idx, dest_slot)
+
+                                        # Move runa com retry e validacao
+                                        def do_return_rune():
+                                            packet.move_item(info['hand_pos'], pos_dest, rune_id_to_move, 1)
+
+                                        return_success = execute_with_retry(
+                                            action_fn=do_return_rune,
+                                            validate_fn=lambda se=slot_enum: verify_hand_empty(pm, base_addr, se),
+                                            max_retries=3,
+                                            delay=0.6,
+                                            description=f"devolver runa da mao {slot_enum}"
+                                        )
+
+                                        if return_success:
+                                            log_msg(f"Devolvido: Runa {rune_id_to_move} -> Container {dest_idx}")
+                                        else:
+                                            log_msg(f"Falha ao devolver runa da mao {slot_enum}")
+
                                         time.sleep(0.5)
 
-                                log_msg("Ciclo concluido.")
-                                next_cast_time = 0
+                                # Se não é o último ciclo, delay humanizado antes do próximo
+                                if not is_last_cycle:
+                                    delay_between = random.uniform(0.5, 1.0)
+                                    log_msg(f"Aguardando {delay_between:.1f}s antes do proximo ciclo...")
+                                    time.sleep(delay_between)
+
+                            # PHASE 5: Re-equip ALL original items (apenas após último ciclo)
+                            # Executa apenas se todos os ciclos foram bem sucedidos
+                            if all_cycles_success:
+                                # Coleta todos os itens que precisam ser restaurados
+                                items_to_restore = [(slot, data) for slot, data in unequipped_items.items()
+                                                   if data and data.get('item_id')]
+                                if items_to_restore:
+                                    log_msg(f"Restaurando {len(items_to_restore)} item(ns) original(is)...")
+                                    for slot_enum, data in items_to_restore:
+                                        log_msg(f"Tentando re-equipar {data['item_id']} na mao {slot_enum}...")
+                                        success = reequip_hand(pm, base_addr, data['item_id'], slot_enum, packet=packet)
+                                        if success:
+                                            log_msg(f"Item {data['item_id']} re-equipado com sucesso!")
+                                        else:
+                                            log_msg(f"Falha ao re-equipar {data['item_id']}")
+                                        time.sleep(0.5)
+
+                                log_msg(f"Ciclo completo: {rune_count} runa(s) conjurada(s).")
+                                # Resetar timer de logout (blanks foram encontradas)
+                                logout_no_blanks_start = None
+                                logout_no_blanks_pos = None
+                            next_cast_time = 0
                     finally:
                         state.set_runemaking(False)
                 else:

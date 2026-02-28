@@ -4,7 +4,11 @@ import struct
 import win32gui
 
 from utils.timing import gauss_wait
-from core.packet import PacketManager, get_container_pos, get_ground_pos
+from core.packet import (
+    PacketManager, get_container_pos, get_ground_pos,
+    OP_WALK_NORTH, OP_WALK_EAST, OP_WALK_SOUTH, OP_WALK_WEST,
+    OP_WALK_NORTH_EAST, OP_WALK_SOUTH_EAST, OP_WALK_SOUTH_WEST, OP_WALK_NORTH_WEST
+)
 from core.packet_mutex import PacketMutex
 from config import *
 from core.map_core import get_player_pos
@@ -14,7 +18,7 @@ from database.creature_outfits import is_humanoid_creature
 
 # CORREÇÃO: Importar scan_containers do local original (auto_loot.py)
 from modules.auto_loot import scan_containers
-from core.player_core import get_connected_char_name, get_player_id
+from core.player_core import get_connected_char_name, get_player_id, is_player_moving
 from core.bot_state import state
 from core.game_state import game_state
 from core.config_utils import make_config_getter
@@ -24,6 +28,7 @@ from core.creature_chaser import CreatureChaser, ChaseResult
 from core.battlelist import BattleListScanner, SpawnTracker
 from core.models import Position
 from core.overlay_renderer import renderer as overlay_renderer
+from modules.combat_movement import CombatMover
 
 # Definições de Delay (Throttle Dinâmico)
 SCAN_DELAY_COMBAT = 0.1      # Em combate: scan máximo
@@ -46,6 +51,18 @@ USE_PATHFINDING_DISTANCE = True
 # 1 = melee (armas corpo-a-corpo)
 # Diferente de 'range' da config que é a distância para ACIONAR o ataque
 MELEE_RANGE = 1
+
+# Mapeamento de Delta (dx, dy) para Opcode do Packet (Combat Movement)
+MOVE_OPCODES = {
+    (0, -1): OP_WALK_NORTH,
+    (0, 1):  OP_WALK_SOUTH,
+    (-1, 0): OP_WALK_WEST,
+    (1, 0):  OP_WALK_EAST,
+    (1, -1): OP_WALK_NORTH_EAST,
+    (1, 1):  OP_WALK_SOUTH_EAST,
+    (-1, 1): OP_WALK_SOUTH_WEST,
+    (-1, -1): OP_WALK_NORTH_WEST
+}
 
 
 # ==============================================================================
@@ -633,6 +650,10 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
     last_reachability_check_time = 0.0
     became_unreachable_time = None
 
+    # Combat Movement Timing (runs every 1s during combat)
+    last_combat_move_check_time = 0.0
+    COMBAT_MOVE_CHECK_INTERVAL = 1.0  # segundos
+
     # Death State Tracking (3-phase death detection)
     class DeathState:
         ALIVE = "alive"
@@ -646,6 +667,7 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
     # Follow State Tracking (Spear Picker Integration)
     is_currently_following = False
     follow_target_id = 0
+    chase_attack_sent_to = 0  # Track target ID for which attack was already sent in chase mode
 
     # Floor Change KS Guard
     last_z = 0
@@ -805,6 +827,8 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
             analyzer = MapAnalyzer(mapper)
             walker = AStarWalker(analyzer, max_depth=150, debug=debug_mode)
             chaser = CreatureChaser(pm, base_addr, packet, walker, analyzer, mapper, debug=debug_mode)
+            # Combat Movement (humanização simplificada)
+            combat_mover = CombatMover(analyzer)
 
         try:
             player_id = state.get_player_id(pm, base_addr)
@@ -830,6 +854,11 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
 
             # Lê target ID ANTES do scan para uso correto no KS check
             current_target_id = pm.read_int(target_addr)
+
+            # MAS_VIS only: Sync combat state directly from trainer
+            # (game_state polling fails on MAS_VIS due to unverified memory offsets)
+            if CLIENT_TYPE == "MAS_VIS":
+                state.set_combat_state(current_target_id != 0)
 
             # 2. SCAN
             valid_candidates = []
@@ -1126,7 +1155,27 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
             # Cenário A: Já estou atacando
             if current_target_id != 0:
                 target_data = next((c for c in valid_candidates if c["id"] == current_target_id), None)
-                
+
+                # FALLBACK: Se alvo não está em valid_candidates (ex: estava fora de range),
+                # busca diretamente em all_creatures para permitir transição FOLLOW→ATTACK
+                if target_data is None:
+                    for creature in all_creatures:
+                        if creature.id == current_target_id:
+                            target_data = {
+                                "id": creature.id,
+                                "name": creature.name,
+                                "hp": creature.hp_percent,
+                                "dist_x": creature.position.x - my_x,
+                                "dist_y": creature.position.y - my_y,
+                                "abs_x": creature.position.x,
+                                "abs_y": creature.position.y,
+                                "z": creature.position.z,
+                                "is_attacking_me": creature.is_attacking_player(BLACKSQUARE_THRESHOLD_MS),
+                            }
+                            if debug_mode:
+                                print(f"[FALLBACK] Target {creature.name} encontrado em all_creatures (não estava em valid_candidates)")
+                            break
+
                 if target_data:
                     # === VALIDAÇÃO CONTÍNUA DE ACESSIBILIDADE ===
                     current_time = time.time()
@@ -1190,6 +1239,11 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                                         if chase_mode:
                                             log_decision(f"🔄 RETARGET: alvo inacessível → {nearest['name']} (chase, dist:{dist_to_nearest})")
                                             chaser.start_chase(nearest["id"], nearest["abs_x"], nearest["abs_y"], nearest.get("z", my_z))
+                                            # Write target ID to client memory for visual indicator and state tracking
+                                            try:
+                                                pm.write_int(target_addr, nearest["id"])
+                                            except:
+                                                pass
                                         else:
                                             log_decision(f"🔄 RETARGET: alvo inacessível → {nearest['name']} (follow, dist:{dist_to_nearest})")
                                             packet.follow(nearest["id"])
@@ -1259,6 +1313,7 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                                 state.stop_follow()
                                 is_currently_following = False
                                 follow_target_id = 0
+                                chase_attack_sent_to = 0
                                 became_unreachable_time = time.time() - RETARGET_DELAY  # Forca retarget imediato
                                 time.sleep(SCAN_DELAY_COMBAT)
                                 continue
@@ -1274,61 +1329,75 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                             print(f"[{mode_str}-DEBUG]   Transição para attack em: dist <= 1")
 
                         if dist_now <= 1:
-                            # === FOLLOW → ATTACK: Verifica se criatura está atacando ===
-                            # Só transiciona para attack se criatura está atacando o player
-                            # Se não está atacando: pode ser KS ou criatura ainda não reagiu
-                            is_attacking_me = target_data.get("is_attacking_me", False)
+                            # === CHASE MODE: Se já enviou attack, pular transição e ir para combat_movement ===
+                            if chase_mode and chase_attack_sent_to == current_target_id:
+                                # Attack já foi enviado - mantém chase ativo, pula para combat_movement
+                                pass  # Fall through para combat_movement abaixo
+                            else:
+                                # === FOLLOW → ATTACK: Verifica se criatura está atacando ===
+                                # Só transiciona para attack se criatura está atacando o player
+                                # Se não está atacando: pode ser KS ou criatura ainda não reagiu
+                                is_attacking_me = target_data.get("is_attacking_me", False)
 
-                            if not is_attacking_me:
-                                # Criatura NÃO está atacando - cancelar follow e voltar ao cavebot
-                                log(f"⚠️ {target_data['name']} não está atacando - cancelando follow")
-                                log_decision(f"🛑 FOLLOW CANCELADO: {target_data['name']} não está atacando (is_attacking_me=False)")
+                                if not is_attacking_me:
+                                    # Criatura NÃO está atacando - cancelar follow e voltar ao cavebot
+                                    log(f"⚠️ {target_data['name']} não está atacando - cancelando follow")
+                                    log_decision(f"🛑 FOLLOW CANCELADO: {target_data['name']} não está atacando (is_attacking_me=False)")
 
-                                # Para chase/follow
-                                chaser.stop()
-                                if not chase_mode:
-                                    packet.stop()
+                                    # Para chase/follow
+                                    chaser.stop()
+                                    if not chase_mode:
+                                        packet.stop()
 
-                                # Cancela follow e limpa estado completamente
-                                state.stop_follow()
-                                is_currently_following = False
-                                follow_target_id = 0
-                                pm.write_int(target_addr, 0)  # Remove red square
-                                if current_monitored_id != 0:
-                                    monitor.stop_and_report()
-                                current_target_id = 0
-                                current_monitored_id = 0
-                                last_target_data = None
-                                became_unreachable_time = None
+                                    # Cancela follow e limpa estado completamente
+                                    state.stop_follow()
+                                    is_currently_following = False
+                                    follow_target_id = 0
+                                    chase_attack_sent_to = 0
+                                    pm.write_int(target_addr, 0)  # Remove red square
+                                    if current_monitored_id != 0:
+                                        monitor.stop_and_report()
+                                    current_target_id = 0
+                                    current_monitored_id = 0
+                                    last_target_data = None
+                                    became_unreachable_time = None
 
-                                # NÃO buscar novo alvo - deixar cavebot retomar navegação
-                                # should_attack_new permanece False
+                                    # NÃO buscar novo alvo - deixar cavebot retomar navegação
+                                    # should_attack_new permanece False
 
-                                if debug_mode:
-                                    print(f"[FOLLOW-DEBUG] Follow/chase cancelado - criatura não atacando")
-                                    print(f"[FOLLOW-DEBUG]   Cavebot pode retomar navegação")
+                                    if debug_mode:
+                                        print(f"[FOLLOW-DEBUG] Follow/chase cancelado - criatura não atacando")
+                                        print(f"[FOLLOW-DEBUG]   Cavebot pode retomar navegação")
 
-                                time.sleep(SCAN_DELAY_COMBAT)
-                                continue
+                                    time.sleep(SCAN_DELAY_COMBAT)
+                                    continue
 
-                            # Criatura está atacando - pode transicionar para attack
-                            log(f"⚔️ TRANSIÇÃO: Follow → Attack ({target_data['name']})")
-                            set_status(f"atacando {target_data['name']}")
-                            log_decision(f"🔄 Follow → Attack: {target_data['name']} (dist:{dist_now}, attacking:{is_attacking_me})")
-                            if not safe_attack(packet, current_target_id, log):
-                                time.sleep(0.5)
-                                continue
+                                # Criatura está atacando - pode transicionar para attack
+                                log(f"⚔️ TRANSIÇÃO: Follow → Attack ({target_data['name']})")
+                                set_status(f"atacando {target_data['name']}")
+                                log_decision(f"🔄 Follow → Attack: {target_data['name']} (dist:{dist_now}, attacking:{is_attacking_me})")
+                                if not safe_attack(packet, current_target_id, log):
+                                    time.sleep(0.5)
+                                    continue
 
-                            # Para estado de follow/chase
-                            chaser.stop()
-                            state.stop_follow()
-                            is_currently_following = False
-                            follow_target_id = 0
+                                # Marca que attack foi enviado para este target (chase mode)
+                                chase_attack_sent_to = current_target_id
 
-                            if debug_mode:
-                                print(f"[FOLLOW-DEBUG] TRANSIÇÃO COMPLETA: Follow/Chase → Attack")
-                                print(f"[FOLLOW-DEBUG]   Pacote ATTACK enviado (0xA1)")
-                                print(f"[FOLLOW-DEBUG]   state.is_following={state.is_following}")
+                                # Para estado de follow/chase - MAS mantém chase ativo se chase_mode
+                                if chase_mode:
+                                    # Mantém chase ativo para perseguir se criatura fugir
+                                    if debug_mode:
+                                        print(f"[CHASE-DEBUG] Attack enviado, mantendo chase ativo para {target_data['name']}")
+                                else:
+                                    chaser.stop()
+                                    state.stop_follow()
+                                    is_currently_following = False
+                                    follow_target_id = 0
+
+                                    if debug_mode:
+                                        print(f"[FOLLOW-DEBUG] TRANSIÇÃO COMPLETA: Follow → Attack")
+                                        print(f"[FOLLOW-DEBUG]   Pacote ATTACK enviado (0xA1)")
+                                        print(f"[FOLLOW-DEBUG]   state.is_following={state.is_following}")
 
                     # === LÓGICA EXISTENTE DE ATUALIZAÇÃO DO MONITOR ===
                     next_attack_time = 0
@@ -1339,6 +1408,75 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                         if debug_mode: print(f"--> Iniciando monitoramento em {target_data['name']} (ID: {current_target_id})")
                     else:
                         monitor.update(target_data["hp"])
+
+                    # === COMBAT MOVEMENT (LOOP CONSTANTE) ===
+                    # Verifica a cada COMBAT_MOVE_CHECK_INTERVAL segundos durante combate
+                    if state.combat_movement_enabled:
+                        current_time = time.time()
+                        if current_time - last_combat_move_check_time >= COMBAT_MOVE_CHECK_INTERVAL:
+                            last_combat_move_check_time = current_time
+
+                            try:
+                                # Posicao relativa do alvo
+                                target_rel = (target_data['abs_x'] - my_x, target_data['abs_y'] - my_y)
+                                target_adjacent = (abs(target_rel[0]) <= 1 and abs(target_rel[1]) <= 1)
+
+                                if target_adjacent:
+                                    # Contar TODAS criaturas adjacentes atacando (incluindo target)
+                                    total_adjacent_attacking = 0
+                                    other_creatures_rel = []
+
+                                    for c in valid_candidates:
+                                        c_rel = (c['abs_x'] - my_x, c['abs_y'] - my_y)
+                                        c_adj = abs(c_rel[0]) <= 1 and abs(c_rel[1]) <= 1
+                                        c_attacking = c.get('is_attacking_me', False)
+
+                                        if c_adj and c_attacking:
+                                            total_adjacent_attacking += 1
+                                            # Para kiting, "outras" exclui o target
+                                            if c['id'] != target_data['id']:
+                                                other_creatures_rel.append(c_rel)
+
+                                    if DEBUG_COMBAT_MOVEMENT:
+                                        print(f"[CombatMove] LOOP: total_adj_atacando={total_adjacent_attacking} target_rel={target_rel}")
+
+                                    move_to = None
+
+                                    # LOGICA 2: Kiting (3+ criaturas adjacentes atacando)
+                                    if combat_mover.should_kite(total_adjacent_attacking):
+                                        move_to = combat_mover.get_kiting_move(target_rel, other_creatures_rel)
+                                        if DEBUG_COMBAT_MOVEMENT:
+                                            print(f"[CombatMove] KITING: move_to={move_to}")
+
+                                    # LOGICA 1: Movimento aleatorio (1-2 criaturas)
+                                    elif total_adjacent_attacking <= 2 and combat_mover.should_random_move():
+                                        move_to = combat_mover.get_random_move(target_rel)
+                                        if DEBUG_COMBAT_MOVEMENT:
+                                            print(f"[CombatMove] RANDOM: move_to={move_to}")
+
+                                    # Executar movimento
+                                    if move_to:
+                                        dx, dy = move_to
+                                        if abs(dx) <= 1 and abs(dy) <= 1 and (dx, dy) != (0, 0):
+                                            opcode = MOVE_OPCODES.get((dx, dy))
+                                            if opcode:
+                                                old_x, old_y, _ = get_player_pos(pm, base_addr)
+                                                print(f"[CombatMove] MOVENDO ({dx},{dy}) de ({old_x},{old_y})")
+
+                                                packet.walk(opcode)
+                                                combat_mover.execute_move()
+
+                                                time.sleep(0.3)
+
+                                                new_x, new_y, _ = get_player_pos(pm, base_addr)
+                                                if (new_x, new_y) != (old_x, old_y):
+                                                    print(f"[CombatMove] OK ({new_x},{new_y})")
+                                                else:
+                                                    print(f"[CombatMove] FALHOU (mesma pos)")
+
+                            except Exception as e:
+                                print(f"[CombatMove] ERRO: {e}")
+
                 else:
                     # Alvo não está em valid_candidates - pode ser:
                     # (A) Fora de alcance (dist > attack_range)
@@ -1425,6 +1563,11 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                                                 if chase_mode:
                                                     log_decision(f"🔄 RETARGET: alvo inacessível → {nearest['name']} (chase, dist:{dist_to_nearest})")
                                                     chaser.start_chase(nearest["id"], nearest["abs_x"], nearest["abs_y"], nearest.get("z", my_z))
+                                                    # Write target ID to client memory for visual indicator and state tracking
+                                                    try:
+                                                        pm.write_int(target_addr, nearest["id"])
+                                                    except:
+                                                        pass
                                                 else:
                                                     log_decision(f"🔄 RETARGET: alvo inacessível → {nearest['name']} (follow, dist:{dist_to_nearest})")
                                                     packet.follow(nearest["id"])
@@ -1522,6 +1665,7 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                             state.stop_follow()
                             is_currently_following = False
                             follow_target_id = 0
+                            chase_attack_sent_to = 0
                             if debug_mode:
                                 print(f"[FOLLOW-DEBUG] Follow/chase parado - criatura morreu ({last_target_data['name']})")
                                 print(f"[FOLLOW-DEBUG]   state.is_following={state.is_following}")
@@ -1829,6 +1973,11 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                                 if chase_mode:
                                     log_decision(f"🏃 CHASE: {best['name']} (dist:{dist_to_target}) - walker A*")
                                     chaser.start_chase(best["id"], best["abs_x"], best["abs_y"], best["z"])
+                                    # Write target ID to client memory for visual indicator and state tracking
+                                    try:
+                                        pm.write_int(target_addr, best["id"])
+                                    except:
+                                        pass
                                 else:
                                     log_decision(f"🏃 SEGUINDO: {best['name']} (dist:{dist_to_target}) - follow nativo")
                                     packet.follow(best["id"])
@@ -1872,8 +2021,12 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                             dying_creature_data = None
                             death_timestamp = None
 
+                            # Combat movement agora roda no loop constante do Cenario A
+                            # (ver "COMBAT MOVEMENT (LOOP CONSTANTE)" mais acima)
+
                             next_attack_time = 0
-                            gauss_wait(0.5, 20)
+                            if not chase_mode:
+                                gauss_wait(0.5, 20)  # Delay only for native follow
                         elif not best and len(final_candidates) > 0:
                             # Todos engajados - reseta para tentar novamente
                             if debug_decisions or debug_mode:

@@ -14,7 +14,7 @@ from core.astar_walker import AStarWalker
 from core.map_analyzer import MapAnalyzer
 from core.memory_map import MemoryMap
 from core.map_core import get_player_pos
-from core.player_core import get_player_speed, is_player_moving
+from core.player_core import get_player_speed
 from core.packet import (
     PacketManager, get_ground_pos,
     OP_WALK_NORTH, OP_WALK_EAST, OP_WALK_SOUTH, OP_WALK_WEST,
@@ -175,12 +175,9 @@ class CreatureChaser:
             return ChaseResult.REACHED
 
         # Verifica timing - ainda nao e hora do proximo passo
+        # (Confia no calculo de timing como o cavebot, sem polling de is_player_moving)
         now = time.time()
         if now < self._next_step_time:
-            return ChaseResult.WAITING
-
-        # Verifica se player ainda esta se movendo do passo anterior
-        if is_player_moving(self.pm, self.base_addr):
             return ChaseResult.WAITING
 
         # Stuck detection: mesma posicao por muitas tentativas
@@ -215,7 +212,7 @@ class CreatureChaser:
                 return ChaseResult.BLOCKED
 
             # Espera um pouco antes de tentar novamente
-            self._next_step_time = now + 0.2
+            self._next_step_time = now + 0.08 + random.uniform(0, 0.04)
             return ChaseResult.WAITING
 
         dx, dy = step
@@ -236,14 +233,14 @@ class CreatureChaser:
                 return ChaseResult.CLEARING
             # Nao conseguiu limpar - incrementa stuck
             self._stuck_counter += 1
-            self._next_step_time = now + 0.15
+            self._next_step_time = now + 0.06 + random.uniform(0, 0.04)
             return ChaseResult.WAITING
 
         # Oscillation detection
         if self._detect_oscillation(dx, dy):
             if self.debug:
                 print(f"[CHASE] Oscillacao detectada para ({dx},{dy}), aguardando")
-            self._next_step_time = now + 0.3 + random.uniform(0.05, 0.15)
+            self._next_step_time = now + 0.1 + random.uniform(0.03, 0.08)
             return ChaseResult.WAITING
 
         # Executa passo

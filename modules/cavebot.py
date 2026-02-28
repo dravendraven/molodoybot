@@ -410,6 +410,19 @@ class Cavebot:
         # NOVO: Evita iniciar navegação se há alvos visíveis (dar tempo ao trainer)
         # Um humano veria a criatura na tela antes de começar a andar
         if state.has_visible_targets:
+            # Expor contexto da rota para Combat Movement (se habilitado)
+            if state.combat_movement_enabled:
+                try:
+                    px, py, pz = get_player_pos(self.pm, self.base_addr)
+                    with self._waypoints_lock:
+                        current_wp = self._waypoints[self._current_index] if self._waypoints else None
+                        next_idx = (self._current_index + 1) % len(self._waypoints) if self._waypoints else 0
+                        next_wp = self._waypoints[next_idx] if self._waypoints else None
+                    state.set_route_context(current_wp, next_wp, (px, py, pz))
+                except Exception as e:
+                    if DEBUG_PATHFINDING:
+                        print(f"[{_ts()}] [Cavebot] Erro ao expor route_context: {e}")
+
             self._was_paused = True
             self.current_state = self.STATE_PAUSED
             self.state_message = "⏸️ Pausado (alvos visíveis)"

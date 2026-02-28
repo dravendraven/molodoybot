@@ -12,7 +12,7 @@ from tkinter import ttk
 
 # ================= CONFIGURAÇÕES =================
 # Versão atual hardcoded (atualizada automaticamente pelo publicar.bat)
-CURRENT_VERSION = "7.6"
+CURRENT_VERSION = "7.7"
 
 # URLs do GitHub
 URL_VERSION = "https://raw.githubusercontent.com/dravendraven/molodoybot/refs/heads/main/version.txt"
@@ -352,8 +352,9 @@ taskkill /IM mshta.exe /F >nul 2>&1
 :: Espera breve antes de iniciar (1 segundo)
 ping 127.0.0.1 -n 2 >nul
 
-:: Inicia o novo exe
-explorer.exe "{current_exe}"
+:: Inicia o novo exe no diretório correto
+cd /d "{os.path.dirname(current_exe)}"
+start "" "{current_exe}"
 
 :: Limpa arquivos temporários
 del /f /q "{hta_path}" >nul 2>&1

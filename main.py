@@ -242,6 +242,7 @@ BOT_SETTINGS = {
     "rune_hotkey": "F3",
     "rune_blank_id": 3147,
     "rune_hand": "DIREITA",
+    "rune_count": 1,  # Quantidade de runas por ciclo (1-4)
     "rune_work_pos": (0,0,0),
     "rune_safe_pos": (0,0,0),
     "rune_return_delay": 300,
@@ -368,6 +369,11 @@ if os.path.exists("bot_config.json"):
                         drop_ids.extend(lootables_db.find_loot_by_name(name))
                     BOT_SETTINGS['drop_ids'] = list(set(drop_ids))
 
+            # Inicializa combat_movement_enabled no state baseado no valor salvo
+            if BOT_SETTINGS.get('combat_movement_enabled', False):
+                state.set_combat_movement_enabled(True)
+                print("[CONFIG] Combat Movement ativado via bot_config.json")
+
         print("Configurações carregadas.")
     except Exception as e:
         print(f"Erro ao carregar: {e}")
@@ -485,10 +491,19 @@ def register_food_eaten(item_id):
             log(f"🍖 Comeu durante 'Calc...' (Timer continua desconhecido)")
             pass
 
+def find_game_window():
+    """
+    Encontra a janela do cliente usando WINDOW_CLASS e WINDOW_TITLE do config.
+    Suporta Tibia.exe e Mas Vis Client.exe.
+    """
+    hwnd = win32gui.FindWindow(WINDOW_CLASS, None)
+    if not hwnd:
+        hwnd = win32gui.FindWindow(None, WINDOW_TITLE)
+    return hwnd
+
 def attach_window():
     try:
-        hwnd_tibia = win32gui.FindWindow("TibiaClient", None)
-        if not hwnd_tibia: hwnd_tibia = win32gui.FindWindow(None, "Tibia")
+        hwnd_tibia = find_game_window()
         hwnd_bot = win32gui.GetParent(app.winfo_id())
         if hwnd_tibia and hwnd_bot:
             win32gui.SetWindowLong(hwnd_bot, -8, hwnd_tibia)
@@ -1510,6 +1525,9 @@ def start_trainer_thread():
             'spear_picker_enabled': BOT_SETTINGS.get('spear_picker_enabled', False),
             'follow_before_attack_enabled': BOT_SETTINGS.get('follow_before_attack_enabled', False),
 
+            # Chase Mode: usar A* walker em vez de packet.follow nativo
+            'chase_mode_enabled': BOT_SETTINGS.get('chase_mode_enabled', False),
+
             # Pausar módulos durante delay de ataque (simula AFK)
             'pause_modules_during_delay': BOT_SETTINGS.get('pause_modules_during_delay', False),
         }
@@ -1532,7 +1550,7 @@ def start_trainer_thread():
             continue
             
         if hwnd == 0: 
-            hwnd = win32gui.FindWindow("TibiaClient", None) or win32gui.FindWindow(None, "Tibia")
+            hwnd = find_game_window()
 
         try:
             # Callback para atualizar status do trainer
@@ -1787,7 +1805,7 @@ def regen_monitor_loop():
             time.sleep(0.1)
             
         except Exception as e:
-            print(f"Erro Regen Loop: {e}")
+            #print(f"Erro Regen Loop: {e}")
             time.sleep(1)
 
 
@@ -1990,7 +2008,7 @@ def auto_loot_thread():
         if pm is None:
             check_stuck_loot_cycle()
             time.sleep(1); continue
-        if hwnd == 0: hwnd = win32gui.FindWindow("TibiaClient", None) or win32gui.FindWindow(None, "Tibia")
+        if hwnd == 0: hwnd = find_game_window()
         
         try:
             # Atualiza detecção de movimento
@@ -2137,7 +2155,7 @@ def auto_fisher_thread():
             continue
             
         if hwnd == 0:
-            hwnd = win32gui.FindWindow("TibiaClient", None) or win32gui.FindWindow(None, "Tibia")
+            hwnd = find_game_window()
 
         try:
             # Callback para atualizar status do fisher
@@ -2352,6 +2370,7 @@ def runemaker_thread():
         'hotkey': BOT_SETTINGS['rune_hotkey'],
         'blank_id': BOT_SETTINGS['rune_blank_id'],
         'hand_mode': BOT_SETTINGS['rune_hand'],
+        'rune_count': BOT_SETTINGS.get('rune_count', 1),
         'work_pos': BOT_SETTINGS['rune_work_pos'],
         'safe_pos': BOT_SETTINGS['rune_safe_pos'],
         'return_delay': BOT_SETTINGS['rune_return_delay'],
@@ -2377,7 +2396,7 @@ def runemaker_thread():
         if not should_run():
             time.sleep(1); continue
         if pm is None: time.sleep(1); continue
-        if hwnd == 0: hwnd = win32gui.FindWindow("TibiaClient", None) or win32gui.FindWindow(None, "Tibia")
+        if hwnd == 0: hwnd = find_game_window()
 
         try:
             # Callback para atualizar status do runemaker
@@ -2927,6 +2946,11 @@ def create_settings_callbacks() -> SettingsCallbacks:
         BOT_SETTINGS['chase_mode_enabled'] = enabled
         log(f"🏃 Walker Chase Mode: {'Ativado' if enabled else 'Desativado'}")
 
+    def on_combat_movement_toggle(enabled: bool):
+        BOT_SETTINGS['combat_movement_enabled'] = enabled
+        state.set_combat_movement_enabled(enabled)
+        log(f"⚔️ Combat Movement: {'Ativado (experimental)' if enabled else 'Desativado'}")
+
     def set_rune_pos_callback(type_pos: str):
         if pm:
             try:
@@ -2974,6 +2998,7 @@ def create_settings_callbacks() -> SettingsCallbacks:
         on_ignore_toggle=on_ignore_toggle,
         on_ks_toggle=on_ks_toggle,
         on_chase_mode_toggle=on_chase_mode_toggle,
+        on_combat_movement_toggle=on_combat_movement_toggle,
 
         # Tab Rune
         set_rune_pos=set_rune_pos_callback,
@@ -3110,7 +3135,7 @@ def toggle_xray():
             return
 
         try:
-            hwnd = win32gui.FindWindow("TibiaClient", None) or win32gui.FindWindow(None, "Tibia")
+            hwnd = find_game_window()
             #print(f"[XRAY] hwnd={hwnd}")
 
             if not hwnd:

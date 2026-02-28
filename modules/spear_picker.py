@@ -30,7 +30,6 @@ import random
 import threading
 
 from config import (
-    OFFSET_PLAYER_ID,
     SLOT_RIGHT,
     SLOT_LEFT,
 )
@@ -41,7 +40,7 @@ from core.memory_map import MemoryMap
 from core.map_analyzer import MapAnalyzer
 from core.packet import PacketManager, get_ground_pos, get_inventory_pos
 from core.packet_mutex import PacketMutex
-from core.player_core import get_player_cap
+from core.player_core import get_player_cap, get_player_id
 from core.inventory_core import get_item_id_in_hand, get_spear_count_in_hands
 from core.bot_state import state
 from utils.timing import gauss_wait
@@ -945,7 +944,7 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
             #print(f"[Spear Action] Vai pegar spear (prob={pick_chance:.1%}, roll={roll:.1%}) - spears={current_spears}/{max_spears}")
 
             # === BUSCA SPEAR NO CHÃO ===
-            player_id = pm.read_int(base_addr + OFFSET_PLAYER_ID)
+            player_id = get_player_id(pm, base_addr)
             if not mapper.read_full_map(player_id):
                 time.sleep(0.5)
                 continue

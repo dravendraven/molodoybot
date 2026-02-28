@@ -210,8 +210,7 @@ class HealerModule(BaseModule):
             Dict with 'id', 'hp_percent', 'name' or None if target not found.
         """
         if rule.target_type == "self":
-            hp, hp_max, hp_percent = game_state.get_player_hp()
-            print(f"[healer] Self HP: {hp}/{hp_max} ({hp_percent}%)")
+            _, _, hp_percent = game_state.get_player_hp()
             return {
                 'id': self._player_id,
                 'hp_percent': hp_percent,

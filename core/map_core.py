@@ -1,19 +1,30 @@
 import pymem
 import win32gui
 from config import *
+from core.player_core import get_player_id, find_player_in_battlelist
+
 
 def get_player_pos(pm, base_addr):
     """
-    Lê a posição GLOBAL (X, Y, Z) do jogador diretamente da memória estática.
-    Muito mais rápido que varrer a BattleList.
+    Lê a posição GLOBAL (X, Y, Z) do jogador.
+
+    Para Mas Vis: usa get_player_id (busca por nome) + find_player_in_battlelist.
+    Para Tibia original: usa offsets estáticos (PLAYER_X_ADDRESS, etc).
     """
+    # Mas Vis: usar player_core que já tem lógica de busca por nome
+    if CLIENT_TYPE == "MAS_VIS":
+        player_id = get_player_id(pm, base_addr)
+        if player_id:
+            player_data = find_player_in_battlelist(pm, base_addr, player_id)
+            if player_data:
+                return player_data['x'], player_data['y'], player_data['z']
+        return 0, 0, 0
+
+    # Tibia original: usar offsets estáticos (funciona para Tibia.exe)
     try:
-        # Offsets relativos baseados no Version.cs (0x05D16F0 - 0x400000)
-        # Adicione ao config.py se quiser: OFFSET_PLAYER_X_STATIC = 0x1D16F0
-        
-        x = pm.read_int(base_addr + 0x1D16F0)
-        y = pm.read_int(base_addr + 0x1D16EC)
-        z = pm.read_int(base_addr + 0x1D16E8)
+        x = pm.read_int(base_addr + PLAYER_X_ADDRESS)
+        y = pm.read_int(base_addr + PLAYER_Y_ADDRESS)
+        z = pm.read_int(base_addr + PLAYER_Z_ADDRESS)
         return x, y, z
     except:
         return 0, 0, 0

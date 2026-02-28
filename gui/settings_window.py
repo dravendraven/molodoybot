@@ -51,6 +51,7 @@ class SettingsCallbacks:
     on_ignore_toggle: Callable[[bool], None]
     on_ks_toggle: Callable[[bool], None]
     on_chase_mode_toggle: Callable[[bool], None]
+    on_combat_movement_toggle: Callable[[bool], None]
 
     # === TAB RUNE CALLBACKS ===
     set_rune_pos: Callable[[str], None]  # "WORK" ou "SAFE"
@@ -625,6 +626,23 @@ class SettingsWindow:
         ctk.CTkLabel(tab, text="↳ Anti KS: evita criaturas perto de players. Chase: A* pathfinding.",
                     **self.UI['HINT']).pack(anchor="w", padx=15)
 
+        # === COMBAT MOVEMENT (EXPERIMENTAL) ===
+        ctk.CTkLabel(tab, text="Combat Movement (Experimental):", **self.UI['H1']).pack(anchor="w", padx=10, pady=(15, 0))
+
+        switch_combat_movement = ctk.CTkSwitch(
+            tab,
+            text="Movimentação humanizada em combate",
+            command=lambda: self.cb.on_combat_movement_toggle(bool(switch_combat_movement.get())),
+            progress_color="#E67E22",  # Laranja para indicar experimental
+            **self.UI['BODY']
+        )
+        switch_combat_movement.pack(anchor="w", padx=10, pady=(3, 0))
+        if settings.get('combat_movement_enabled', False):
+            switch_combat_movement.select()
+
+        ctk.CTkLabel(tab, text="↳ Move na direção do waypoint durante combate, mantendo adjacência ao alvo.",
+                    **self.UI['HINT']).pack(anchor="w", padx=15)
+
         # === AIMBOT ===
         ctk.CTkLabel(tab, text="Aimbot (Runas):", **self.UI['H1']).pack(anchor="w", padx=10, pady=(15, 0))
 
@@ -668,6 +686,8 @@ class SettingsWindow:
                 s['aimbot_enabled'] = bool(switch_aimbot.get())
                 s['aimbot_rune_type'] = combo_aimbot_rune.get()
                 s['aimbot_hotkey'] = combo_aimbot_hotkey.get()
+                # Combat Movement settings
+                s['combat_movement_enabled'] = bool(switch_combat_movement.get())
                 self.cb.save_config_file()
                 self.cb.log("⚔️ Trainer salvo!")
                 # DEBUG: Confirma que o valor foi gravado no dict correto
@@ -1045,11 +1065,50 @@ class SettingsWindow:
         entry_hk.pack(side="left", padx=2)
         entry_hk.insert(0, settings['rune_hotkey'])
 
+        # Quantidade de runas (controla opções do combo Mão)
+        ctk.CTkLabel(f_c1, text="Qtd:", **self.UI['BODY']).pack(side="left", padx=5)
+        combo_rune_count = ctk.CTkComboBox(f_c1, values=["1", "2", "3", "4"], **self.UI['COMBO'])
+        combo_rune_count.configure(width=45)
+        combo_rune_count.pack(side="left", padx=2)
+        combo_rune_count.set(str(settings.get('rune_count', 1)))
+
+        # Mão (valores condicionais baseados em Qtd)
         ctk.CTkLabel(f_c1, text="Mão:", **self.UI['BODY']).pack(side="left", padx=5)
-        combo_hand = ctk.CTkComboBox(f_c1, values=["DIREITA", "ESQUERDA", "AMBAS"], **self.UI['COMBO'])
-        combo_hand.configure(width=70)
+        combo_hand = ctk.CTkComboBox(f_c1, values=["DIREITA", "ESQUERDA"], **self.UI['COMBO'])
+        combo_hand.configure(width=80)
         combo_hand.pack(side="left", padx=2)
-        combo_hand.set(settings['rune_hand'])
+        combo_hand.set(settings.get('rune_hand', 'DIREITA'))
+
+        def on_rune_count_change(choice):
+            """Atualiza opções do combo Mão baseado na quantidade de runas."""
+            count = int(choice)
+            current = combo_hand.get()
+            if count == 1:
+                # 1 runa: escolhe esquerda ou direita
+                combo_hand.configure(values=["DIREITA", "ESQUERDA"])
+                if current == "AMBAS":
+                    combo_hand.set("DIREITA")
+            elif count == 2:
+                # 2 runas: sempre ambas
+                combo_hand.configure(values=["AMBAS"])
+                combo_hand.set("AMBAS")
+            elif count == 3:
+                # 3 runas: ambas + escolhe mão extra (esquerda ou direita)
+                combo_hand.configure(values=["ESQUERDA", "DIREITA"])
+                if current == "AMBAS":
+                    combo_hand.set("ESQUERDA")
+            elif count == 4:
+                # 4 runas: sempre ambas × 2
+                combo_hand.configure(values=["AMBAS"])
+                combo_hand.set("AMBAS")
+
+        combo_rune_count.configure(command=on_rune_count_change)
+        # Aplicar estado inicial
+        on_rune_count_change(combo_rune_count.get())
+
+        # Hint explicativo sobre quantidade de runas
+        ctk.CTkLabel(frame_craft, text="↳ 1: mão única | 2: ambas | 3: ambas + mão | 4: ambas × 2",
+                    **self.UI['HINT']).pack(anchor="w", padx=10)
 
         # Frame Human
         frame_human = ctk.CTkFrame(tab, fg_color="#2b2b2b")
@@ -1150,6 +1209,7 @@ class SettingsWindow:
                 s['rune_mana'] = int(entry_mana.get())
                 s['rune_hotkey'] = entry_hk.get().upper()
                 s['rune_hand'] = combo_hand.get()
+                s['rune_count'] = int(combo_rune_count.get())
                 s['rune_blank_id'] = 3147
                 s['rune_human_min'] = int(entry_human_min.get())
                 s['rune_human_max'] = int(entry_human_max.get())

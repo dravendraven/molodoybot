@@ -27,6 +27,8 @@ from config import (
     OFFSET_WALK_DIRECTION,
     OFFSET_MOVEMENT_STATUS,
     OFFSET_FACING_DIRECTION,
+    CLIENT_TYPE,
+    MY_PLAYER_NAME,
 )
 
 # ==============================================================================
@@ -34,6 +36,71 @@ from config import (
 # ==============================================================================
 # A posição do player na BattleList é FIXA após login, então podemos cachear
 _cached_player_slot = None  # (player_id, slot_address) ou None
+_cached_player_id_mas_vis = None  # Cache do Player ID encontrado pelo nome (Mas Vis)
+
+
+def get_player_id_by_name(pm, base_addr, player_name: str = None) -> int:
+    """
+    Encontra o Player ID buscando pelo nome na BattleList.
+    Método alternativo para clientes como Mas Vis onde o offset direto não funciona.
+
+    O ID fica no offset 0x00 do slot, e o nome no offset 0x04.
+
+    Args:
+        pm: Instância do Pymem
+        base_addr: Endereço base do módulo
+        player_name: Nome do personagem (usa MY_PLAYER_NAME se não especificado)
+
+    Returns:
+        Player ID ou 0 se não encontrar
+    """
+    global _cached_player_id_mas_vis
+
+    # Usa cache se disponível
+    if _cached_player_id_mas_vis is not None:
+        return _cached_player_id_mas_vis
+
+    if player_name is None:
+        player_name = MY_PLAYER_NAME
+
+    if not player_name:
+        print(f"[PlayerCore] ERRO: MY_PLAYER_NAME está vazio!")
+        return 0
+
+    print(f"[PlayerCore] Buscando player '{player_name}' na battlelist...")
+
+    try:
+        battle_list_addr = base_addr + BATTLELIST_BEGIN_ADDRESS
+        print(f"[PlayerCore] Battlelist addr: 0x{battle_list_addr:X}, STEP_SIZE: {STEP_SIZE}")
+
+        for i in range(MAX_CREATURES):
+            slot_addr = battle_list_addr + (i * STEP_SIZE)
+
+            # Ler nome do slot (offset 0x04)
+            name_bytes = pm.read_bytes(slot_addr + 4, 32)
+            name = name_bytes.split(b'\x00')[0].decode('latin-1', errors='ignore')
+
+            if name and i < 5:  # Debug primeiros 5 slots
+                print(f"[PlayerCore] Slot {i}: '{name}'")
+
+            if name.lower() == player_name.lower():
+                # ID fica no offset 0x00 (4 bytes antes do nome)
+                player_id = pm.read_int(slot_addr)
+                print(f"[PlayerCore] ENCONTRADO! Slot {i}, ID: {player_id}")
+                if player_id > 0:
+                    _cached_player_id_mas_vis = player_id
+                    return player_id
+    except Exception as e:
+        print(f"[PlayerCore] ERRO na busca: {e}")
+
+    print(f"[PlayerCore] Player '{player_name}' NAO encontrado na battlelist!")
+    return 0
+
+
+def clear_player_id_cache():
+    """Limpa cache do Player ID do Mas Vis (chamar ao desconectar/reconectar)."""
+    global _cached_player_id_mas_vis
+    _cached_player_id_mas_vis = None
 
 
 def _get_player_slot_address(pm, base_addr):
@@ -47,7 +114,8 @@ def _get_player_slot_address(pm, base_addr):
     global _cached_player_slot
 
     try:
-        player_id = pm.read_int(base_addr + OFFSET_PLAYER_ID)
+        # Usa get_player_id que suporta Mas Vis (busca por nome) e Tibia (offset direto)
+        player_id = get_player_id(pm, base_addr)
         if player_id == 0:
             return None
 
@@ -222,13 +290,8 @@ def get_player_speed(pm, base_addr) -> int:
              Retorna 220 (padrão) se não encontrar.
     """
     try:
-        # 1. Ler o ID do Player Logado
-        try:
-            player_id = pm.read_int(base_addr + OFFSET_PLAYER_ID)
-        except Exception as e:
-            print(f"[PlayerCore] Failed to read player ID: {e}")
-            return 220
-
+        # 1. Ler o ID do Player Logado (suporta Mas Vis e Tibia)
+        player_id = get_player_id(pm, base_addr)
         if player_id == 0:
             return 220  # Não logado ou erro
 
@@ -271,17 +334,25 @@ def get_player_speed(pm, base_addr) -> int:
 def get_player_id(pm, base_addr: int) -> int:
     """
     Retorna o ID único do personagem logado.
-    
+
+    Para Mas Vis: busca pelo nome na battlelist (offset direto não funciona).
+    Para Tibia original: usa o offset direto.
+
     Este valor é constante durante a sessão - o caller pode
     armazenar após primeira leitura bem-sucedida.
-    
+
     Args:
         pm: Instância do Pymem conectada ao Tibia
         base_addr: Endereço base do módulo Tibia
-    
+
     Returns:
         ID do jogador ou 0 se falhar
     """
+    # Mas Vis: usar método por nome na battlelist
+    if CLIENT_TYPE == "MAS_VIS":
+        return get_player_id_by_name(pm, base_addr)
+
+    # Tibia original: usar offset direto
     try:
         return pm.read_int(base_addr + OFFSET_PLAYER_ID)
     except Exception:
@@ -291,20 +362,28 @@ def get_player_id(pm, base_addr: int) -> int:
 def get_connected_char_name(pm, base_addr: int) -> str:
     """
     Lê o ID do jogador local e busca o nome correspondente na Battle List.
-    
+
+    Para Mas Vis: retorna MY_PLAYER_NAME diretamente (já configurado).
+    Para Tibia: busca na battlelist pelo ID.
+
     O nome é constante durante a sessão. O caller pode armazenar
     o resultado após a primeira chamada bem-sucedida para evitar
     buscas repetidas na BattleList.
-    
+
     Args:
         pm: Instância do Pymem conectada ao Tibia
         base_addr: Endereço base do módulo Tibia
-    
+
     Returns:
         Nome do personagem ou string vazia se não encontrar
     """
+    # Mas Vis: já sabemos o nome do player (configurado em config.py)
+    if CLIENT_TYPE == "MAS_VIS":
+        return MY_PLAYER_NAME if MY_PLAYER_NAME else ""
+
+    # Tibia original: buscar na battlelist
     try:
-        player_id = pm.read_int(base_addr + OFFSET_PLAYER_ID)
+        player_id = get_player_id(pm, base_addr)
         if player_id == 0:
             return ""
 
@@ -384,8 +463,9 @@ def find_player_in_battlelist(pm, base_addr: int, player_id: int = None) -> dict
     """
     try:
         if player_id is None:
-            player_id = pm.read_int(base_addr + OFFSET_PLAYER_ID)
-        
+            # Usa get_player_id que suporta Mas Vis (busca por nome) e Tibia (offset direto)
+            player_id = get_player_id(pm, base_addr)
+
         if player_id == 0:
             return None
 
