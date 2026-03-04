@@ -28,8 +28,8 @@ from config import (
     OFFSET_MOVEMENT_STATUS,
     OFFSET_FACING_DIRECTION,
     CLIENT_TYPE,
-    MY_PLAYER_NAME,
 )
+import config  # Para acessar MY_PLAYER_NAME dinamicamente
 
 # ==============================================================================
 # CACHE DO SLOT DO PLAYER NA BATTLELIST
@@ -61,10 +61,10 @@ def get_player_id_by_name(pm, base_addr, player_name: str = None) -> int:
         return _cached_player_id_mas_vis
 
     if player_name is None:
-        player_name = MY_PLAYER_NAME
+        player_name = config.MY_PLAYER_NAME
 
     if not player_name:
-        print(f"[PlayerCore] ERRO: MY_PLAYER_NAME está vazio!")
+        print(f"[PlayerCore] ERRO: config.MY_PLAYER_NAME está vazio!")
         return 0
 
     print(f"[PlayerCore] Buscando player '{player_name}' na battlelist...")
@@ -377,9 +377,9 @@ def get_connected_char_name(pm, base_addr: int) -> str:
     Returns:
         Nome do personagem ou string vazia se não encontrar
     """
-    # Mas Vis: já sabemos o nome do player (configurado em config.py)
+    # Mas Vis: já sabemos o nome do player (configurado em config.py ou dialog)
     if CLIENT_TYPE == "MAS_VIS":
-        return MY_PLAYER_NAME if MY_PLAYER_NAME else ""
+        return config.MY_PLAYER_NAME if config.MY_PLAYER_NAME else ""
 
     # Tibia original: buscar na battlelist
     try:

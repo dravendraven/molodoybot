@@ -186,6 +186,34 @@ class SettingsWindow:
         """Verifica se a janela está aberta."""
         return self.window is not None and self.window.winfo_exists()
 
+    def refresh_all_tabs(self) -> None:
+        """
+        Reconstrói todas as tabs para refletir novos valores de BOT_SETTINGS.
+        Chamado após carregar configuração de outro personagem.
+        """
+        if not self.is_open():
+            return
+
+        # Limpa estado de tabs construídas para forçar reconstrução
+        self._tabs_built.clear()
+
+        # Destrói conteúdo existente das tabs
+        for tab_name, tab_frame in self._tabs.items():
+            try:
+                for widget in tab_frame.winfo_children():
+                    widget.destroy()
+            except:
+                pass
+
+        # Reconstrói a tab atual (lazy loading)
+        if self._tabview:
+            try:
+                current_tab = self._tabview.get()
+                tab_key = self._tab_display_to_key.get(current_tab, current_tab)
+                self._build_tab(tab_key)
+            except:
+                pass
+
     # === MÉTODOS DE ATUALIZAÇÃO (chamados por main.py) ===
 
     def update_waypoint_display_ui(self, waypoints: List[dict]) -> None:

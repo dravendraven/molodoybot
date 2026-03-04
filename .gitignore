@@ -102,3 +102,15 @@ _teste_update/logs/crash_dump.txt
 _teste_update/logs/crash.log
 splash.png
 tools/.whitelist_data.json
+market_monitor.py
+market_monitor_gui.py
+market.db
+market.db-shm
+market.db-wal
+core/market_intelligence.py
+database/market_db.py
+tests/test_trade_capture.py
+tests/test_trade_parser.py
+utils/market_exporter.py
+bot_config_Newton.json
+core/trade_parser.py

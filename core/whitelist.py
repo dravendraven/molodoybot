@@ -77,18 +77,10 @@ def _fetch_remote_whitelist() -> dict:
 
 
 def _get_bot_version() -> str:
-    """Obtem a versao do bot do arquivo version.txt."""
+    """Obtem a versao do bot de auto_update.py."""
     try:
-        import os
-        paths = [
-            os.path.join(os.path.dirname(os.path.dirname(__file__)), "version.txt"),
-            "version.txt",
-        ]
-        for path in paths:
-            if os.path.exists(path):
-                with open(path, "r") as f:
-                    return f.read().strip()
-        return "N/A"
+        from auto_update import CURRENT_VERSION
+        return CURRENT_VERSION
     except Exception:
         return "N/A"
 

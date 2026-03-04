@@ -71,6 +71,9 @@ TELEGRAM_CHAT_ID = ""  # Vazio por padrão - configurar no bot para receber aler
 SNIFFER_ENABLED = True         # Ativa captura de pacotes (requer Npcap + Admin)
 SNIFFER_SERVER_IP = "135.148.27.135"  # IP do servidor OT
 
+# Market Intelligence - Deduplicacao de ofertas (anti-spam)
+OFFER_DEDUP_WINDOW = 300  # Segundos para considerar oferta duplicada (5 min)
+
 # ==============================================================================
 # GUI SETTINGS
 # ==============================================================================

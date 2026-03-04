@@ -286,6 +286,7 @@ is_looting = False
 # bot_running movido para state.is_running (bot_state.py)
 pm = None
 base_addr = 0
+selected_pid = None  # PID selecionado pelo usuário (para múltiplos clientes)
 state.is_connected = False # True apenas se: Processo Aberto + Logado no Char
 gm_found = False
 full_light_enabled = False # <--- NOVO
@@ -461,13 +462,110 @@ def send_telegram(msg):
         print("[TELEGRAM] Mensagem enviada.")
     except: pass
 
+def get_config_filename(char_name: str = None) -> str:
+    """
+    Retorna o nome do arquivo de config apropriado.
+    Se char_name fornecido: bot_config_<CharName>.json
+    Caso contrário: bot_config.json (padrão)
+    """
+    if char_name:
+        # Sanitiza nome para evitar caracteres inválidos em filename
+        safe_name = "".join(c for c in char_name if c.isalnum() or c in (' ', '-', '_')).strip()
+        return f"bot_config_{safe_name}.json"
+    return CONFIG_FILE  # "bot_config.json"
+
+
 def save_config_file():
+    """Salva configuração no arquivo específico do personagem (se conectado) ou no padrão."""
     try:
-        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+        # Usa arquivo específico do personagem se conectado
+        char_name = get_player_name() if state.is_connected else None
+        filename = get_config_filename(char_name)
+
+        with open(filename, 'w', encoding='utf-8') as f:
             json.dump(BOT_SETTINGS, f, indent=4)
-        print(f"[CONFIG] Salvo com sucesso.")
+
+        if char_name:
+            print(f"[CONFIG] Salvo para {char_name}: {filename}")
+        else:
+            print(f"[CONFIG] Salvo: {filename}")
     except Exception as e:
         print(f"[CONFIG] Erro ao salvar: {e}")
+
+
+def load_character_config(char_name: str) -> bool:
+    """
+    Carrega configuração específica do personagem se existir.
+    Chamada quando um personagem faz login.
+
+    Returns:
+        True se carregou config específica, False caso contrário
+    """
+    global BOT_SETTINGS
+
+    filename = get_config_filename(char_name)
+
+    if not os.path.exists(filename):
+        log(f"[CONFIG] Nenhuma config específica para {char_name}. Usando configuração atual.")
+        return False
+
+    try:
+        with open(filename, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        # Aplica mesma lógica de correção do load inicial
+        BOT_SETTINGS.update(data)
+
+        # Correções de tipo (tuplas - JSON salva como lista)
+        if "rune_work_pos" in BOT_SETTINGS:
+            BOT_SETTINGS["rune_work_pos"] = tuple(BOT_SETTINGS["rune_work_pos"])
+        if "rune_safe_pos" in BOT_SETTINGS:
+            BOT_SETTINGS["rune_safe_pos"] = tuple(BOT_SETTINGS["rune_safe_pos"])
+
+        # Mantém DEBUG_MODE do config.py (não do arquivo)
+        BOT_SETTINGS["debug_mode"] = config.DEBUG_MODE
+
+        # Converte nomes → IDs se sistema configurável de loot ativo
+        if USE_CONFIGURABLE_LOOT_SYSTEM:
+            from database import lootables_db
+            if 'loot_names' in BOT_SETTINGS:
+                loot_ids = []
+                for name in BOT_SETTINGS['loot_names']:
+                    loot_ids.extend(lootables_db.find_loot_by_name(name))
+                BOT_SETTINGS['loot_ids'] = list(set(loot_ids))
+            if 'drop_names' in BOT_SETTINGS:
+                drop_ids = []
+                for name in BOT_SETTINGS['drop_names']:
+                    drop_ids.extend(lootables_db.find_loot_by_name(name))
+                BOT_SETTINGS['drop_ids'] = list(set(drop_ids))
+
+        # Sincroniza combat_movement com state
+        if BOT_SETTINGS.get('combat_movement_enabled', False):
+            state.set_combat_movement_enabled(True)
+        else:
+            state.set_combat_movement_enabled(False)
+
+        # Ativa/desativa logging conforme config
+        if BOT_SETTINGS.get("logging_enabled", False):
+            toggle_operational_logging(True)
+        else:
+            toggle_operational_logging(False)
+
+        # Atualiza GUI se estiver aberta
+        if settings_window and settings_window.is_open():
+            app.after(0, settings_window.refresh_all_tabs)
+
+        # Atualiza visibilidade de stats baseado na vocação
+        if main_window:
+            app.after(0, main_window.update_stats_visibility)
+
+        log(f"[CONFIG] Configuração carregada para {char_name}")
+        return True
+
+    except Exception as e:
+        print(f"[CONFIG] Erro ao carregar config de {char_name}: {e}")
+        return False
+
 
 def register_food_eaten(item_id):
     """
@@ -490,6 +588,98 @@ def register_food_eaten(item_id):
         else:
             log(f"🍖 Comeu durante 'Calc...' (Timer continua desconhecido)")
             pass
+
+def select_tibia_process():
+    """
+    Mostra diálogo para selecionar qual cliente Tibia usar e configurar player name.
+    Sempre mostra para permitir configuração do nome do jogador (Mas Vis).
+    """
+    global selected_pid
+
+    # Busca todos os processos Tibia
+    tibia_processes = []
+    for proc in psutil.process_iter(['pid', 'name', 'create_time']):
+        try:
+            if proc.info['name'] == PROCESS_NAME:
+                tibia_processes.append({
+                    'pid': proc.info['pid'],
+                    'name': proc.info['name'],
+                    'create_time': proc.info['create_time']
+                })
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+
+    # Ordena por tempo de criação (mais antigo primeiro)
+    tibia_processes.sort(key=lambda x: x['create_time'])
+
+    # Calcula altura da janela baseado no conteúdo
+    is_mas_vis = CLIENT_TYPE == "MAS_VIS"
+    has_multiple = len(tibia_processes) > 1
+    window_height = 120  # Base: título + botão
+    if has_multiple:
+        window_height += 30 + (len(tibia_processes) * 35)  # Label + radio buttons
+    if is_mas_vis:
+        window_height += 70  # Label + input
+
+    # Cria janela de seleção
+    selector = ctk.CTk()
+    selector.title("Configurar Bot")
+    selector.geometry(f"320x{window_height}")
+    selector.resizable(False, False)
+
+    # Centraliza na tela
+    selector.update_idletasks()
+    x = (selector.winfo_screenwidth() // 2) - 160
+    y = (selector.winfo_screenheight() // 2) - (window_height // 2)
+    selector.geometry(f"+{x}+{y}")
+
+    # Seleção de cliente (só mostra se múltiplos)
+    selected_var = ctk.StringVar()
+    if tibia_processes:
+        selected_var.set(str(tibia_processes[0]['pid']))
+
+    if has_multiple:
+        ctk.CTkLabel(selector, text="Selecione o cliente:",
+                     font=("Segoe UI", 13, "bold")).pack(pady=(15, 5))
+        for i, proc in enumerate(tibia_processes):
+            label = f"Cliente {i+1} (PID: {proc['pid']})"
+            ctk.CTkRadioButton(selector, text=label, variable=selected_var,
+                              value=str(proc['pid'])).pack(pady=3)
+
+    # Input de nome do jogador (só para Mas Vis)
+    name_entry = None
+    if is_mas_vis:
+        ctk.CTkLabel(selector, text="Nome do Personagem:",
+                     font=("Segoe UI", 13, "bold")).pack(pady=(15, 5))
+        name_entry = ctk.CTkEntry(selector, width=200, height=32)
+        name_entry.insert(0, MY_PLAYER_NAME)  # Valor padrão do config
+        name_entry.pack(pady=5)
+
+    def on_run():
+        global selected_pid
+        # Salva PID selecionado
+        if tibia_processes:
+            selected_pid = int(selected_var.get())
+        else:
+            selected_pid = None
+
+        # Atualiza nome do jogador no config (runtime)
+        if is_mas_vis and name_entry:
+            new_name = name_entry.get().strip()
+            if new_name:
+                config.MY_PLAYER_NAME = new_name
+
+        selector.destroy()
+
+    # Botão Run
+    ctk.CTkButton(selector, text="▶  Iniciar Bot", command=on_run,
+                  width=140, height=36, font=("Segoe UI", 13, "bold"),
+                  fg_color="#28a745", hover_color="#218838").pack(pady=20)
+
+    selector.protocol("WM_DELETE_WINDOW", lambda: sys.exit(0))
+    selector.mainloop()
+
+    return selected_pid
 
 def find_game_window():
     """
@@ -1172,16 +1362,20 @@ def toggle_cavebot_func():
 # ==============================================================================
 
 def connection_watchdog():
-    global pm, base_addr
+    global pm, base_addr, selected_pid
     was_connected_once = False
     while state.is_running:
         try:
             # 1. Se não tem processo atrelado, tenta atrelar
             if pm is None:
                 try:
-                    pm = pymem.Pymem(PROCESS_NAME)
+                    # Usa PID específico se selecionado, senão usa nome do processo
+                    if selected_pid:
+                        pm = pymem.Pymem(selected_pid)
+                    else:
+                        pm = pymem.Pymem(PROCESS_NAME)
                     base_addr = pymem.process.module_from_name(pm.process_handle, PROCESS_NAME).lpBaseOfDll
-                    log("✅ Processo do Tibia detectado.")
+                    log(f"✅ Processo do Tibia detectado (PID: {pm.process_id}).")
 
                     # Initialize game state (Eyes - memory scanner at 20Hz)
                     try:
@@ -1250,13 +1444,14 @@ def connection_watchdog():
                                 validate_character_or_exit(char_name)
                         # === FIM VALIDACAO DE WHITELIST ===
 
+                        # === CARREGA CONFIG ESPECÍFICA DO PERSONAGEM ===
+                        if char_name:
+                            load_character_config(char_name)
+                        # === FIM LOAD CONFIG ===
+
                         if full_light_enabled:
                             time.sleep(1)
                             apply_full_light(True)
-
-                        # Atualiza GUI baseado na vocação configurada
-                        if main_window:
-                            app.after(0, main_window.update_stats_visibility)
 
                     state.is_connected = True
                     was_connected_once = True
@@ -1621,16 +1816,6 @@ def start_alarm_thread():
             state.trigger_alarm(is_gm=True, reason="GM")
         # Se val=False, o set_safe(True) já vai limpar via clear_alarm
 
-    def do_logout():
-        """Callback para executar logout via packet."""
-        if pm is not None:
-            try:
-                pkt = packet.PacketManager(pm, base_addr)
-                pkt.quit_game()
-                log("🚪 LOGOUT: Alarme acionado - deslogando...")
-            except Exception as e:
-                print(f"Erro logout: {e}")
-
     def update_alarm_status(status):
         """Callback para atualizar status do alarme na GUI."""
         MODULE_STATUS['alarm'] = status
@@ -1639,8 +1824,7 @@ def start_alarm_thread():
         'set_safe': set_safe,
         'set_gm': set_gm,
         'telegram': send_telegram,
-        'log': log,
-        'logout': do_logout
+        'log': log
     }
 
     # Config Provider
@@ -3644,6 +3828,9 @@ def update_minimap_loop():
 # ==============================================================================
 
 if __name__ == "__main__":
+    # Seleciona o processo Tibia (mostra diálogo se múltiplos clientes abertos)
+    select_tibia_process()
+
     # Cria a janela principal usando MainWindow
     # Nota: Atribuições dentro de `if __name__ == "__main__"` são
     # automaticamente module-level, não precisam de `global`.

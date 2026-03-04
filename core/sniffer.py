@@ -210,7 +210,8 @@ class PacketSniffer(threading.Thread):
                              SpeakType.MONSTER_SAY, SpeakType.MONSTER_YELL):
                 position = reader.read_position()
 
-            elif speak_type in (SpeakType.CHANNEL_Y, SpeakType.CHANNEL_R1):
+            elif speak_type in (SpeakType.CHANNEL_Y, SpeakType.CHANNEL_R1, 0x05):
+                # 0x05 = PRIVATE_TO/Trade Channel - tambem tem channel_id
                 channel_id = reader.read_u16()
 
             # Mensagem

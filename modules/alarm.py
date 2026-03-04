@@ -110,7 +110,6 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
     set_gm_state = callbacks.get('set_gm', lambda _: None)
     send_telegram = callbacks.get('telegram', lambda _: None)
     log_msg = callbacks.get('log', print)
-    logout_callback = callbacks.get('logout', lambda: None)
 
     # Helper para atualizar status do alarme na GUI
     def set_status(msg):
@@ -195,7 +194,6 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
         chat_enabled = get_cfg('chat_enabled', False)
         chat_gm_enabled = get_cfg('chat_gm', True)
         debug_mode = get_cfg('debug_mode', False)
-        logout_enabled = get_cfg('logout_enabled', False)
 
         try:
             current_name = get_my_name(pm, base_addr)
@@ -615,10 +613,6 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
                 set_safe_state(False)
                 if final_is_gm:
                     set_gm_state(True)
-                else:
-                    # Alarme não-GM: executa logout imediato se habilitado
-                    if logout_enabled:
-                        logout_callback()
 
                 # Se detectou visualmente (chat já logou o dele)
                 if visual_danger:
