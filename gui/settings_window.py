@@ -549,6 +549,28 @@ class SettingsWindow:
         ctk.CTkLabel(tab, text="↳ Pausa todos os módulos (exceto Alarme) com 50% variância.",
                     **self.UI['HINT']).pack(anchor="w", padx=15)
 
+        # === AUTO-FOOD TIMER ===
+        ctk.CTkLabel(tab, text="Auto-Food Timer", **self.UI['H1']).pack(anchor="w", padx=10, pady=(8, 2))
+
+        f_autofood = ctk.CTkFrame(tab, fg_color="transparent")
+        f_autofood.pack(fill="x", padx=10, pady=2)
+
+        switch_auto_food = ctk.CTkSwitch(f_autofood, text="Ativar",
+                                          progress_color="#E67E22", **self.UI['BODY'])
+        switch_auto_food.pack(side="left", padx=(5, 10))
+        if settings.get('auto_food_timer_enabled', False):
+            switch_auto_food.select()
+
+        ctk.CTkLabel(f_autofood, text="A cada:", **self.UI['BODY']).pack(side="left")
+        entry_auto_food_minutes = ctk.CTkEntry(f_autofood, width=40, height=24,
+                                                font=self.UI['BODY']['font'], justify="center")
+        entry_auto_food_minutes.pack(side="left", padx=2)
+        entry_auto_food_minutes.insert(0, str(settings.get('auto_food_timer_minutes', 5)))
+        ctk.CTkLabel(f_autofood, text="min", **self.UI['BODY']).pack(side="left")
+
+        ctk.CTkLabel(tab, text="↳ Come automaticamente com 30% variância gaussiana.",
+                    **self.UI['HINT']).pack(anchor="w", padx=15)
+
         # Botão Salvar
         def save_geral():
             s = self.cb.get_bot_settings()
@@ -568,6 +590,12 @@ class SettingsWindow:
                 pass
             try:
                 s['afk_pause_duration'] = max(5, int(entry_afk_duration.get()))
+            except:
+                pass
+            # Auto-Food Timer
+            s['auto_food_timer_enabled'] = bool(switch_auto_food.get())
+            try:
+                s['auto_food_timer_minutes'] = max(1, int(entry_auto_food_minutes.get()))
             except:
                 pass
             self.cb.update_stats_visibility()

@@ -268,6 +268,10 @@ BOT_SETTINGS = {
     "afk_pause_duration": 30,       # Duração total do AFK (segundos) - mínimo 5s
     "afk_pause_interval": 10,       # Intervalo máximo entre pausas (minutos) - mínimo 5min
 
+    # Auto-Food Timer
+    "auto_food_timer_enabled": False,   # Comer a cada X minutos
+    "auto_food_timer_minutes": 5,       # Intervalo em minutos
+
     # Auto-Explore
     "auto_explore_radius": 50,      # Raio de busca de spawns (tiles)
     "auto_explore_cooldown": 120,   # Cooldown de revisita (segundos)
@@ -2421,6 +2425,59 @@ def auto_eater_thread():
             print(f"Erro Eater Thread: {e}")
             time.sleep(2)
 
+def auto_food_timer_thread():
+    """Thread para comer automaticamente a cada X minutos com variância gaussiana."""
+    import random
+    from modules.eater import attempt_eat
+
+    next_eat_time = 0.0
+
+    def schedule_next_eat():
+        """Calcula próximo horário usando gauss_wait logic (30% variância)."""
+        nonlocal next_eat_time
+        interval_minutes = BOT_SETTINGS.get('auto_food_timer_minutes', 5)
+        interval_seconds = interval_minutes * 60
+
+        # Gaussiana com 30% de variância (mesma lógica do gauss_wait em timing.py)
+        sigma = interval_seconds * 0.30
+        actual_interval = max(30, random.gauss(interval_seconds, sigma))
+
+        next_eat_time = time.time() + actual_interval
+        log(f"[Auto-Food] Próxima comida em {actual_interval/60:.1f} minutos")
+
+    while state.is_running:
+        try:
+            if not BOT_SETTINGS.get('auto_food_timer_enabled', False):
+                time.sleep(2)
+                next_eat_time = 0.0
+                continue
+
+            if not state.is_connected:
+                time.sleep(1)
+                continue
+
+            # Agendar se necessário
+            if next_eat_time == 0.0:
+                schedule_next_eat()
+                continue
+
+            # Verificar se é hora de comer
+            if time.time() < next_eat_time:
+                time.sleep(1)
+                continue
+
+            # Tentar comer
+            result = attempt_eat(pm, base_addr, hwnd)
+            if result:
+                log(f"[Auto-Food] Comeu com sucesso")
+
+            # Agendar próxima
+            schedule_next_eat()
+
+        except Exception as e:
+            log(f"[Auto-Food] Erro: {e}")
+            time.sleep(5)
+
 def auto_stacker_thread():
     """Thread for automatic item stacking using the new StackerModule (action scheduler)."""
     from modules.stacker import get_stacker_module, USE_ACTION_SCHEDULER
@@ -3965,6 +4022,7 @@ if __name__ == "__main__":
     threading.Thread(target=regen_monitor_loop, daemon=True, name="RegenMonitor").start()
     threading.Thread(target=auto_fisher_thread, daemon=True, name="AutoFisher").start()
     threading.Thread(target=auto_eater_thread, daemon=True, name="AutoEater").start()
+    threading.Thread(target=auto_food_timer_thread, daemon=True, name="AutoFoodTimer").start()
     threading.Thread(target=auto_stacker_thread, daemon=True, name="AutoStacker").start()
     threading.Thread(target=global_afk_pause_thread, daemon=True, name="AFK-Global").start()
     threading.Thread(target=runemaker_thread, daemon=True, name="Runemaker").start()
