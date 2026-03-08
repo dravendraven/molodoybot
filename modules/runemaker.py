@@ -16,8 +16,17 @@ from core.input_core import press_hotkey
 from database import foods_db
 from core.config_utils import make_config_getter
 from core.bot_state import state
-from core.player_core import wait_until_stopped
+from core.player_core import wait_until_stopped, get_player_mana
 from database.runes_db import BLANK_RUNE_ID, is_conjured_rune
+from utils.timing import gauss_wait
+
+# === DELAYS DO CICLO (segundos, base para gauss_wait) ===
+DELAY_VARIANCE_PCT = 25   # Variação gaussiana (50 = ±50% desvio padrão)
+DELAY_UNEQUIP = 0.6       # Após desequipar item da mão
+DELAY_EQUIP_BLANK = 0.6   # Após equipar blank rune
+DELAY_CAST = 0.6          # Após castar spell
+DELAY_RETURN_RUNE = 0.6   # Após devolver runa ao container
+DELAY_REEQUIP = 0.6       # Após re-equipar item original
 
 # Usar constantes do config.py ao invés de redefinir
 # SLOT_RIGHT e SLOT_LEFT removidos (usar HandSlot do config)
@@ -520,6 +529,22 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                         remaining = LOGOUT_NO_BLANKS_DELAY - elapsed
 
                         if remaining <= 0:
+                            # Verificar se deve esperar mana full
+                            wait_mana_full = get_cfg('logout_wait_mana_full', False)
+                            print(f"[DEBUG LOGOUT] Timer expirou! wait_mana_full={wait_mana_full}")
+
+                            if wait_mana_full:
+                                mana, mana_max, mana_pct = get_player_mana(pm, base_addr)
+                                print(f"[DEBUG LOGOUT] Mana check: {mana}/{mana_max} ({mana_pct:.1f}%)")
+                                if mana < mana_max:
+                                    # Mana não está cheia, aguardar
+                                    print(f"[DEBUG LOGOUT] Mana não está full, aguardando...")
+                                    set_status(f"sem blanks - aguardando mana ({int(mana_pct)}%)")
+                                    time.sleep(0.5)
+                                    continue
+                                else:
+                                    print(f"[DEBUG LOGOUT] Mana FULL! Prosseguindo com logout...")
+
                             log_msg("🚪 LOGOUT: Sem blanks e parado por 15s - deslogando...")
                             set_status("deslogando...")
                             try:
@@ -610,7 +635,7 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                                     unequipped_items[slot_enum] = unequip_result
                                     log_msg(f"Desarmou mao {slot_enum}: Item {unequip_result['item_id']} -> Container {unequip_result['container_idx']}")
 
-                                time.sleep(1.2)
+                                gauss_wait(DELAY_UNEQUIP, DELAY_VARIANCE_PCT)
 
                             if phase1_failed:
                                 log_msg("PHASE 1 interrompida por seguranca")
@@ -641,7 +666,10 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                                     if not blank_data:
                                         log_msg(f"Sem blank runes para equipar na mao {slot_enum}")
                                         # Iniciar timer de logout se feature está habilitada
-                                        if get_cfg('logout_on_no_blanks', False) and logout_no_blanks_start is None:
+                                        logout_enabled = get_cfg('logout_on_no_blanks', False)
+                                        wait_mana = get_cfg('logout_wait_mana_full', False)
+                                        print(f"[DEBUG BLANKS] logout_on_no_blanks={logout_enabled}, logout_wait_mana_full={wait_mana}")
+                                        if logout_enabled and logout_no_blanks_start is None:
                                             logout_no_blanks_start = time.time()
                                             logout_no_blanks_pos = get_player_pos(pm, base_addr)
                                             log_msg(f"⚠️ Sem blanks! Logout em {LOGOUT_NO_BLANKS_DELAY}s se continuar parado...")
@@ -681,7 +709,7 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                                         "unequip_data": unequip_data  # Guarda info completa
                                     })
                                     log_msg(f"Blank equipada na mao {slot_enum}")
-                                    time.sleep(0.8)
+                                    gauss_wait(DELAY_EQUIP_BLANK, DELAY_VARIANCE_PCT)
 
                                 if phase2_failed:
                                     log_msg("PHASE 2 falhou, tentando restaurar itens...")
@@ -696,7 +724,7 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                                     # PHASE 3: Cast spell
                                     log_msg(f"Pressionando {hotkey_str}...")
                                     press_hotkey(hwnd, vk_hotkey)
-                                    time.sleep(1.2)
+                                    gauss_wait(DELAY_CAST, DELAY_VARIANCE_PCT)
 
                                     # Verifica se runas foram conjuradas (informativo)
                                     for info in active_runes:
@@ -739,7 +767,7 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                                         else:
                                             log_msg(f"Falha ao devolver runa da mao {slot_enum}")
 
-                                        time.sleep(0.5)
+                                        gauss_wait(DELAY_RETURN_RUNE, DELAY_VARIANCE_PCT)
 
                                 # Se não é o último ciclo, delay humanizado antes do próximo
                                 if not is_last_cycle:
@@ -762,7 +790,7 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                                             log_msg(f"Item {data['item_id']} re-equipado com sucesso!")
                                         else:
                                             log_msg(f"Falha ao re-equipar {data['item_id']}")
-                                        time.sleep(0.5)
+                                        gauss_wait(DELAY_REEQUIP, DELAY_VARIANCE_PCT)
 
                                 log_msg(f"Ciclo completo: {rune_count} runa(s) conjurada(s).")
                                 # Resetar timer de logout (blanks foram encontradas)

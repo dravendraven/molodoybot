@@ -39,7 +39,10 @@ class BotState:
     
     def __init__(self):
         self._lock = threading.Lock()
-        
+
+        # ===== Estado do Processo =====
+        self._process_alive: bool = True  # False quando Tibia.exe fecha/crasha
+
         # ===== Estado de Conexão =====
         self._is_connected: bool = False
         
@@ -102,15 +105,42 @@ class BotState:
         self._suspicious_max_size: int = 200  # Limite máximo de entradas
     
     # =========================================================================
+    # ESTADO DO PROCESSO (Proteção contra Access Violation)
+    # =========================================================================
+
+    @property
+    def process_alive(self) -> bool:
+        """Retorna True se o processo Tibia.exe está acessível."""
+        with self._lock:
+            return self._process_alive
+
+    def set_process_dead(self):
+        """
+        Marca processo como morto. Todas threads devem parar leituras de memória.
+        Chamado quando detecta access violation ou processo fechado.
+        """
+        with self._lock:
+            self._process_alive = False
+            self._is_connected = False
+
+    def set_process_alive(self):
+        """
+        Marca processo como vivo.
+        Chamado ao conectar com sucesso ao Tibia.exe.
+        """
+        with self._lock:
+            self._process_alive = True
+
+    # =========================================================================
     # CONEXÃO
     # =========================================================================
-    
+
     @property
     def is_connected(self) -> bool:
         """Retorna True se conectado ao cliente Tibia."""
         with self._lock:
             return self._is_connected
-    
+
     @is_connected.setter
     def is_connected(self, value: bool):
         with self._lock:
@@ -750,6 +780,7 @@ class BotState:
         Útil ao desconectar ou reiniciar.
         """
         with self._lock:
+            self._process_alive = True
             self._is_connected = False
             self._is_safe_to_bot = True
             self._is_gm_detected = False

@@ -216,13 +216,21 @@ class GameState:
             T3 (2Hz):   Stats — Skills, Equipment, Containers (every 10 ticks)
         """
         while self._running:
+            # Verifica se processo ainda está vivo (operação Python, não Pymem)
+            if not legacy_state.process_alive:
+                time.sleep(1)
+                continue
+
             start_time = time.time()
 
             try:
                 self._update_state()
-            except Exception:
-                # Don't crash on read errors
-                pass
+            except Exception as e:
+                # Detecta access violation e sinaliza morte do processo
+                error_str = str(e).lower()
+                if "access" in error_str or "memory" in error_str or "process" in error_str:
+                    legacy_state.set_process_dead()
+                # Continua rodando para outros erros (desconexão normal, etc.)
 
             # Track performance
             self._last_update_time = time.time()

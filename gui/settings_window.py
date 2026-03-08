@@ -509,7 +509,7 @@ class SettingsWindow:
                                            command=lambda: self.cb.on_console_log_toggle(bool(switch_console_log.get())),
                                            progress_color="#3498DB", **self.UI['BODY'])
         switch_console_log.grid(row=1, column=0, sticky="w", pady=1)
-        if settings.get('console_log_visible', True):
+        if settings.get('console_log_visible', False):
             switch_console_log.select()
 
         switch_logging = ctk.CTkSwitch(f_opts_grid, text="Logging",
@@ -1222,13 +1222,23 @@ class SettingsWindow:
         if settings['mana_train']:
             switch_train.select()
 
-        switch_logout_blanks = ctk.CTkSwitch(frame_extras, text="Logout se sem Blanks", width=60, height=20,
+        # Frame horizontal para logout options
+        f_logout_row = ctk.CTkFrame(frame_extras, fg_color="transparent")
+        f_logout_row.pack(anchor="w", padx=10, pady=2)
+
+        switch_logout_blanks = ctk.CTkSwitch(f_logout_row, text="Logout se sem Blanks", width=60, height=20,
                                              font=self.UI['BODY']['font'])
-        switch_logout_blanks.pack(anchor="w", padx=10, pady=2)
+        switch_logout_blanks.pack(side="left")
         if settings.get('logout_on_no_blanks', False):
             switch_logout_blanks.select()
 
-        ctk.CTkLabel(frame_extras, text="↳ Desloga após 15s parado sem blanks",
+        switch_wait_mana_full = ctk.CTkSwitch(f_logout_row, text="Esperar Mana Full", width=60, height=20,
+                                              font=self.UI['BODY']['font'])
+        switch_wait_mana_full.pack(side="left", padx=(15, 0))
+        if settings.get('logout_wait_mana_full', False):
+            switch_wait_mana_full.select()
+
+        ctk.CTkLabel(frame_extras, text="↳ Desloga após 15s sem blanks (mana full: só com 100%)",
                     **self.UI['HINT']).pack(anchor="w", padx=45)
 
         def save_rune():
@@ -1247,6 +1257,7 @@ class SettingsWindow:
                 s['auto_eat'] = bool(switch_eat.get())
                 s['mana_train'] = bool(switch_train.get())
                 s['logout_on_no_blanks'] = bool(switch_logout_blanks.get())
+                s['logout_wait_mana_full'] = bool(switch_wait_mana_full.get())
                 self.cb.save_config_file()
                 self.cb.log("🔮 Rune Config salva!")
             except:

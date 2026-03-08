@@ -343,7 +343,7 @@ if os.path.exists("bot_config.json"):
 
             # Sincroniza console_log_visible com valor padrão se não existir
             if "console_log_visible" not in BOT_SETTINGS:
-                BOT_SETTINGS["console_log_visible"] = True
+                BOT_SETTINGS["console_log_visible"] = False
 
             # Inicializa logging_enabled se não existir
             if "logging_enabled" not in BOT_SETTINGS:
@@ -559,6 +559,27 @@ def load_character_config(char_name: str) -> bool:
         if main_window:
             app.after(0, main_window.update_stats_visibility)
 
+        # Sincroniza console_log_visible com a UI
+        if main_window:
+            console_visible = BOT_SETTINGS.get('console_log_visible', False)
+            def sync_console_log():
+                global log_visible
+                log_visible = console_visible
+                main_window.log_visible = console_visible
+                if console_visible:
+                    if main_window.frame_status_panel:
+                        main_window.frame_status_panel.pack_forget()
+                    if main_window.txt_log:
+                        main_window.txt_log.pack(side="bottom", fill="x", padx=5, pady=5, expand=True)
+                else:
+                    if main_window.txt_log:
+                        main_window.txt_log.pack_forget()
+                    if main_window.frame_status_panel:
+                        main_window.frame_status_panel.pack(side="bottom", fill="x", padx=8, pady=3)
+                        main_window.app.after(20, main_window.update_status_panel)
+                main_window.auto_resize_window()
+            app.after(0, sync_console_log)
+
         log(f"[CONFIG] Configuração carregada para {char_name}")
         return True
 
@@ -592,7 +613,7 @@ def register_food_eaten(item_id):
 def select_tibia_process():
     """
     Mostra diálogo para selecionar qual cliente Tibia usar e configurar player name.
-    Sempre mostra para permitir configuração do nome do jogador (Mas Vis).
+    Bypassa o diálogo se apenas 1 cliente estiver aberto.
     """
     global selected_pid
 
@@ -608,6 +629,12 @@ def select_tibia_process():
                 })
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             pass
+
+    # Se Tibia (não Mas Vis) e 0 ou 1 cliente, bypassa o diálogo
+    # Mas Vis sempre mostra para configurar o nome do personagem
+    if CLIENT_TYPE != "MAS_VIS" and len(tibia_processes) <= 1:
+        selected_pid = tibia_processes[0]['pid'] if tibia_processes else None
+        return selected_pid
 
     # Ordena por tempo de criação (mais antigo primeiro)
     tibia_processes.sort(key=lambda x: x['create_time'])
@@ -1375,6 +1402,7 @@ def connection_watchdog():
                     else:
                         pm = pymem.Pymem(PROCESS_NAME)
                     base_addr = pymem.process.module_from_name(pm.process_handle, PROCESS_NAME).lpBaseOfDll
+                    state.set_process_alive()  # Marca processo como vivo
                     log(f"✅ Processo do Tibia detectado (PID: {pm.process_id}).")
 
                     # Initialize game state (Eyes - memory scanner at 20Hz)
@@ -1412,7 +1440,7 @@ def connection_watchdog():
                         print(f"Aviso: Falha ao inicializar Action Scheduler: {e}")
                 except:
                     # Depois:
-                
+                    state.set_process_dead()  # Sinaliza para todas threads pararem leituras
                     if was_connected_once:
                         print("Tibia fechou. Encerrando bot...")
                         clear_player_name_cache()
@@ -1455,8 +1483,10 @@ def connection_watchdog():
 
                     state.is_connected = True
                     was_connected_once = True
-                    # Mostra nome do personagem no status
+                    # Mostra nome do personagem no status (truncado se muito longo)
                     char_display = get_player_name() or "???"
+                    if len(char_display) > 12:
+                        char_display = char_display[:11] + "…"
                     lbl_connection.configure(text=f"🟢 {char_display}", text_color="#00FF00")
                 else:
                     state.is_connected = False
@@ -1465,6 +1495,7 @@ def connection_watchdog():
                     
             except Exception:
                 pm = None
+                state.set_process_dead()  # Sinaliza para todas threads pararem leituras
                 state.is_connected = False
                 if was_connected_once:
                     os._exit(0)
@@ -2566,6 +2597,7 @@ def runemaker_thread():
         'human_min': BOT_SETTINGS.get('rune_human_min', 0),
         'human_max': BOT_SETTINGS.get('rune_human_max', 0),
         'logout_on_no_blanks': BOT_SETTINGS.get('logout_on_no_blanks', False),
+        'logout_wait_mana_full': BOT_SETTINGS.get('logout_wait_mana_full', False),
 
         'can_perform_actions': (
             # Se movimento ligado E alarme NÃO foi GM -> Ignora timer (True)

@@ -724,6 +724,11 @@ def monitor_hand_loop(pm, base_addr, check_running, get_enabled, get_max_spears,
             _log("[Spear Monitor] Thread encerrada")
             return
 
+        # Verifica se processo ainda está vivo (operação Python, não Pymem)
+        if not state.process_alive:
+            time.sleep(1)
+            continue
+
         if not get_enabled():
             time.sleep(1)
             continue
@@ -796,6 +801,11 @@ def action_loop(pm, base_addr, check_running, get_enabled, shared_state):
         if check_running and not check_running():
             _log("[Spear Action] Thread encerrada")
             return
+
+        # Verifica se processo ainda está vivo (operação Python, não Pymem)
+        if not state.process_alive:
+            time.sleep(1)
+            continue
 
         if not get_enabled():
             time.sleep(1)

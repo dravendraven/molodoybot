@@ -207,68 +207,65 @@ class MainWindow:
         return self.app
 
     def _create_header(self):
-        """Cria o header com status de conexão e botões."""
-        # === LINHA 1: Status de Conexão ===
-        frame_status = ctk.CTkFrame(self.main_frame, fg_color="transparent")
-        frame_status.pack(pady=(8, 2), fill="x", padx=10)
+        """Cria o header com status de conexão e botões em uma linha."""
+        frame_header = ctk.CTkFrame(self.main_frame, fg_color="transparent")
+        frame_header.pack(pady=(5, 3), fill="x", padx=10)
 
+        # Connection status (esquerda, largura limitada para não empurrar botões)
         self.lbl_connection = ctk.CTkLabel(
-            frame_status, text="🔌 Procurando...",
+            frame_header, text="🔌 Procurando...",
             font=("Verdana", 10),
-            text_color="#FFA500"
+            text_color="#FFA500",
+            width=70, anchor="w"
         )
         self.lbl_connection.pack(side="left")
 
-        # === LINHA 2: Botões ===
-        frame_buttons = ctk.CTkFrame(self.main_frame, fg_color="transparent")
-        frame_buttons.pack(pady=(0, 5), fill="x", padx=10)
-
-        # Settings Button
-        self.btn_settings = ctk.CTkButton(
-            frame_buttons, text="⚙️ Config.",
-            command=self.callbacks.open_settings,
-            width=70, height=28,
-            fg_color="#303030", hover_color="#505050",
-            font=("Verdana", 10, "bold")
-        )
-        self.btn_settings.pack(side="left")
-
-        # Pause/Resume Button
-        self.btn_pause = ctk.CTkButton(
-            frame_buttons, text="⏸️ Pausar",
-            command=self.toggle_pause,
-            width=65, height=28,
-            fg_color="#303030", hover_color="#505050",
-            font=("Verdana", 10)
-        )
-        self.btn_pause.pack(side="left", padx=5)
-
-        # Reload Button (opcional)
-        if self.callbacks.reload_button_enabled:
-            self.btn_reload = ctk.CTkButton(
-                frame_buttons, text="🔄",
-                command=self.callbacks.on_reload,
-                width=30, height=28,
-                fg_color="#303030", hover_color="#505050",
-                font=("Verdana", 10)
-            )
-            self.btn_reload.pack(side="left", padx=2)
-
-        # X-Ray Button
+        # X-Ray Button (direita - primeiro para ficar mais à direita)
         self.btn_xray = ctk.CTkButton(
-            frame_buttons, text="Raio-X",
+            frame_header, text="Raio-X",
             command=self.callbacks.toggle_xray,
-            width=50, height=28, fg_color="#303030",
+            width=50, height=25, fg_color="#303030",
             font=("Verdana", 10)
         )
         self.btn_xray.pack(side="right")
+
+        # Pause/Resume Button (direita)
+        self.btn_pause = ctk.CTkButton(
+            frame_header, text="⏸️ Pausar",
+            command=self.toggle_pause,
+            width=60, height=25,
+            fg_color="#303030", hover_color="#505050",
+            font=("Verdana", 10)
+        )
+        self.btn_pause.pack(side="right", padx=3)
+
+        # Settings Button (direita)
+        self.btn_settings = ctk.CTkButton(
+            frame_header, text="⚙️ Config.",
+            command=self.callbacks.open_settings,
+            width=60, height=25,
+            fg_color="#303030", hover_color="#505050",
+            font=("Verdana", 10, "bold")
+        )
+        self.btn_settings.pack(side="right")
+
+        # Reload Button (opcional, direita)
+        if self.callbacks.reload_button_enabled:
+            self.btn_reload = ctk.CTkButton(
+                frame_header, text="🔄",
+                command=self.callbacks.on_reload,
+                width=30, height=25,
+                fg_color="#303030", hover_color="#505050",
+                font=("Verdana", 10)
+            )
+            self.btn_reload.pack(side="right", padx=2)
 
     def _create_controls(self):
         """Cria os switches de controle dos módulos."""
         frame_controls = ctk.CTkFrame(
             self.main_frame, fg_color="#303030", corner_radius=6
         )
-        frame_controls.pack(padx=10, pady=5, fill="x")
+        frame_controls.pack(padx=10, pady=3, fill="x")
         frame_controls.grid_columnconfigure(0, weight=1)
         frame_controls.grid_columnconfigure(1, weight=1)
 
@@ -277,21 +274,21 @@ class MainWindow:
             frame_controls, text="Trainer",
             progress_color="#00C000", font=("Verdana", 11)
         )
-        self.switch_trainer.grid(row=0, column=0, sticky="w", padx=(20, 0), pady=5)
+        self.switch_trainer.grid(row=0, column=0, sticky="w", padx=(20, 0), pady=2)
 
         # Auto Loot
         self.switch_loot = ctk.CTkSwitch(
             frame_controls, text="Auto Loot",
             progress_color="#00C000", font=("Verdana", 11)
         )
-        self.switch_loot.grid(row=1, column=0, sticky="w", padx=(20, 0), pady=5)
+        self.switch_loot.grid(row=1, column=0, sticky="w", padx=(20, 0), pady=2)
 
         # Alarm
         self.switch_alarm = ctk.CTkSwitch(
             frame_controls, text="Alarm",
             progress_color="#00C000", font=("Verdana", 11)
         )
-        self.switch_alarm.grid(row=0, column=1, sticky="w", padx=(10, 0), pady=5)
+        self.switch_alarm.grid(row=0, column=1, sticky="w", padx=(10, 0), pady=2)
 
         # Fisher
         self.switch_fisher = ctk.CTkSwitch(
@@ -299,14 +296,14 @@ class MainWindow:
             command=self.callbacks.on_fisher_toggle,
             progress_color="#00C000", font=("Verdana", 11)
         )
-        self.switch_fisher.grid(row=1, column=1, sticky="w", padx=(10, 0), pady=5)
+        self.switch_fisher.grid(row=1, column=1, sticky="w", padx=(10, 0), pady=2)
 
         # Runemaker
         self.switch_runemaker = ctk.CTkSwitch(
             frame_controls, text="Runemaker",
             progress_color="#A54EF9", font=("Verdana", 11)
         )
-        self.switch_runemaker.grid(row=2, column=0, sticky="w", padx=(20, 0), pady=5)
+        self.switch_runemaker.grid(row=2, column=0, sticky="w", padx=(20, 0), pady=2)
 
         # Cavebot
         self.switch_cavebot_var = ctk.IntVar(value=0)
@@ -316,14 +313,14 @@ class MainWindow:
             command=self.callbacks.toggle_cavebot,
             progress_color="#2CC985", font=("Verdana", 11)
         )
-        self.switch_cavebot.grid(row=2, column=1, sticky="w", padx=(10, 0), pady=5)
+        self.switch_cavebot.grid(row=2, column=1, sticky="w", padx=(10, 0), pady=2)
 
         # Healer
         self.switch_healer = ctk.CTkSwitch(
             frame_controls, text="Healer",
             progress_color="#FF6B6B", font=("Verdana", 11)
         )
-        self.switch_healer.grid(row=3, column=0, sticky="w", padx=(20, 0), pady=5)
+        self.switch_healer.grid(row=3, column=0, sticky="w", padx=(20, 0), pady=2)
 
     def _create_utility_toggles(self):
         """Cria a linha de toggles utilitários (Tocha, Light, Spear)."""
@@ -332,7 +329,7 @@ class MainWindow:
         frame_utils = ctk.CTkFrame(
             self.main_frame, fg_color="#252525", corner_radius=6
         )
-        frame_utils.pack(padx=10, pady=(0, 5), fill="x")
+        frame_utils.pack(padx=10, pady=(0, 3), fill="x")
         frame_utils.grid_columnconfigure(0, weight=1)
         frame_utils.grid_columnconfigure(1, weight=1)
         frame_utils.grid_columnconfigure(2, weight=0)
@@ -343,7 +340,7 @@ class MainWindow:
             command=lambda: self.callbacks.on_auto_torch_toggle(bool(self.switch_torch.get())),
             progress_color="#F39C12", font=("Verdana", 10)
         )
-        self.switch_torch.grid(row=0, column=0, sticky="w", padx=(10, 0), pady=4)
+        self.switch_torch.grid(row=0, column=0, sticky="w", padx=(10, 0), pady=2)
         if settings.get('auto_torch_enabled', False):
             self.switch_torch.select()
 
@@ -353,13 +350,13 @@ class MainWindow:
             command=lambda: self.callbacks.on_light_toggle(bool(self.switch_light.get())),
             progress_color="#FFA500", font=("Verdana", 10)
         )
-        self.switch_light.grid(row=0, column=1, sticky="w", padx=(5, 0), pady=4)
+        self.switch_light.grid(row=0, column=1, sticky="w", padx=(5, 0), pady=2)
         if settings.get('full_light_enabled', False):
             self.switch_light.select()
 
         # Spear Picker + Count
         frame_spear = ctk.CTkFrame(frame_utils, fg_color="transparent")
-        frame_spear.grid(row=0, column=2, sticky="w", padx=(0, 0), pady=4)
+        frame_spear.grid(row=0, column=2, sticky="w", padx=(0, 0), pady=2)
 
         self.switch_spear = ctk.CTkSwitch(
             frame_spear, text="Spear", width=35,
@@ -396,11 +393,11 @@ class MainWindow:
             self.main_frame, fg_color="transparent",
             border_color="#303030", border_width=1, corner_radius=6
         )
-        self.frame_stats.pack(padx=10, pady=5, fill="x")
+        self.frame_stats.pack(padx=10, pady=3, fill="x")
 
         # === SUMMARY (sempre visível - 1 linha compacta) ===
         self.stats_summary_frame = ctk.CTkFrame(self.frame_stats, fg_color="transparent")
-        self.stats_summary_frame.pack(fill="x", padx=10, pady=4)
+        self.stats_summary_frame.pack(fill="x", padx=10, pady=2)
 
         # Botão expand/collapse (PRIMEIRO para garantir espaço)
         self.btn_stats_toggle = ctk.CTkButton(
@@ -658,7 +655,7 @@ class MainWindow:
     def _create_log(self):
         """Cria a textbox de log."""
         self.txt_log = ctk.CTkTextbox(
-            self.main_frame, height=120,
+            self.main_frame, height=80,
             font=("Consolas", 11),
             fg_color="#151515", text_color="#00FF00",
             border_width=1
@@ -876,7 +873,7 @@ class MainWindow:
             # Lazy load do visualizer na primeira vez
             if self.minimap_visualizer is None:
                 self._init_minimap_visualizer()
-            self.minimap_container.pack(fill="x", padx=10, pady=5)
+            self.minimap_container.pack(fill="x", padx=10, pady=3)
             self.app.after(100, self.auto_resize_window)
 
     def hide_minimap_panel(self):

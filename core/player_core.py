@@ -18,6 +18,8 @@ from config import (
     MAX_CREATURES,
     OFFSET_PLAYER_ID,
     OFFSET_PLAYER_CAP,
+    OFFSET_PLAYER_MANA,
+    OFFSET_PLAYER_MANA_MAX,
     OFFSET_NAME,
     OFFSET_X,
     OFFSET_Y,
@@ -512,3 +514,25 @@ def get_player_cap(pm, base_addr) -> float:
         return val
     except Exception:
         return 0.0
+
+
+def get_player_mana(pm, base_addr) -> tuple:
+    """
+    Lê a mana atual e máxima do jogador.
+
+    TEMPO REAL - Este valor muda constantemente.
+
+    Args:
+        pm: Instância do Pymem conectada ao Tibia
+        base_addr: Endereço base do módulo Tibia
+
+    Returns:
+        Tupla (mana, mana_max, mana_percent) ou (0, 1, 0.0) se falhar
+    """
+    try:
+        mana = pm.read_int(base_addr + OFFSET_PLAYER_MANA)
+        mana_max = pm.read_int(base_addr + OFFSET_PLAYER_MANA_MAX)
+        mana_percent = (mana / mana_max * 100) if mana_max > 0 else 0.0
+        return (mana, mana_max, mana_percent)
+    except Exception:
+        return (0, 1, 0.0)

@@ -32,6 +32,7 @@ from collections import deque
 
 from core.action_types import Action, ActionType, ActionCategory
 from core.player_core import is_player_moving
+from core.bot_state import state as bot_state
 
 # Humanization constants (in milliseconds)
 MIN_ACTION_INTERVAL_MS = 80     # Minimum ms between any actions
@@ -260,6 +261,11 @@ class ActionScheduler:
     def _executor_loop(self):
         """Main executor loop - runs in dedicated thread."""
         while self._running:
+            # Verifica se processo ainda está vivo (operação Python, não Pymem)
+            if not bot_state.process_alive:
+                time.sleep(1)
+                continue
+
             action = self._get_next_action()
 
             if action is None:
