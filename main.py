@@ -2467,7 +2467,7 @@ def auto_food_timer_thread():
                 continue
 
             # Tentar comer
-            result = attempt_eat(pm, base_addr, hwnd)
+            result = attempt_eat(pm, base_addr, None)
             if result:
                 log(f"[Auto-Food] Comeu com sucesso")
 
