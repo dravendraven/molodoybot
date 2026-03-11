@@ -2427,42 +2427,16 @@ def auto_eater_thread():
 
 def auto_food_timer_thread():
     """Thread para comer automaticamente a cada X minutos com variância gaussiana."""
-    import random
     from modules.eater import attempt_eat
-
-    next_eat_time = 0.0
-
-    def schedule_next_eat():
-        """Calcula próximo horário usando gauss_wait logic (30% variância)."""
-        nonlocal next_eat_time
-        interval_minutes = BOT_SETTINGS.get('auto_food_timer_minutes', 5)
-        interval_seconds = interval_minutes * 60
-
-        # Gaussiana com 30% de variância (mesma lógica do gauss_wait em timing.py)
-        sigma = interval_seconds * 0.30
-        actual_interval = max(30, random.gauss(interval_seconds, sigma))
-
-        next_eat_time = time.time() + actual_interval
-        log(f"[Auto-Food] Próxima comida em {actual_interval/60:.1f} minutos")
+    from utils.timing import gauss_wait
 
     while state.is_running:
         try:
             if not BOT_SETTINGS.get('auto_food_timer_enabled', False):
                 time.sleep(2)
-                next_eat_time = 0.0
                 continue
 
             if not state.is_connected:
-                time.sleep(1)
-                continue
-
-            # Agendar se necessário
-            if next_eat_time == 0.0:
-                schedule_next_eat()
-                continue
-
-            # Verificar se é hora de comer
-            if time.time() < next_eat_time:
                 time.sleep(1)
                 continue
 
@@ -2471,8 +2445,11 @@ def auto_food_timer_thread():
             if result:
                 log(f"[Auto-Food] Comeu com sucesso")
 
-            # Agendar próxima
-            schedule_next_eat()
+            # Esperar X minutos com 30% de variância gaussiana
+            interval_minutes = BOT_SETTINGS.get('auto_food_timer_minutes', 5)
+            interval_seconds = interval_minutes * 60
+            actual_wait = gauss_wait(interval_seconds, 10)
+            log(f"[Auto-Food] Próxima comida em {actual_wait/60:.1f} minutos")
 
         except Exception as e:
             log(f"[Auto-Food] Erro: {e}")

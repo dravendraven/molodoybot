@@ -34,11 +34,17 @@ hiddenimports = [
     'packaging',
     'packaging.version',
     'psutil',
+    'pygame',
+    'pygame.mixer',
+    'numpy',
 ]
 tmp_ret = collect_all('customtkinter')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 tmp_ret = collect_all('psutil')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+
+tmp_ret = collect_all('pygame')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 a = Analysis(
@@ -52,7 +58,7 @@ a = Analysis(
     runtime_hooks=[],
     excludes=[
         # Libs externas pesadas não utilizadas
-        'numpy', 'pandas', 'scipy', 'sklearn', 'matplotlib',
+        'pandas', 'scipy', 'sklearn', 'matplotlib',
         'torch', 'tensorflow', 'keras', 'cv2',
         # Módulos de teste
         'unittest', 'pytest', 'nose',

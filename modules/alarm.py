@@ -1,5 +1,4 @@
 import time
-import winsound
 import threading
 import win32gui
 from collections import deque
@@ -10,6 +9,36 @@ from core.bot_state import state
 from core.game_state import game_state
 from core.config_utils import make_config_getter
 from core.battlelist import BattleListScanner, SpawnTracker
+
+
+_pygame_mixer_initialized = False
+
+def _beep(frequency: int, duration_ms: int) -> None:
+    """
+    Reproduz um beep via pygame (substitui winsound.Beep para funcionar em VMs/RDP sem PC Speaker).
+    Fallback silencioso se pygame não estiver disponível.
+    """
+    global _pygame_mixer_initialized
+    try:
+        import pygame
+        import numpy as np
+
+        if not _pygame_mixer_initialized:
+            pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
+            _pygame_mixer_initialized = True
+
+        sample_rate = 44100
+        n_samples = int(sample_rate * duration_ms / 1000)
+        t = np.linspace(0, duration_ms / 1000, n_samples, endpoint=False)
+        wave = (np.sin(2 * np.pi * frequency * t) * 32767).astype(np.int16)
+        # Stereo: duplica o canal para L e R
+        stereo_wave = np.column_stack((wave, wave))
+        sound = pygame.sndarray.make_sound(stereo_wave)
+        sound.play()
+        time.sleep(duration_ms / 1000)
+    except Exception as e:
+        print(f"[BEEP ERROR] {e}")
+
 
 # Definição de intervalos de alerta (Fallback caso não esteja no config)
 TELEGRAM_INTERVAL_NORMAL = 60
@@ -216,8 +245,8 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
                             if (time.time() - last_hp_alert) > 2.0:
                                 log_msg(f"🩸 ALARME DE VIDA: {pct:.1f}% (Abaixo de {hp_threshold}%)")
                                 set_status(f"🩸 HP baixo ({pct:.0f}%)")
-                                winsound.Beep(2500, 200)
-                                winsound.Beep(2500, 200)
+                                _beep(2500, 200)
+                                _beep(2500, 200)
                                 last_hp_alert = time.time()
                 except: pass
 
@@ -249,7 +278,7 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
                             # Ações de segurança
                             set_safe_state(False)
                             set_gm_state(True)
-                            winsound.Beep(2500, 1000)
+                            _beep(2500, 1000)
 
                             if (time.time() - last_telegram_time) > TELEGRAM_INTERVAL_GM:
                                 send_telegram(f"👮 MANA GM DETECTADA: +{mana_diff} mana artificial!")
@@ -287,7 +316,7 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
                         # Ações Imediatas
                         set_gm_state(True)
                         set_safe_state(False)
-                        winsound.Beep(2500, 1000)
+                        _beep(2500, 1000)
 
                         if (time.time() - last_telegram_time) > TELEGRAM_INTERVAL_GM:
                             send_telegram(f"👮 GM DETECTADO (SNIFFER): {event.speaker}: {event.message}")
@@ -300,7 +329,7 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
                         if not any(s in event.speaker for s in safe_list):
                             log_msg(f"💬 Chat: {event.speaker}: {event.message}")
                             set_status(f"💬 {event.speaker}")
-                            winsound.Beep(800, 300)
+                            _beep(800, 300)
 
                             # Telegram notification com rate limiting
                             if (time.time() - last_telegram_time) > TELEGRAM_INTERVAL_NORMAL:
@@ -333,7 +362,7 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
                                 # Ações Imediatas
                                 set_gm_state(True)
                                 set_safe_state(False)
-                                winsound.Beep(2000, 1000)
+                                _beep(2000, 1000)
 
                                 if (time.time() - last_telegram_time) > TELEGRAM_INTERVAL_GM:
                                     send_telegram(f"GM FALOU NO CHAT: {author} {msg}")
@@ -346,7 +375,7 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
                                     if not any(s in author for s in safe_list):
                                         log_msg(f"💬 Chat: {author} {msg}")
                                         set_status(f"💬 {author}")
-                                        winsound.Beep(800, 300)
+                                        _beep(800, 300)
 
                                         # Telegram notification com rate limiting
                                         if (time.time() - last_telegram_time) > TELEGRAM_INTERVAL_NORMAL:
@@ -451,7 +480,7 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
                     set_status(f"👮 Spawn suspeito: {names}")
                     set_safe_state(False)
                     set_gm_state(True)
-                    winsound.Beep(2500, 1000)
+                    _beep(2500, 1000)
 
                     if (time.time() - last_telegram_time) > TELEGRAM_INTERVAL_GM:
                         send_telegram(f"👮 SPAWN SUSPEITO (possível GM): {names}")
@@ -503,7 +532,7 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
                             log_msg(f"🚨 MOVIMENTO INESPERADO: ({ex},{ey},{ez}) → ({my_x},{my_y},{my_z}) [{dist_moved} sqm]")
 
                         set_status(f"🚨 Movimento inesperado! ({dist_moved} sqm)")
-                        winsound.Beep(1500, 500)
+                        _beep(1500, 500)
 
                         if (time.time() - last_telegram_time) > TELEGRAM_INTERVAL_NORMAL:
                             send_telegram(f"🚨 Movimento inesperado: ({ex},{ey},{ez}) → ({my_x},{my_y},{my_z})")
@@ -594,7 +623,7 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
                                 log_msg(msg)
                                 set_status(msg)
 
-                                winsound.Beep(1500, 500)
+                                _beep(1500, 500)
 
                                 telegram_enabled = get_cfg('telegram_enabled', False)
                                 if telegram_enabled and (time.time() - last_telegram_time) > TELEGRAM_INTERVAL_NORMAL:
@@ -625,7 +654,7 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
                         set_status(f"⚠️ {visual_danger_name}")
 
                     freq = 2500 if final_is_gm else 1000
-                    winsound.Beep(freq, 500)
+                    _beep(freq, 500)
                     
                     interval = TELEGRAM_INTERVAL_GM if final_is_gm else TELEGRAM_INTERVAL_NORMAL
                     
