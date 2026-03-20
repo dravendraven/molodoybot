@@ -1134,34 +1134,36 @@ class MainWindow:
     def _update_mini_hud_position(self):
         """Atualiza a posição da Mini HUD para seguir a janela do Tibia."""
         try:
-            import win32gui
-
             # Tenta pegar hwnd do Tibia via callback
             hwnd = None
             if self.callbacks.get_tibia_hwnd:
                 hwnd = self.callbacks.get_tibia_hwnd()
 
             if hwnd:
-                # Pega posição da janela do Tibia
-                rect = win32gui.GetWindowRect(hwnd)
-                tibia_x, tibia_y, tibia_right, tibia_bottom = rect
+                try:
+                    import win32gui
+                    # Pega posição da janela do Tibia
+                    rect = win32gui.GetWindowRect(hwnd)
+                    tibia_x, tibia_y = rect[0], rect[1]
 
-                # Posiciona Mini HUD no canto superior esquerdo da janela do Tibia
-                # Com pequeno offset para não cobrir a barra de título
-                new_x = tibia_x + 5
-                new_y = tibia_y + 25
+                    # Posiciona Mini HUD no canto superior esquerdo da janela do Tibia
+                    new_x = tibia_x + 5
+                    new_y = tibia_y + 25
 
-                # Atualiza posição apenas se mudou significativamente (evita flicker)
-                current_x = self.mini_hud.winfo_x()
-                current_y = self.mini_hud.winfo_y()
+                    # Atualiza posição apenas se mudou significativamente
+                    current_x = self.mini_hud.winfo_x()
+                    current_y = self.mini_hud.winfo_y()
 
-                if abs(current_x - new_x) > 5 or abs(current_y - new_y) > 5:
-                    self.mini_hud.geometry(f"+{new_x}+{new_y}")
-            else:
-                # Fallback: usa última posição da janela do bot
-                if hasattr(self, '_last_main_pos'):
-                    x, y = self._last_main_pos
-                    self.mini_hud.geometry(f"+{x}+{y}")
+                    if abs(current_x - new_x) > 5 or abs(current_y - new_y) > 5:
+                        self.mini_hud.geometry(f"+{new_x}+{new_y}")
+                    return
+                except ImportError:
+                    pass  # win32gui não disponível
+
+            # Fallback: usa última posição da janela do bot
+            if hasattr(self, '_last_main_pos'):
+                x, y = self._last_main_pos
+                self.mini_hud.geometry(f"+{x}+{y}")
 
         except Exception:
             pass  # Ignora erros silenciosamente
