@@ -53,19 +53,6 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('psutil')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
-# pywin32 - necessário para input e controle de janelas
-try:
-    tmp_ret = collect_all('win32')
-    datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-except Exception:
-    pass  # pywin32 pode não estar instalado no ambiente de build
-
-try:
-    tmp_ret = collect_all('pywin32')
-    datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-except Exception:
-    pass
-
 a = Analysis(
     ['main.py'],
     pathex=[],
@@ -122,8 +109,8 @@ exe = EXE(
     strip=False,
     upx=False,
     upx_exclude=[],
-    runtime_tmpdir=None,
-    console=False,
+    runtime_tmpdir='.',
+    console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
