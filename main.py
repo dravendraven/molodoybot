@@ -46,9 +46,14 @@ import pymem
 import pymem.process
 _update_splash("Carregando sistema...")
 import time
-import win32gui
-import win32con
-import win32api
+# win32gui é opcional (não disponível em alguns ambientes como VPS)
+try:
+    import win32gui
+    import win32con
+    import win32api
+    _has_win32 = True
+except ImportError:
+    _has_win32 = False
 _update_splash("Carregando utilitários...")
 # import requests  # Lazy import: send_telegram()
 import winsound
@@ -720,12 +725,16 @@ def find_game_window():
     Encontra a janela do cliente usando WINDOW_CLASS e WINDOW_TITLE do config.
     Suporta Tibia.exe e Mas Vis Client.exe.
     """
+    if not _has_win32:
+        return None
     hwnd = win32gui.FindWindow(WINDOW_CLASS, None)
     if not hwnd:
         hwnd = win32gui.FindWindow(None, WINDOW_TITLE)
     return hwnd
 
 def attach_window():
+    if not _has_win32:
+        return
     try:
         hwnd_tibia = find_game_window()
         hwnd_bot = win32gui.GetParent(app.winfo_id())
@@ -3370,6 +3379,10 @@ def create_main_window_callbacks() -> MainWindowCallbacks:
 
 def toggle_xray():
     global xray_window
+
+    # X-Ray requer win32gui para posicionar overlay
+    if not _has_win32:
+        return
 
     print("[XRAY] toggle_xray() chamado")
 
