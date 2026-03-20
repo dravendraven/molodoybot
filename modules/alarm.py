@@ -17,7 +17,7 @@ except ImportError:
 def _beep(freq, duration):
     """Toca beep se winsound disponível."""
     if _has_winsound:
-        _beep(freq, duration)
+        winsound.Beep(freq, duration)
 
 from collections import deque
 from config import *
