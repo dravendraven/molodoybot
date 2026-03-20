@@ -56,7 +56,11 @@ except ImportError:
     _has_win32 = False
 _update_splash("Carregando utilitários...")
 # import requests  # Lazy import: send_telegram()
-import winsound
+try:
+    import winsound
+    _has_winsound = True
+except ImportError:
+    _has_winsound = False
 import os
 import json
 import random

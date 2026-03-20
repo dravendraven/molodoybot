@@ -39,12 +39,32 @@ hiddenimports = [
     'win32con',
     'win32api',
     'pywintypes',
+    # stdlib Windows
+    'winsound',
+    # Outros
+    'dotenv',
+    'python-dotenv',
+    'pymem',
+    'pymem.process',
 ]
 tmp_ret = collect_all('customtkinter')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 tmp_ret = collect_all('psutil')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+
+# pywin32 - necessário para input e controle de janelas
+try:
+    tmp_ret = collect_all('win32')
+    datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+except Exception:
+    pass  # pywin32 pode não estar instalado no ambiente de build
+
+try:
+    tmp_ret = collect_all('pywin32')
+    datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+except Exception:
+    pass
 
 a = Analysis(
     ['main.py'],

@@ -1,7 +1,26 @@
 import time
 import random
-import win32con
-import winsound
+
+# Módulos Windows opcionais
+try:
+    import win32con
+except ImportError:
+    # Fallback: define VK codes manualmente
+    class win32con:
+        VK_F1 = 0x70; VK_F2 = 0x71; VK_F3 = 0x72; VK_F4 = 0x73
+        VK_F5 = 0x74; VK_F6 = 0x75; VK_F7 = 0x76; VK_F8 = 0x77
+        VK_F9 = 0x78; VK_F10 = 0x79; VK_F11 = 0x7A; VK_F12 = 0x7B
+
+try:
+    import winsound
+    _has_winsound = True
+except ImportError:
+    _has_winsound = False
+
+def _beep(freq, duration):
+    """Toca beep se winsound disponível."""
+    if _has_winsound:
+        _beep(freq, duration)
 
 from core.packet import (
     PacketManager, get_inventory_pos, get_container_pos
@@ -831,7 +850,7 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
                     now = time.time()
                     if (now - last_mana_alert_time) >= MANA_ALERT_COOLDOWN:
                         # Alarme sonoro
-                        winsound.Beep(1000, 800)
+                        _beep(1000, 800)
                         log_msg(f"🔔 Mana {int(mana_pct)}% (>= {alert_threshold}%)")
 
                         # Telegram (se habilitado)
