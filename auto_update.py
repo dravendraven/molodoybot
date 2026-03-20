@@ -12,7 +12,7 @@ from tkinter import ttk
 
 # ================= CONFIGURAÇÕES =================
 # Versão atual hardcoded (atualizada automaticamente pelo publicar.bat)
-CURRENT_VERSION = "8.4"
+CURRENT_VERSION = "8.5"
 
 # URLs do GitHub
 URL_VERSION = "https://raw.githubusercontent.com/dravendraven/molodoybot/refs/heads/main/version.txt"
@@ -196,7 +196,7 @@ def download_with_progress(url, dest_path, progress_callback):
                 progress_callback(percent)
 
 
-def apply_update(new_exe_path):
+def apply_update(new_exe_path, update_window=None):
     """Cria script .bat para trocar executáveis e reiniciar."""
     current_exe = os.path.abspath(sys.executable)
     new_exe = os.path.abspath(new_exe_path)
@@ -311,7 +311,7 @@ ping 127.0.0.1 -n 2 >nul
 
 :: Mata QUALQUER instância do MolodoyBot
 taskkill /IM MolodoyBot.exe /F >nul 2>&1
-ping 127.0.0.1 -n 2 >nul
+ping 127.0.0.1 -n 4 >nul
 
 :: Verifica se o arquivo novo existe
 if not exist "{new_exe}" (
@@ -349,8 +349,8 @@ del /f /q "{os.path.dirname(current_exe)}\\MolodoyBot_old.exe" >nul 2>&1
 :: Fecha splash screen
 taskkill /IM mshta.exe /F >nul 2>&1
 
-:: Espera breve antes de iniciar (1 segundo)
-ping 127.0.0.1 -n 2 >nul
+:: Espera Windows liberar handles do processo antigo (5 segundos)
+ping 127.0.0.1 -n 6 >nul
 
 :: Inicia o novo exe no diretório correto
 cd /d "{os.path.dirname(current_exe)}"
@@ -386,6 +386,14 @@ del "%~f0"
         stderr=subprocess.DEVNULL,
     )
 
+    # Fecha a janela de update antes de sair (evita que sys.exit fique preso no mainloop)
+    if update_window:
+        try:
+            update_window.root.quit()
+            update_window.root.destroy()
+        except:
+            pass
+
     # Shut down cleanly so PyInstaller bootloader can clean up _MEI folder
     sys.exit(0)
 
@@ -418,7 +426,7 @@ def run_update(local_ver, remote_ver):
                 raise Exception("Download incompleto")
 
             window.update_progress(100, "Aplicando...")
-            window.root.after(1000, lambda: apply_update(new_exe))
+            window.root.after(1000, lambda: apply_update(new_exe, window))
 
         except Exception as e:
             window.update_progress(0, f"Erro: {e}")
@@ -485,6 +493,9 @@ def check_and_update():
     # Só checa update se rodando como .exe compilado
     if not getattr(sys, 'frozen', False):
         return False
+
+    # Remove _MEI folders órfãs de processos anteriores (evita conflitos de PID reuse)
+    cleanup_stale_mei_folders()
 
     # Verifica se update acabou de acontecer (evita loop)
     marker_file = os.path.join(tempfile.gettempdir(), "molodoy_update_done.txt")

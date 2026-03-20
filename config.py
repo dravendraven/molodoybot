@@ -415,10 +415,10 @@ FATIGUE_REST_RANGE = (10, 50)
 # Porcentagem extra de delay motor quando estiver cansado (Ex: 0.3 = 30% mais lento)
 FATIGUE_MOTOR_PENALTY = 0.4
 
-BASE_REACTION_MIN = 0.25
-BASE_REACTION_MAX = 0.8
+BASE_REACTION_MIN = 0.20
+BASE_REACTION_MAX = 0.5
 TRAVEL_SPEED_MIN = 0.02
-TRAVEL_SPEED_MAX = 0.09
+TRAVEL_SPEED_MAX = 0.07
 
 # ==============================================================================
 # X-RAY

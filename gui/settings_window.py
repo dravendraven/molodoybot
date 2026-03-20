@@ -519,7 +519,14 @@ class SettingsWindow:
         if settings.get('logging_enabled', False):
             switch_logging.select()
 
-        ctk.CTkLabel(tab, text="↳ Logging: desabilitar melhora performance. Crash logs sempre ativos.",
+        switch_mini_hud = ctk.CTkSwitch(f_opts_grid, text="Mini HUD",
+                                        command=lambda: settings.__setitem__('mini_hud_enabled', bool(switch_mini_hud.get())),
+                                        progress_color="#9B59B6", **self.UI['BODY'])
+        switch_mini_hud.grid(row=2, column=0, sticky="w", pady=1)
+        if settings.get('mini_hud_enabled', True):
+            switch_mini_hud.select()
+
+        ctk.CTkLabel(tab, text="↳ Mini HUD: mostra stats flutuante ao minimizar. Logging: desabilitar melhora performance.",
                     **self.UI['HINT']).pack(anchor="w", padx=15)
 
         # === PAUSAS AFK (compacto) ===
@@ -581,6 +588,7 @@ class SettingsWindow:
             entry_client_path.configure(state="disabled")
             s['ai_chat_enabled'] = bool(switch_ai_chat.get())
             s['console_log_visible'] = bool(switch_console_log.get())
+            s['mini_hud_enabled'] = bool(switch_mini_hud.get())
             s['logging_enabled'] = bool(switch_logging.get())
             # AFK Pauses
             s['afk_pause_enabled'] = bool(switch_afk_pause.get())
@@ -1269,6 +1277,32 @@ class SettingsWindow:
         ctk.CTkLabel(frame_extras, text="↳ Desloga após 15s sem blanks (mana full: só com 100%)",
                     **self.UI['HINT']).pack(anchor="w", padx=45)
 
+        # Frame horizontal para aviso de mana
+        f_mana_alert = ctk.CTkFrame(frame_extras, fg_color="transparent")
+        f_mana_alert.pack(anchor="w", padx=10, pady=(8, 2))
+
+        switch_mana_alert = ctk.CTkSwitch(f_mana_alert, text="Aviso Mana >=", width=60, height=20,
+                                          font=self.UI['BODY']['font'])
+        switch_mana_alert.pack(side="left")
+        if settings.get('rune_mana_alert_enabled', False):
+            switch_mana_alert.select()
+
+        entry_mana_alert_pct = ctk.CTkEntry(f_mana_alert, width=40, height=20,
+                                            font=self.UI['BODY']['font'], justify="center")
+        entry_mana_alert_pct.pack(side="left", padx=2)
+        entry_mana_alert_pct.insert(0, str(settings.get('rune_mana_alert_percent', 90)))
+
+        ctk.CTkLabel(f_mana_alert, text="%", **self.UI['BODY']).pack(side="left", padx=(0, 10))
+
+        switch_mana_telegram = ctk.CTkSwitch(f_mana_alert, text="Telegram", width=60, height=20,
+                                              font=self.UI['BODY']['font'])
+        switch_mana_telegram.pack(side="left")
+        if settings.get('rune_mana_alert_telegram', False):
+            switch_mana_telegram.select()
+
+        ctk.CTkLabel(frame_extras, text="↳ Alarme sonoro + Telegram quando mana atingir % (para runas manuais)",
+                    **self.UI['HINT']).pack(anchor="w", padx=45)
+
         def save_rune():
             try:
                 s = self.cb.get_bot_settings()
@@ -1286,6 +1320,9 @@ class SettingsWindow:
                 s['mana_train'] = bool(switch_train.get())
                 s['logout_on_no_blanks'] = bool(switch_logout_blanks.get())
                 s['logout_wait_mana_full'] = bool(switch_wait_mana_full.get())
+                s['rune_mana_alert_enabled'] = bool(switch_mana_alert.get())
+                s['rune_mana_alert_percent'] = int(entry_mana_alert_pct.get())
+                s['rune_mana_alert_telegram'] = bool(switch_mana_telegram.get())
                 self.cb.save_config_file()
                 self.cb.log("🔮 Rune Config salva!")
             except:
@@ -1309,6 +1346,15 @@ class SettingsWindow:
         entry_cooldown.pack(side="left", padx=2)
         entry_cooldown.insert(0, str(settings.get('healer_cooldown_ms', 2000)))
         ctk.CTkLabel(f_cooldown, text="ms entre heals", **self.UI['BODY']).pack(side="left", padx=2)
+
+        # Reaction time inline
+        f_reaction = ctk.CTkFrame(tab, fg_color="transparent")
+        f_reaction.pack(fill="x", padx=10, pady=(3, 3))
+        ctk.CTkLabel(f_reaction, text="Reação:", **self.UI['BODY']).pack(side="left", padx=(5, 2))
+        entry_reaction = ctk.CTkEntry(f_reaction, width=60, height=24, font=self.UI['BODY']['font'], justify="center")
+        entry_reaction.pack(side="left", padx=2)
+        entry_reaction.insert(0, str(settings.get('healer_reaction_ms', 400)))
+        ctk.CTkLabel(f_reaction, text="ms (tempo de reação)", **self.UI['BODY']).pack(side="left", padx=2)
 
         # === RULES SECTION ===
         ctk.CTkLabel(tab, text="Regras de Cura", **self.UI['H1']).pack(anchor="w", padx=10, pady=(8, 3))
@@ -1444,6 +1490,7 @@ class SettingsWindow:
             try:
                 s = self.cb.get_bot_settings()
                 s['healer_cooldown_ms'] = int(entry_cooldown.get())
+                s['healer_reaction_ms'] = int(entry_reaction.get())
 
                 # Collect rules from widgets
                 parsed_rules = []

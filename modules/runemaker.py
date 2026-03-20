@@ -1,6 +1,7 @@
 import time
 import random
 import win32con
+import winsound
 
 from core.packet import (
     PacketManager, get_inventory_pos, get_container_pos
@@ -254,10 +255,11 @@ def get_target_id(pm, base_addr):
     except:
         return 0
     
-def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe_callback=None, is_gm_callback=None, log_callback=None, eat_callback=None, status_callback=None):
+def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe_callback=None, is_gm_callback=None, log_callback=None, eat_callback=None, status_callback=None, telegram_callback=None):
     """
     Loop principal do runemaker.
     status_callback: função opcional para reportar status ao Status Panel
+    telegram_callback: função opcional para enviar notificações ao Telegram
     """
     get_cfg = make_config_getter(config)
 
@@ -299,6 +301,10 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
     logout_no_blanks_start = None  # Timestamp quando detectou falta de blanks
     logout_no_blanks_pos = None    # Posição quando detectou falta de blanks
     LOGOUT_NO_BLANKS_DELAY = 15    # Segundos para aguardar antes do logout
+
+    # Controle de Aviso de Mana %
+    last_mana_alert_time = 0
+    MANA_ALERT_COOLDOWN = 60  # Segundos entre alertas (evita spam)
 
     log_msg(f"Iniciado (Modo Segurança Avançada).")
 
@@ -812,5 +818,28 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
         except Exception as e:
             print(f"Rune Error: {e}")
             state.set_runemaking(False)
+
+        # ======================================================================
+        # AVISO DE MANA % (não altera estado de safe - apenas notificação)
+        # ======================================================================
+        if get_cfg('mana_alert_enabled', False):
+            try:
+                mana, mana_max, mana_pct = get_player_mana(pm, base_addr)
+                alert_threshold = get_cfg('mana_alert_percent', 90)
+
+                if mana_pct >= alert_threshold:
+                    now = time.time()
+                    if (now - last_mana_alert_time) >= MANA_ALERT_COOLDOWN:
+                        # Alarme sonoro
+                        winsound.Beep(1000, 800)
+                        log_msg(f"🔔 Mana {int(mana_pct)}% (>= {alert_threshold}%)")
+
+                        # Telegram (se habilitado)
+                        if get_cfg('mana_alert_telegram', False) and telegram_callback:
+                            telegram_callback(f"🔔 Mana atingiu {int(mana_pct)}%!")
+
+                        last_mana_alert_time = now
+            except:
+                pass
 
         time.sleep(0.5)

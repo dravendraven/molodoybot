@@ -61,6 +61,9 @@ class MainWindowCallbacks:
     maps_directory: str = ""
     walkable_colors: List[int] = None
 
+    # === Mini HUD ===
+    get_tibia_hwnd: Callable[[], int] = None  # Retorna hwnd da janela do Tibia
+
 
 # ==============================================================================
 # MAIN WINDOW CLASS
@@ -94,6 +97,11 @@ class MainWindow:
 
         # === Stats Collapsible State ===
         self.stats_expanded = False
+
+        # === Mini HUD State ===
+        self.mini_hud = None
+        self.mini_hud_visible = False
+        self._mini_drag_data = {"x": 0, "y": 0}
 
         # === Widgets Expostos (threads precisam acessar) ===
         # Header
@@ -935,3 +943,302 @@ class MainWindow:
             }
             emoji = skill_emojis.get(skill_name, "⚔")
             self.lbl_primary_skill_emoji.configure(text=emoji)
+
+    # ==========================================================================
+    # MINI HUD MODE
+    # ==========================================================================
+
+    def _create_mini_hud(self):
+        """
+        Cria a Mini HUD - janela compacta flutuante que aparece quando o bot é minimizado.
+        Mostra stats essenciais e permite restaurar a janela principal.
+        """
+        self.mini_hud = ctk.CTkToplevel(self.app)
+        self.mini_hud.title("MolodoyBot")
+        self.mini_hud.geometry("280x58")
+        self.mini_hud.resizable(False, False)
+        self.mini_hud.configure(fg_color="#1a1a1a")
+
+        # Sempre no topo, sem taskbar
+        self.mini_hud.attributes("-topmost", True)
+        self.mini_hud.overrideredirect(True)  # Remove bordas do Windows
+
+        # Frame principal com borda
+        frame = ctk.CTkFrame(
+            self.mini_hud, fg_color="#1a1a1a",
+            border_color="#404040", border_width=1, corner_radius=8
+        )
+        frame.pack(fill="both", expand=True, padx=2, pady=2)
+
+        # Linha 1: Status + XP Rate
+        row1 = ctk.CTkFrame(frame, fg_color="transparent")
+        row1.pack(fill="x", padx=8, pady=(5, 0))
+
+        self.mini_status = ctk.CTkLabel(
+            row1, text="●", font=("Verdana", 10),
+            text_color="#00FF00", width=15
+        )
+        self.mini_status.pack(side="left")
+
+        self.mini_xp_rate = ctk.CTkLabel(
+            row1, text="-- xp/h",
+            font=("Verdana", 10, "bold"), text_color="#FFFFFF"
+        )
+        self.mini_xp_rate.pack(side="left", padx=(5, 0))
+
+        self.mini_eta = ctk.CTkLabel(
+            row1, text="",
+            font=("Verdana", 9), text_color="#888888"
+        )
+        self.mini_eta.pack(side="right")
+
+        # Linha 2: Botões de módulos (toggle rápido) + restaurar
+        row2 = ctk.CTkFrame(frame, fg_color="transparent")
+        row2.pack(fill="x", padx=4, pady=(2, 4))
+
+        # Fonte com suporte a emoji (Segoe UI Emoji no Windows)
+        emoji_font = ("Segoe UI Emoji", 9)
+        btn_style = {"height": 22, "fg_color": "#303030", "hover_color": "#454545", "corner_radius": 4}
+
+        self.mini_btn_trainer = ctk.CTkButton(
+            row2, text="⚔T", width=36, font=emoji_font,
+            command=lambda: self._mini_toggle_module("trainer"), **btn_style
+        )
+        self.mini_btn_trainer.pack(side="left", padx=1)
+
+        self.mini_btn_loot = ctk.CTkButton(
+            row2, text="🪙L", width=36, font=emoji_font,
+            command=lambda: self._mini_toggle_module("loot"), **btn_style
+        )
+        self.mini_btn_loot.pack(side="left", padx=1)
+
+        self.mini_btn_cavebot = ctk.CTkButton(
+            row2, text="🚶C", width=36, font=emoji_font,
+            command=lambda: self._mini_toggle_module("cavebot"), **btn_style
+        )
+        self.mini_btn_cavebot.pack(side="left", padx=1)
+
+        self.mini_btn_healer = ctk.CTkButton(
+            row2, text="❤H", width=36, font=emoji_font,
+            command=lambda: self._mini_toggle_module("healer"), **btn_style
+        )
+        self.mini_btn_healer.pack(side="left", padx=1)
+
+        self.mini_btn_alarm = ctk.CTkButton(
+            row2, text="🔔A", width=36, font=emoji_font,
+            command=lambda: self._mini_toggle_module("alarm"), **btn_style
+        )
+        self.mini_btn_alarm.pack(side="left", padx=1)
+
+        self.mini_btn_runemaker = ctk.CTkButton(
+            row2, text="✨R", width=36, font=emoji_font,
+            command=lambda: self._mini_toggle_module("runemaker"), **btn_style
+        )
+        self.mini_btn_runemaker.pack(side="left", padx=1)
+
+        btn_restore = ctk.CTkButton(
+            row2, text="↗", width=26, height=22,
+            font=("Segoe UI Emoji", 11), fg_color="#505050",
+            hover_color="#606060", corner_radius=4, command=self._restore_from_mini
+        )
+        btn_restore.pack(side="right")
+
+        # Permitir arrastar a mini HUD
+        frame.bind("<Button-1>", self._mini_start_drag)
+        frame.bind("<B1-Motion>", self._mini_do_drag)
+        frame.bind("<Double-Button-1>", lambda e: self._restore_from_mini())
+
+        # Começa escondida
+        self.mini_hud.withdraw()
+        self.mini_hud_visible = False
+
+    def _mini_start_drag(self, event):
+        """Inicia arrasto da mini HUD."""
+        self._mini_drag_data["x"] = event.x
+        self._mini_drag_data["y"] = event.y
+
+    def _mini_do_drag(self, event):
+        """Move a mini HUD durante arrasto."""
+        x = self.mini_hud.winfo_x() + (event.x - self._mini_drag_data["x"])
+        y = self.mini_hud.winfo_y() + (event.y - self._mini_drag_data["y"])
+        self.mini_hud.geometry(f"+{x}+{y}")
+
+    def _mini_toggle_module(self, module: str):
+        """Toggle um módulo diretamente da Mini HUD."""
+        switch_map = {
+            "trainer": self.switch_trainer,
+            "loot": self.switch_loot,
+            "healer": self.switch_healer,
+            "alarm": self.switch_alarm,
+            "runemaker": self.switch_runemaker,
+        }
+
+        if module == "cavebot":
+            # Cavebot usa IntVar e callback especial
+            if self.switch_cavebot_var:
+                new_val = 0 if self.switch_cavebot_var.get() else 1
+                self.switch_cavebot_var.set(new_val)
+                if self.callbacks.toggle_cavebot:
+                    self.callbacks.toggle_cavebot()
+        elif module in switch_map:
+            switch = switch_map[module]
+            if switch:
+                if switch.get():
+                    switch.deselect()
+                else:
+                    switch.select()
+                # Dispara o command do switch se existir
+                if module == "alarm" and hasattr(switch, 'cget'):
+                    cmd = switch.cget('command')
+                    if cmd:
+                        cmd()
+
+        # Atualiza visual imediatamente
+        self._update_mini_hud()
+
+    def _restore_from_mini(self):
+        """Restaura janela principal e esconde mini HUD."""
+        self.mini_hud.withdraw()
+        self.mini_hud_visible = False
+        self.app.deiconify()
+        self.app.lift()
+        self.app.focus_force()
+
+    def _on_minimize(self, event=None):
+        """Chamado quando a janela principal é minimizada."""
+        # Salva posição da janela principal ANTES de minimizar
+        try:
+            self._last_main_pos = (self.app.winfo_x(), self.app.winfo_y())
+        except:
+            self._last_main_pos = (10, 10)
+
+        # Verifica se realmente minimizou (estado iconic)
+        if self.app.state() == 'iconic':
+            # Verifica se mini_hud está habilitada nas settings
+            settings = self.callbacks.get_bot_settings()
+            if settings.get('mini_hud_enabled', True):
+                self._show_mini_hud()
+
+    def _show_mini_hud(self):
+        """Mostra a mini HUD e atualiza seus dados."""
+        if not self.mini_hud:
+            return
+
+        # Posiciona baseado na janela do Tibia (ou última posição conhecida)
+        self._update_mini_hud_position()
+
+        self.mini_hud.deiconify()
+        self.mini_hud_visible = True
+        self._update_mini_hud()
+
+    def _update_mini_hud_position(self):
+        """Atualiza a posição da Mini HUD para seguir a janela do Tibia."""
+        try:
+            import win32gui
+
+            # Tenta pegar hwnd do Tibia via callback
+            hwnd = None
+            if self.callbacks.get_tibia_hwnd:
+                hwnd = self.callbacks.get_tibia_hwnd()
+
+            if hwnd:
+                # Pega posição da janela do Tibia
+                rect = win32gui.GetWindowRect(hwnd)
+                tibia_x, tibia_y, tibia_right, tibia_bottom = rect
+
+                # Posiciona Mini HUD no canto superior esquerdo da janela do Tibia
+                # Com pequeno offset para não cobrir a barra de título
+                new_x = tibia_x + 5
+                new_y = tibia_y + 25
+
+                # Atualiza posição apenas se mudou significativamente (evita flicker)
+                current_x = self.mini_hud.winfo_x()
+                current_y = self.mini_hud.winfo_y()
+
+                if abs(current_x - new_x) > 5 or abs(current_y - new_y) > 5:
+                    self.mini_hud.geometry(f"+{new_x}+{new_y}")
+            else:
+                # Fallback: usa última posição da janela do bot
+                if hasattr(self, '_last_main_pos'):
+                    x, y = self._last_main_pos
+                    self.mini_hud.geometry(f"+{x}+{y}")
+
+        except Exception:
+            pass  # Ignora erros silenciosamente
+
+    def _update_mini_hud(self):
+        """Atualiza os dados exibidos na mini HUD."""
+        if not self.mini_hud_visible:
+            return
+
+        try:
+            # Status indicator (verde = conectado, laranja = pausado)
+            if self.is_paused:
+                self.mini_status.configure(text="⏸", text_color="#FFA500")
+            else:
+                self.mini_status.configure(text="●", text_color="#00FF00")
+
+            # XP Rate - pega do label existente
+            if self.lbl_exp_rate:
+                xp_text = self.lbl_exp_rate.cget("text")
+                self.mini_xp_rate.configure(text=xp_text)
+
+            # ETA
+            if self.lbl_exp_eta_summary:
+                eta_text = self.lbl_exp_eta_summary.cget("text")
+                self.mini_eta.configure(text=eta_text)
+
+            # Atualiza cores dos botões de módulos (verde = ativo, cinza = inativo)
+            COLOR_ON = "#00AA00"
+            COLOR_OFF = "#303030"
+
+            if self.switch_trainer:
+                self.mini_btn_trainer.configure(
+                    fg_color=COLOR_ON if self.switch_trainer.get() else COLOR_OFF
+                )
+            if self.switch_loot:
+                self.mini_btn_loot.configure(
+                    fg_color=COLOR_ON if self.switch_loot.get() else COLOR_OFF
+                )
+            if self.switch_cavebot_var:
+                self.mini_btn_cavebot.configure(
+                    fg_color=COLOR_ON if self.switch_cavebot_var.get() else COLOR_OFF
+                )
+            if self.switch_healer:
+                self.mini_btn_healer.configure(
+                    fg_color=COLOR_ON if self.switch_healer.get() else COLOR_OFF
+                )
+            if self.switch_alarm:
+                self.mini_btn_alarm.configure(
+                    fg_color=COLOR_ON if self.switch_alarm.get() else COLOR_OFF
+                )
+            if self.switch_runemaker:
+                self.mini_btn_runemaker.configure(
+                    fg_color=COLOR_ON if self.switch_runemaker.get() else COLOR_OFF
+                )
+
+        except Exception:
+            pass
+
+        # Continua atualizando enquanto visível
+        if self.mini_hud_visible:
+            self.app.after(1000, self._update_mini_hud)
+
+    def setup_mini_hud(self):
+        """
+        Configura a Mini HUD e os bindings de minimize.
+        Chamar APÓS create() da janela principal.
+        """
+        self._create_mini_hud()
+
+        # Bind para detectar minimize
+        self.app.bind("<Unmap>", self._on_minimize)
+
+        # Quando restaurar, esconder mini HUD
+        def on_restore(event):
+            if self.app.state() == 'normal':
+                if self.mini_hud and self.mini_hud_visible:
+                    self.mini_hud.withdraw()
+                    self.mini_hud_visible = False
+
+        self.app.bind("<Map>", on_restore)

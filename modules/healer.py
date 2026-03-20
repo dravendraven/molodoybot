@@ -23,6 +23,7 @@ from core.battlelist import BattleListScanner
 from core.packet import get_container_pos
 from core.player_core import get_player_id
 from modules.auto_loot import scan_containers
+from utils.timing import gauss_wait
 
 
 # =============================================================================
@@ -183,6 +184,9 @@ class HealerModule(BaseModule):
 
             # Execute heal and return (ONE action per tick)
             print(f"[healer] Triggering heal: {target['name']} hp={target['hp_percent']}% < {jittered_threshold}%")
+            # Delay de reação humana (gaussiano ±25%)
+            reaction_ms = self.get_cfg('healer_reaction_ms', 400)
+            gauss_wait(reaction_ms / 1000, 25)
             success = self._execute_heal(rule, target)
             if success:
                 self._last_heal_time = time.time()  # Update GLOBAL cooldown

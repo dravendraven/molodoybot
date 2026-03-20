@@ -260,6 +260,9 @@ BOT_SETTINGS = {
     # Console Log
     "console_log_visible": False,  # Default: Status Panel visível, Console Log escondido
 
+    # Mini HUD
+    "mini_hud_enabled": True,  # Mostra mini HUD flutuante ao minimizar
+
     # Logging
     "logging_enabled": False,  # Logging detalhado (False = apenas crash logging)
 
@@ -2632,6 +2635,10 @@ def runemaker_thread():
         'human_max': BOT_SETTINGS.get('rune_human_max', 0),
         'logout_on_no_blanks': BOT_SETTINGS.get('logout_on_no_blanks', False),
         'logout_wait_mana_full': BOT_SETTINGS.get('logout_wait_mana_full', False),
+        # Aviso de Mana %
+        'mana_alert_enabled': BOT_SETTINGS.get('rune_mana_alert_enabled', False),
+        'mana_alert_percent': BOT_SETTINGS.get('rune_mana_alert_percent', 90),
+        'mana_alert_telegram': BOT_SETTINGS.get('rune_mana_alert_telegram', False),
 
         'can_perform_actions': (
             # Se movimento ligado E alarme NÃO foi GM -> Ignora timer (True)
@@ -2660,7 +2667,8 @@ def runemaker_thread():
                            is_gm_callback=check_gm,
                            log_callback=log,
                            eat_callback=on_eat_callback,
-                           status_callback=update_runemaker_status)
+                           status_callback=update_runemaker_status,
+                           telegram_callback=send_telegram)
 
             time.sleep(1)
         except MemoryError as e:
@@ -3344,6 +3352,9 @@ def create_main_window_callbacks() -> MainWindowCallbacks:
         reload_button_enabled=config.RELOAD_BUTTON,
         maps_directory=MAPS_DIRECTORY,
         walkable_colors=WALKABLE_COLORS,
+
+        # Mini HUD
+        get_tibia_hwnd=find_game_window,
     )
 
 
@@ -3903,6 +3914,7 @@ if __name__ == "__main__":
     mw_callbacks = create_main_window_callbacks()
     main_window = MainWindow(mw_callbacks)
     app = main_window.create()
+    main_window.setup_mini_hud()  # Mini HUD flutuante ao minimizar
 
     # =========================================================================
     # COMPATIBILIDADE: Referências globais para código existente
