@@ -468,15 +468,79 @@ def log(msg):
         txt_log.see("end")
     except: pass
 
+# ==============================================================================
+# TELEGRAM INTEGRATION - Usa core/telegram_handler.py
+# ==============================================================================
+
+telegram_handler = None  # TelegramHandler instance (lazy loaded)
+
 def send_telegram(msg):
-    if "TOKEN" in TELEGRAM_TOKEN: return
-    try:
-        import requests  # Lazy import
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        data = {"chat_id": BOT_SETTINGS['telegram_chat_id'], "text": f"🚨 {msg}"}
-        requests.post(url, data=data, timeout=2)
-        print("[TELEGRAM] Mensagem enviada.")
-    except: pass
+    """
+    Wrapper para compatibilidade - envia alerta no Telegram.
+    Usado por outros módulos (alarm, disconnect, etc.).
+    """
+    if telegram_handler:
+        telegram_handler.send_alert(msg)
+
+def _on_private_message(event):
+    """
+    Callback para mensagens privadas - envia alerta no Telegram.
+    Usado pelo EventBus (EVENT_CHAT).
+    """
+    if telegram_handler:
+        telegram_handler.handle_private_message(event)
+
+def start_telegram_thread():
+    """
+    Thread que gerencia o TelegramHandler.
+    Lazy-load: cria instância quando conectado.
+    """
+    global telegram_handler, pm, base_addr
+
+    print("[Telegram Thread] Iniciada")
+
+    while state.is_running:
+        # Só inicializa se token configurado
+        if not TELEGRAM_TOKEN or "TOKEN" in TELEGRAM_TOKEN:
+            time.sleep(5)
+            continue
+
+        # Cria handler quando conectado
+        if pm is not None and state.is_connected and telegram_handler is None:
+            try:
+                from core.telegram_handler import TelegramHandler
+
+                pkt = packet.PacketManager(pm, base_addr)
+                telegram_handler = TelegramHandler(
+                    token=TELEGRAM_TOKEN,
+                    chat_id=BOT_SETTINGS.get('telegram_chat_id', ''),
+                    pm=pm,
+                    base_addr=base_addr,
+                    packet_manager=pkt,
+                    get_char_name_func=get_player_name,
+                    log_func=log,
+                    bot_state=state,
+                    game_state=game_state,
+                    bot_settings=BOT_SETTINGS
+                )
+                telegram_handler.start_listener_loop()
+                print("[Telegram Thread] Handler criado e listener iniciado")
+
+            except Exception as e:
+                print(f"[Telegram Thread] Erro ao criar handler: {e}")
+                time.sleep(5)
+
+        time.sleep(1)
+
+    print("[Telegram Thread] Encerrada")
+
+def _reset_telegram_listener():
+    """Reseta o handler do Telegram (chamado ao desconectar)."""
+    global telegram_handler
+    if telegram_handler:
+        telegram_handler.reset()
+        telegram_handler = None
+
 
 def get_config_filename(char_name: str = None) -> str:
     """
@@ -1408,9 +1472,73 @@ def toggle_cavebot_func():
 # 5. THREADS DE LÓGICA DO BOT (WORKERS)
 # ==============================================================================
 
+def notify_disconnect(disconnect_type: str, char_name: str, last_notification_time: float, cooldown: float) -> float:
+    """
+    Envia notificação Telegram com cooldown anti-spam.
+
+    Args:
+        disconnect_type: "LOGOUT", "CRASH", "MEMORY_ERROR", ou "NO_BLANKS"
+        char_name: Nome do personagem (capturado antes de limpar cache)
+        last_notification_time: Timestamp da última notificação
+        cooldown: Segundos mínimos entre notificações
+
+    Returns:
+        Timestamp atualizado (tempo atual se enviou, original se pulou)
+    """
+    print(f"[DEBUG NOTIFY] Chamada: type={disconnect_type}, char={char_name}")
+    current_time = time.time()
+
+    # Anti-spam: pula se dentro do cooldown
+    time_diff = current_time - last_notification_time
+    if time_diff < cooldown:
+        print(f"[DEBUG NOTIFY] BLOQUEADO por cooldown ({time_diff:.1f}s < {cooldown}s)")
+        return last_notification_time
+
+    print(f"[DEBUG NOTIFY] Cooldown OK ({time_diff:.1f}s >= {cooldown}s)")
+
+    # Mensagens por tipo de desconexão
+    messages = {
+        "LOGOUT": "⚠️ Desconectado (Logout manual ou tela de seleção)",
+        "CRASH": "❌ Cliente Tibia fechou (crash ou processo terminado)",
+        "MEMORY_ERROR": "⚠️ Erro de leitura de memória (processo congelado ou inválido)",
+        "NO_BLANKS": "🔮 Logout automático: Acabaram as blank runes"
+    }
+
+    msg = messages.get(disconnect_type, "❌ Desconectado (motivo desconhecido)")
+    print(f"[DEBUG NOTIFY] Mensagem: {msg}")
+
+    # Preserva char_name temporariamente para send_telegram()
+    old_char_name = state.char_name
+    print(f"[DEBUG NOTIFY] State char_name antes: '{old_char_name}'")
+    if char_name and not state.char_name:
+        state.char_name = char_name
+        print(f"[DEBUG NOTIFY] State char_name setado para: '{char_name}'")
+
+    try:
+        print(f"[DEBUG NOTIFY] Enviando telegram...")
+        send_telegram(msg)
+        log(f"[TELEGRAM] Notificação de desconexão enviada: {disconnect_type}")
+        print(f"[DEBUG NOTIFY] Telegram enviado com sucesso!")
+    except Exception as e:
+        log(f"[TELEGRAM ERROR] Falha ao enviar notificação: {e}")
+        print(f"[DEBUG NOTIFY] ERRO ao enviar: {e}")
+    finally:
+        # Restaura estado original
+        if char_name and not old_char_name:
+            state.char_name = ""
+            print(f"[DEBUG NOTIFY] State char_name restaurado para vazio")
+
+    return current_time
+
 def connection_watchdog():
     global pm, base_addr, selected_pid
     was_connected_once = False
+
+    # Rastreamento para notificações de desconexão
+    last_disconnect_notification = 0  # Timestamp da última notificação
+    DISCONNECT_NOTIFICATION_COOLDOWN = 60  # Segundos entre notificações
+    previous_connection_state = False  # Rastreia transições de estado
+
     while state.is_running:
         try:
             # 1. Se não tem processo atrelado, tenta atrelar
@@ -1459,13 +1587,25 @@ def connection_watchdog():
                     except Exception as e:
                         print(f"Aviso: Falha ao inicializar Action Scheduler: {e}")
                 except:
-                    # Depois:
+                    # Detecta crash e captura nome
+                    if previous_connection_state:
+                        print(f"[DEBUG DISCONNECT] Detectado CRASH de processo")
+                        captured_char_name = get_player_name() if pm else state.char_name
+                        print(f"[DEBUG DISCONNECT] Nome capturado: {captured_char_name}")
+                        last_disconnect_notification = notify_disconnect(
+                            disconnect_type="CRASH",
+                            char_name=captured_char_name,
+                            last_notification_time=last_disconnect_notification,
+                            cooldown=DISCONNECT_NOTIFICATION_COOLDOWN
+                        )
+
                     state.set_process_dead()  # Sinaliza para todas threads pararem leituras
                     if was_connected_once:
                         print("Tibia fechou. Encerrando bot...")
                         clear_player_name_cache()
                         os._exit(0) # Mata o bot
                     state.is_connected = False
+                    previous_connection_state = False
                     lbl_connection.configure(text="❌ Cliente Fechado", text_color="#FF5555")
                     time.sleep(2)
                     continue
@@ -1502,6 +1642,7 @@ def connection_watchdog():
                             apply_full_light(True)
 
                     state.is_connected = True
+                    previous_connection_state = True  # Atualiza rastreamento
                     was_connected_once = True
                     # Mostra nome do personagem no status (truncado se muito longo)
                     char_display = get_player_name() or "???"
@@ -1509,18 +1650,58 @@ def connection_watchdog():
                         char_display = char_display[:11] + "…"
                     lbl_connection.configure(text=f"🟢 {char_display}", text_color="#00FF00")
                 else:
+                    # Detecta transição e captura nome ANTES de limpar cache
+                    if previous_connection_state:
+                        print(f"[DEBUG DISCONNECT] Detectado logout - previous_state={previous_connection_state}")
+                        captured_char_name = get_player_name()
+                        print(f"[DEBUG DISCONNECT] Nome capturado: {captured_char_name}")
+
+                        # Verifica se logout foi intencional (runemaker)
+                        disconnect_type = "LOGOUT"  # Default
+                        if state.logout_reason == "NO_BLANKS":
+                            disconnect_type = "NO_BLANKS"
+                        print(f"[DEBUG DISCONNECT] Tipo: {disconnect_type}")
+
+                        last_disconnect_notification = notify_disconnect(
+                            disconnect_type=disconnect_type,
+                            char_name=captured_char_name,
+                            last_notification_time=last_disconnect_notification,
+                            cooldown=DISCONNECT_NOTIFICATION_COOLDOWN
+                        )
+
+                        # Limpa reason após processar
+                        state.logout_reason = ""
+
                     state.is_connected = False
+                    previous_connection_state = False
                     lbl_connection.configure(text="⚠️ Desconectado", text_color="#FFFF00")
-                    clear_player_name_cache() 
+                    clear_player_name_cache()
+                    _reset_telegram_listener() 
                     
-            except Exception:
+            except Exception as e:
+                # Captura nome ANTES de limpar cache
+                if previous_connection_state:
+                    print(f"[DEBUG DISCONNECT] Detectado ERRO DE MEMÓRIA: {e}")
+                    captured_char_name = get_player_name()
+                    print(f"[DEBUG DISCONNECT] Nome capturado: {captured_char_name}")
+                    last_disconnect_notification = notify_disconnect(
+                        disconnect_type="MEMORY_ERROR",
+                        char_name=captured_char_name,
+                        last_notification_time=last_disconnect_notification,
+                        cooldown=DISCONNECT_NOTIFICATION_COOLDOWN
+                    )
+
                 pm = None
                 state.set_process_dead()  # Sinaliza para todas threads pararem leituras
                 state.is_connected = False
+                previous_connection_state = False
+
                 if was_connected_once:
                     os._exit(0)
+
                 lbl_connection.configure(text="❌ Cliente Fechado", text_color="#FF5555")
                 clear_player_name_cache()
+                _reset_telegram_listener()
 
         except Exception as e:
             print(f"Erro Watchdog: {e}")
@@ -3344,6 +3525,7 @@ def create_main_window_callbacks() -> MainWindowCallbacks:
         on_close=on_close,
         on_reload=on_reload,
         toggle_xray=toggle_xray,
+        get_xray_active=get_xray_active,
         toggle_cavebot=toggle_cavebot_func,
         on_fisher_toggle=on_fisher_toggle,
         on_pause_toggle=on_pause_toggle,
@@ -3576,6 +3758,11 @@ def toggle_xray():
     canvas.pack(fill="both", expand=True)
     print("[XRAY] Canvas criado, iniciando update_xray()")
     update_xray()
+
+def get_xray_active() -> bool:
+    """Retorna True se X-Ray está ativo."""
+    global xray_window
+    return xray_window is not None
 
 def on_reload():
     """Reload: Fecha o bot e reinicia o main.py com código atualizado."""
@@ -4019,6 +4206,11 @@ if __name__ == "__main__":
         log(f"🔌 Iniciando Sniffer de Pacotes ({server_ip})...")
         start_sniffer(server_ip, PROCESS_NAME)
 
+        # Inscreve callback para notificação de PMs no Telegram
+        from core.event_bus import EventBus, EVENT_CHAT
+        EventBus.get_instance().subscribe(EVENT_CHAT, _on_private_message)
+        log("📩 Alarme de PM no Telegram ativado")
+
     # Iniciar Threads
     logger.info("Iniciando threads do bot...")
     threading.Thread(target=start_trainer_thread, daemon=True, name="Trainer").start()
@@ -4041,6 +4233,7 @@ if __name__ == "__main__":
     threading.Thread(target=start_aimbot_thread, daemon=True, name="Aimbot").start()
     threading.Thread(target=auto_torch_thread, daemon=True, name="AutoTorch").start()
     threading.Thread(target=resource_monitor_loop, daemon=True, name="ResourceMonitor").start()
+    threading.Thread(target=start_telegram_thread, daemon=True, name="TelegramThread").start()
     logger.info(f"Threads iniciadas: {len([t for t in threading.enumerate() if t.daemon])} daemon threads")
 
     # Atualiza visibilidade baseada na vocação

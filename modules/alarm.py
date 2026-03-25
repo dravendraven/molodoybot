@@ -14,10 +14,16 @@ try:
 except ImportError:
     _has_win32gui = False
 
+# Log function (setada por alarm_loop)
+_log_func = print
+
 def _beep(freq, duration):
     """Toca beep se winsound disponível."""
     if _has_winsound:
-        winsound.Beep(freq, duration)
+        try:
+            winsound.Beep(freq, duration)
+        except Exception as e:
+            _log_func(f"[AUDIO] winsound.Beep falhou: {e}")
 
 from collections import deque
 from config import *
@@ -127,6 +133,10 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
     set_gm_state = callbacks.get('set_gm', lambda _: None)
     send_telegram = callbacks.get('telegram', lambda _: None)
     log_msg = callbacks.get('log', print)
+
+    # Seta log_msg global para uso em _beep
+    global _log_func
+    _log_func = log_msg
 
     # Helper para atualizar status do alarme na GUI
     def set_status(msg):

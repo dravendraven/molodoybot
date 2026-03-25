@@ -453,9 +453,6 @@ class SettingsWindow:
         entry_telegram.grid(row=1, column=1, sticky="w")
         entry_telegram.insert(0, str(settings['telegram_chat_id']))
 
-        ctk.CTkLabel(frame_geral, text="↳ Recebe alertas de PK e Pausa no celular.", **self.UI['HINT']).grid(
-            row=2, column=0, columnspan=2, sticky="e", padx=60, pady=(0, 5))
-
         # Pasta do Cliente
         ctk.CTkLabel(frame_geral, text="Pasta do Cliente:", **self.UI['BODY']).grid(
             row=3, column=0, sticky="e", padx=10, pady=self.UI['PAD_ITEM'])
@@ -484,10 +481,10 @@ class SettingsWindow:
             entry_client_path.configure(state="disabled")
 
         # === OPÇÕES (Grid 2x2) ===
-        ctk.CTkLabel(tab, text="Opções", **self.UI['H1']).pack(anchor="w", padx=10, pady=(5, 2))
+        ctk.CTkLabel(tab, text="Opções", **self.UI['H1']).pack(anchor="w", padx=10, pady=(3, 1))
 
         f_opts_grid = ctk.CTkFrame(tab, fg_color="transparent")
-        f_opts_grid.pack(fill="x", padx=10, pady=2)
+        f_opts_grid.pack(fill="x", padx=10, pady=0)
         f_opts_grid.grid_columnconfigure(0, weight=1)
         f_opts_grid.grid_columnconfigure(1, weight=1)
 
@@ -526,14 +523,11 @@ class SettingsWindow:
         if settings.get('mini_hud_enabled', True):
             switch_mini_hud.select()
 
-        ctk.CTkLabel(tab, text="↳ Mini HUD: mostra stats flutuante ao minimizar. Logging: desabilitar melhora performance.",
-                    **self.UI['HINT']).pack(anchor="w", padx=15)
-
         # === PAUSAS AFK (compacto) ===
-        ctk.CTkLabel(tab, text="Pausas AFK", **self.UI['H1']).pack(anchor="w", padx=10, pady=(8, 2))
+        ctk.CTkLabel(tab, text="Pausas AFK", **self.UI['H1']).pack(anchor="w", padx=10, pady=(3, 1))
 
         f_afk = ctk.CTkFrame(tab, fg_color="transparent")
-        f_afk.pack(fill="x", padx=10, pady=2)
+        f_afk.pack(fill="x", padx=10, pady=0)
 
         switch_afk_pause = ctk.CTkSwitch(f_afk, text="Ativar",
                                           progress_color="#9B59B6", **self.UI['BODY'])
@@ -553,14 +547,11 @@ class SettingsWindow:
         entry_afk_duration.insert(0, str(settings.get('afk_pause_duration', 30)))
         ctk.CTkLabel(f_afk, text="seg", **self.UI['BODY']).pack(side="left")
 
-        ctk.CTkLabel(tab, text="↳ Pausa todos os módulos (exceto Alarme) com 50% variância.",
-                    **self.UI['HINT']).pack(anchor="w", padx=15)
-
         # === AUTO-FOOD TIMER ===
-        ctk.CTkLabel(tab, text="Auto-Food Timer", **self.UI['H1']).pack(anchor="w", padx=10, pady=(8, 2))
+        ctk.CTkLabel(tab, text="Auto-Food Timer", **self.UI['H1']).pack(anchor="w", padx=10, pady=(3, 1))
 
         f_autofood = ctk.CTkFrame(tab, fg_color="transparent")
-        f_autofood.pack(fill="x", padx=10, pady=2)
+        f_autofood.pack(fill="x", padx=10, pady=0)
 
         switch_auto_food = ctk.CTkSwitch(f_autofood, text="Ativar",
                                           progress_color="#E67E22", **self.UI['BODY'])
@@ -574,9 +565,6 @@ class SettingsWindow:
         entry_auto_food_minutes.pack(side="left", padx=2)
         entry_auto_food_minutes.insert(0, str(settings.get('auto_food_timer_minutes', 5)))
         ctk.CTkLabel(f_autofood, text="min", **self.UI['BODY']).pack(side="left")
-
-        ctk.CTkLabel(tab, text="↳ Come automaticamente com 30% variância gaussiana.",
-                    **self.UI['HINT']).pack(anchor="w", padx=15)
 
         # Botão Salvar
         def save_geral():
@@ -611,7 +599,7 @@ class SettingsWindow:
             self.cb.log("⚙️ Geral salvo.")
 
         ctk.CTkButton(tab, text="Salvar Geral", command=save_geral,
-                     fg_color="#2CC985", height=32).pack(side="bottom", pady=10, fill="x", padx=20)
+                     fg_color="#2CC985", height=32).pack(side="bottom", pady=5, fill="x", padx=20)
 
     def _build_tab_trainer(self, tab: ctk.CTkFrame) -> None:
         """Constrói a aba Trainer."""

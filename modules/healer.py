@@ -274,6 +274,21 @@ class HealerModule(BaseModule):
         """Cast healing spell via packet.say()."""
         spell_words = rule.spell_or_rune.strip()
 
+        # Check mana requirement for known healing spells
+        spell_lower = spell_words.lower()
+        if "sio" in spell_lower:
+            base_spell = "exura sio"
+        else:
+            base_spell = spell_lower
+
+        if base_spell in HEALING_SPELLS:
+            mana_required = HEALING_SPELLS[base_spell].get("mana", 0)
+            current_mana, _, _ = game_state.get_player_mana()
+
+            if current_mana < mana_required:
+                print(f"[healer] Mana insuficiente para {spell_words}: {current_mana}/{mana_required}")
+                return False  # Skip to next priority rule
+
         # For friend/creature targets, format as 'exura sio "Name"'
         if rule.target_type in ("friend", "creature") and rule.target_name:
             # exura sio requires target name

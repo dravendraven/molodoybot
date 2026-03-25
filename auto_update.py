@@ -12,7 +12,7 @@ from tkinter import ttk
 
 # ================= CONFIGURAÇÕES =================
 # Versão atual hardcoded (atualizada automaticamente pelo publicar.bat)
-CURRENT_VERSION = "9.1"
+CURRENT_VERSION = "9.2"
 
 # URLs do GitHub
 URL_VERSION = "https://raw.githubusercontent.com/dravendraven/molodoybot/refs/heads/main/version.txt"
@@ -352,9 +352,12 @@ taskkill /IM mshta.exe /F >nul 2>&1
 :: Espera Windows liberar handles do processo antigo (5 segundos)
 ping 127.0.0.1 -n 6 >nul
 
-:: Inicia o novo exe no diretório correto
+:: Remove pastas _MEI antigas para evitar conflito de cache de DLL do Windows
+for /d %%i in ("{os.path.dirname(current_exe)}\\_MEI*") do rd /s /q "%%i" >nul 2>&1
+
+:: Inicia o novo exe no diretório correto (via explorer para processo limpo)
 cd /d "{os.path.dirname(current_exe)}"
-start "" "{current_exe}"
+explorer.exe "{current_exe}"
 
 :: Limpa arquivos temporários
 del /f /q "{hta_path}" >nul 2>&1

@@ -39,6 +39,7 @@ class MainWindowCallbacks:
     on_close: Callable[[], None]
     on_reload: Callable[[], None]
     toggle_xray: Callable[[], None]
+    get_xray_active: Callable[[], bool]  # Retorna True se X-Ray está ativo
     toggle_cavebot: Callable[[], None]
     on_fisher_toggle: Callable[[], None]
     on_pause_toggle: Callable[[bool], None]  # Called with is_pausing=True/False
@@ -102,6 +103,9 @@ class MainWindow:
         self.mini_hud = None
         self.mini_hud_visible = False
         self._mini_drag_data = {"x": 0, "y": 0}
+        self._mini_hud_job = None  # Job ID do after() para cancelamento
+        self._mini_hud_cache = {}  # Cache do último estado para evitar updates desnecessários
+        self._minimize_debounce = False  # Debounce para evitar múltiplas chamadas
 
         # === Widgets Expostos (threads precisam acessar) ===
         # Header
@@ -952,10 +956,16 @@ class MainWindow:
         """
         Cria a Mini HUD - janela compacta flutuante que aparece quando o bot é minimizado.
         Mostra stats essenciais e permite restaurar a janela principal.
+
+        Layout otimizado:
+        - Tamanho: 310x60 (era 280x58)
+        - Row1: Status + XP + ETA (left) + X-Ray (right)
+        - Row2: 6 botões de módulos
+        - Botão Expandir: ocupa 2 linhas (far right)
         """
         self.mini_hud = ctk.CTkToplevel(self.app)
         self.mini_hud.title("MolodoyBot")
-        self.mini_hud.geometry("280x58")
+        self.mini_hud.geometry("275x60")  # Aumentado de 280x58
         self.mini_hud.resizable(False, False)
         self.mini_hud.configure(fg_color="#1a1a1a")
 
@@ -970,78 +980,107 @@ class MainWindow:
         )
         frame.pack(fill="both", expand=True, padx=2, pady=2)
 
-        # Linha 1: Status + XP Rate
-        row1 = ctk.CTkFrame(frame, fg_color="transparent")
-        row1.pack(fill="x", padx=8, pady=(5, 0))
+        # Container esquerdo (contém row1 e row2)
+        left_container = ctk.CTkFrame(frame, fg_color="transparent")
+        left_container.pack(side="left", fill="both", expand=True, padx=(4, 2), pady=(5, 4))
 
+        # === ROW 1: Status + XP + ETA (left) + X-Ray (right) ===
+        row1 = ctk.CTkFrame(left_container, fg_color="transparent")
+        row1.pack(fill="x", pady=(0, 2))
+
+        # Status indicator (●)
         self.mini_status = ctk.CTkLabel(
             row1, text="●", font=("Verdana", 10),
             text_color="#00FF00", width=15
         )
         self.mini_status.pack(side="left")
 
+        # XP Rate
         self.mini_xp_rate = ctk.CTkLabel(
             row1, text="-- xp/h",
             font=("Verdana", 10, "bold"), text_color="#FFFFFF"
         )
         self.mini_xp_rate.pack(side="left", padx=(5, 0))
 
+        # ETA - NOVO: movido para row1, left aligned
         self.mini_eta = ctk.CTkLabel(
-            row1, text="",
+            row1, text="⏳ --",
             font=("Verdana", 9), text_color="#888888"
         )
-        self.mini_eta.pack(side="right")
+        self.mini_eta.pack(side="left", padx=(8, 0))
 
-        # Linha 2: Botões de módulos (toggle rápido) + restaurar
-        row2 = ctk.CTkFrame(frame, fg_color="transparent")
-        row2.pack(fill="x", padx=4, pady=(2, 4))
+        # Botão X-Ray - NOVO
+        self.mini_btn_xray = ctk.CTkButton(
+            row1, text="XRay", width=36, height=20,
+            font=("Verdana", 9), fg_color="#303030",
+            hover_color="#454545", corner_radius=4,
+            command=self.callbacks.toggle_xray
+        )
+        self.mini_btn_xray.pack(side="right", padx=(0, 0))
+
+        # === ROW 2: Botões de módulos ===
+        row2 = ctk.CTkFrame(left_container, fg_color="transparent")
+        row2.pack(fill="x")
 
         # Fonte com suporte a emoji (Segoe UI Emoji no Windows)
         emoji_font = ("Segoe UI Emoji", 9)
-        btn_style = {"height": 22, "fg_color": "#303030", "hover_color": "#454545", "corner_radius": 4}
+        btn_style = {
+            "height": 24,  # Aumentado de 22 para 24 (+2px)
+            "fg_color": "#303030",
+            "hover_color": "#454545",
+            "corner_radius": 4
+        }
 
+        # Trainer
         self.mini_btn_trainer = ctk.CTkButton(
             row2, text="⚔T", width=36, font=emoji_font,
             command=lambda: self._mini_toggle_module("trainer"), **btn_style
         )
         self.mini_btn_trainer.pack(side="left", padx=1)
 
+        # Loot
         self.mini_btn_loot = ctk.CTkButton(
             row2, text="🪙L", width=36, font=emoji_font,
             command=lambda: self._mini_toggle_module("loot"), **btn_style
         )
         self.mini_btn_loot.pack(side="left", padx=1)
 
+        # Cavebot
         self.mini_btn_cavebot = ctk.CTkButton(
             row2, text="🚶C", width=36, font=emoji_font,
             command=lambda: self._mini_toggle_module("cavebot"), **btn_style
         )
         self.mini_btn_cavebot.pack(side="left", padx=1)
 
+        # Healer
         self.mini_btn_healer = ctk.CTkButton(
             row2, text="❤H", width=36, font=emoji_font,
             command=lambda: self._mini_toggle_module("healer"), **btn_style
         )
         self.mini_btn_healer.pack(side="left", padx=1)
 
+        # Alarm
         self.mini_btn_alarm = ctk.CTkButton(
             row2, text="🔔A", width=36, font=emoji_font,
             command=lambda: self._mini_toggle_module("alarm"), **btn_style
         )
         self.mini_btn_alarm.pack(side="left", padx=1)
 
+        # Runemaker
         self.mini_btn_runemaker = ctk.CTkButton(
             row2, text="✨R", width=36, font=emoji_font,
             command=lambda: self._mini_toggle_module("runemaker"), **btn_style
         )
         self.mini_btn_runemaker.pack(side="left", padx=1)
 
+        # === BOTÃO EXPANDIR (à direita, ocupa 2 linhas) ===
         btn_restore = ctk.CTkButton(
-            row2, text="↗", width=26, height=22,
-            font=("Segoe UI Emoji", 11), fg_color="#505050",
-            hover_color="#606060", corner_radius=4, command=self._restore_from_mini
+            frame, text="↗", width=32, height=50,
+            font=("Segoe UI Emoji", 12), fg_color="#505050",
+            hover_color="#606060", corner_radius=4,
+            command=self._restore_from_mini
         )
-        btn_restore.pack(side="right")
+        btn_restore.pack(side="right", fill="y", padx=(2, 4), pady=(5, 4))
 
         # Permitir arrastar a mini HUD
         frame.bind("<Button-1>", self._mini_start_drag)
@@ -1098,18 +1137,36 @@ class MainWindow:
 
     def _restore_from_mini(self):
         """Restaura janela principal e esconde mini HUD."""
+        # CRÍTICO: Cancela job agendado ANTES de esconder para evitar callbacks órfãos
+        self._cancel_mini_hud_job()
+
         self.mini_hud.withdraw()
         self.mini_hud_visible = False
         self.app.deiconify()
         self.app.lift()
         self.app.focus_force()
 
+    def _cancel_mini_hud_job(self):
+        """Cancela o job de update da mini HUD se existir."""
+        if self._mini_hud_job:
+            try:
+                self.app.after_cancel(self._mini_hud_job)
+            except Exception:
+                pass
+            self._mini_hud_job = None
+
     def _on_minimize(self, event=None):
         """Chamado quando a janela principal é minimizada."""
+        # Debounce: evita múltiplas chamadas em sequência rápida
+        if self._minimize_debounce:
+            return
+        self._minimize_debounce = True
+        self.app.after(150, self._reset_minimize_debounce)
+
         # Salva posição da janela principal ANTES de minimizar
         try:
             self._last_main_pos = (self.app.winfo_x(), self.app.winfo_y())
-        except:
+        except Exception:
             self._last_main_pos = (10, 10)
 
         # Verifica se realmente minimizou (estado iconic)
@@ -1119,10 +1176,24 @@ class MainWindow:
             if settings.get('mini_hud_enabled', True):
                 self._show_mini_hud()
 
+    def _reset_minimize_debounce(self):
+        """Reseta o debounce do minimize."""
+        self._minimize_debounce = False
+
     def _show_mini_hud(self):
         """Mostra a mini HUD e atualiza seus dados."""
         if not self.mini_hud:
             return
+
+        # Se já está visível, não faz nada (evita múltiplos loops)
+        if self.mini_hud_visible:
+            return
+
+        # Cancela qualquer job anterior antes de iniciar novo loop
+        self._cancel_mini_hud_job()
+
+        # Limpa cache para forçar update completo na primeira vez
+        self._mini_hud_cache = {}
 
         # Posiciona baseado na janela do Tibia (ou última posição conhecida)
         self._update_mini_hud_position()
@@ -1133,6 +1204,9 @@ class MainWindow:
 
     def _update_mini_hud_position(self):
         """Atualiza a posição da Mini HUD para seguir a janela do Tibia."""
+        if not self.mini_hud:
+            return
+
         try:
             # Tenta pegar hwnd do Tibia via callback
             hwnd = None
@@ -1140,6 +1214,7 @@ class MainWindow:
                 hwnd = self.callbacks.get_tibia_hwnd()
 
             if hwnd:
+                # win32gui importado no topo do main.py - usa try/except local
                 try:
                     import win32gui
                     # Pega posição da janela do Tibia
@@ -1150,12 +1225,11 @@ class MainWindow:
                     new_x = tibia_x + 5
                     new_y = tibia_y + 25
 
-                    # Atualiza posição apenas se mudou significativamente
-                    current_x = self.mini_hud.winfo_x()
-                    current_y = self.mini_hud.winfo_y()
-
-                    if abs(current_x - new_x) > 5 or abs(current_y - new_y) > 5:
+                    # Atualiza posição apenas se mudou significativamente (evita flickering)
+                    cached_pos = self._mini_hud_cache.get('position')
+                    if cached_pos != (new_x, new_y):
                         self.mini_hud.geometry(f"+{new_x}+{new_y}")
+                        self._mini_hud_cache['position'] = (new_x, new_y)
                     return
                 except ImportError:
                     pass  # win32gui não disponível
@@ -1163,68 +1237,120 @@ class MainWindow:
             # Fallback: usa última posição da janela do bot
             if hasattr(self, '_last_main_pos'):
                 x, y = self._last_main_pos
-                self.mini_hud.geometry(f"+{x}+{y}")
+                cached_pos = self._mini_hud_cache.get('position')
+                if cached_pos != (x, y):
+                    self.mini_hud.geometry(f"+{x}+{y}")
+                    self._mini_hud_cache['position'] = (x, y)
 
-        except Exception:
-            pass  # Ignora erros silenciosamente
+        except Exception as e:
+            print(f"[MiniHUD] Erro ao atualizar posição: {e}")
 
-    def _update_mini_hud(self):
-        """Atualiza os dados exibidos na mini HUD."""
-        if not self.mini_hud_visible:
-            return
+    def _get_mini_hud_state(self):
+        """Coleta estado atual para a mini HUD de forma eficiente."""
+        state = {
+            'is_paused': self.is_paused,
+            'xp_text': '',
+            'eta_text': '',
+            'switches': {},
+            'xray_active': False
+        }
 
+        # Coleta textos dos labels (uma vez só)
         try:
-            # Status indicator (verde = conectado, laranja = pausado)
-            if self.is_paused:
-                self.mini_status.configure(text="⏸", text_color="#FFA500")
-            else:
-                self.mini_status.configure(text="●", text_color="#00FF00")
-
-            # XP Rate - pega do label existente
             if self.lbl_exp_rate:
-                xp_text = self.lbl_exp_rate.cget("text")
-                self.mini_xp_rate.configure(text=xp_text)
-
-            # ETA
+                state['xp_text'] = self.lbl_exp_rate.cget("text")
             if self.lbl_exp_eta_summary:
-                eta_text = self.lbl_exp_eta_summary.cget("text")
-                self.mini_eta.configure(text=eta_text)
-
-            # Atualiza cores dos botões de módulos (verde = ativo, cinza = inativo)
-            COLOR_ON = "#00AA00"
-            COLOR_OFF = "#303030"
-
-            if self.switch_trainer:
-                self.mini_btn_trainer.configure(
-                    fg_color=COLOR_ON if self.switch_trainer.get() else COLOR_OFF
-                )
-            if self.switch_loot:
-                self.mini_btn_loot.configure(
-                    fg_color=COLOR_ON if self.switch_loot.get() else COLOR_OFF
-                )
-            if self.switch_cavebot_var:
-                self.mini_btn_cavebot.configure(
-                    fg_color=COLOR_ON if self.switch_cavebot_var.get() else COLOR_OFF
-                )
-            if self.switch_healer:
-                self.mini_btn_healer.configure(
-                    fg_color=COLOR_ON if self.switch_healer.get() else COLOR_OFF
-                )
-            if self.switch_alarm:
-                self.mini_btn_alarm.configure(
-                    fg_color=COLOR_ON if self.switch_alarm.get() else COLOR_OFF
-                )
-            if self.switch_runemaker:
-                self.mini_btn_runemaker.configure(
-                    fg_color=COLOR_ON if self.switch_runemaker.get() else COLOR_OFF
-                )
-
+                state['eta_text'] = self.lbl_exp_eta_summary.cget("text")
         except Exception:
             pass
 
-        # Continua atualizando enquanto visível
+        # Coleta estados dos switches (uma vez só)
+        try:
+            state['switches'] = {
+                'trainer': self.switch_trainer.get() if self.switch_trainer else 0,
+                'loot': self.switch_loot.get() if self.switch_loot else 0,
+                'cavebot': self.switch_cavebot_var.get() if self.switch_cavebot_var else 0,
+                'healer': self.switch_healer.get() if self.switch_healer else 0,
+                'alarm': self.switch_alarm.get() if self.switch_alarm else 0,
+                'runemaker': self.switch_runemaker.get() if self.switch_runemaker else 0,
+            }
+        except Exception:
+            pass
+
+        # Coleta estado do X-Ray
+        try:
+            if self.callbacks.get_xray_active:
+                state['xray_active'] = self.callbacks.get_xray_active()
+        except Exception:
+            pass
+
+        return state
+
+    def _update_mini_hud(self):
+        """Atualiza os dados exibidos na mini HUD com otimização de performance."""
+        # Limpa referência do job atual (será reagendado no final se necessário)
+        self._mini_hud_job = None
+
+        # Verifica se deve continuar
+        if not self.mini_hud_visible or not self.mini_hud:
+            return
+
+        try:
+            # Coleta estado atual
+            current_state = self._get_mini_hud_state()
+            cached = self._mini_hud_cache
+
+            # Status indicator - só atualiza se mudou
+            if cached.get('is_paused') != current_state['is_paused']:
+                if current_state['is_paused']:
+                    self.mini_status.configure(text="⏸", text_color="#FFA500")
+                else:
+                    self.mini_status.configure(text="●", text_color="#00FF00")
+
+            # XP Rate - só atualiza se mudou
+            if cached.get('xp_text') != current_state['xp_text']:
+                self.mini_xp_rate.configure(text=current_state['xp_text'])
+
+            # ETA - só atualiza se mudou
+            if cached.get('eta_text') != current_state['eta_text']:
+                self.mini_eta.configure(text=current_state['eta_text'])
+
+            # Cores dos botões - só atualiza switches que mudaram
+            COLOR_ON = "#00AA00"
+            COLOR_OFF = "#303030"
+
+            old_switches = cached.get('switches', {})
+            new_switches = current_state['switches']
+
+            btn_map = {
+                'trainer': self.mini_btn_trainer,
+                'loot': self.mini_btn_loot,
+                'cavebot': self.mini_btn_cavebot,
+                'healer': self.mini_btn_healer,
+                'alarm': self.mini_btn_alarm,
+                'runemaker': self.mini_btn_runemaker,
+            }
+
+            for key, btn in btn_map.items():
+                if btn and old_switches.get(key) != new_switches.get(key):
+                    btn.configure(fg_color=COLOR_ON if new_switches.get(key) else COLOR_OFF)
+
+            # Botão X-Ray - só atualiza se mudou
+            if hasattr(self, 'mini_btn_xray') and self.mini_btn_xray:
+                if cached.get('xray_active') != current_state['xray_active']:
+                    xray_color = "#2CC985" if current_state['xray_active'] else "#303030"
+                    self.mini_btn_xray.configure(fg_color=xray_color)
+
+            # Atualiza cache
+            self._mini_hud_cache = current_state
+
+        except Exception as e:
+            # Log de erro em vez de silenciar completamente
+            print(f"[MiniHUD] Erro no update: {e}")
+
+        # Agenda próximo update COM tracking do job ID (2s = menos overhead)
         if self.mini_hud_visible:
-            self.app.after(1000, self._update_mini_hud)
+            self._mini_hud_job = self.app.after(2000, self._update_mini_hud)
 
     def setup_mini_hud(self):
         """
@@ -1236,10 +1362,12 @@ class MainWindow:
         # Bind para detectar minimize
         self.app.bind("<Unmap>", self._on_minimize)
 
-        # Quando restaurar, esconder mini HUD
+        # Quando restaurar, esconder mini HUD e cancelar jobs
         def on_restore(event):
             if self.app.state() == 'normal':
                 if self.mini_hud and self.mini_hud_visible:
+                    # CRÍTICO: Cancela job antes de esconder
+                    self._cancel_mini_hud_job()
                     self.mini_hud.withdraw()
                     self.mini_hud_visible = False
 

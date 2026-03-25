@@ -59,6 +59,7 @@ class BotState:
         # ===== Dados de Sessão (constantes durante conexão) =====
         self._char_name: str = ""
         self._char_id: int = 0
+        self._logout_reason: str = ""  # "NO_BLANKS", "GM", "MANUAL", etc.
 
         # ===== Contextos de Jogo (coordenação entre módulos) =====
         self._is_in_combat: bool = False
@@ -322,6 +323,18 @@ class BotState:
     def char_id(self, value: int):
         with self._lock:
             self._char_id = value
+
+    @property
+    def logout_reason(self) -> str:
+        """Motivo de logout intencional (para diferenciar tipos de desconexão)."""
+        with self._lock:
+            return self._logout_reason
+
+    @logout_reason.setter
+    def logout_reason(self, value: str):
+        """Define motivo de logout (limpar com '' após processar)."""
+        with self._lock:
+            self._logout_reason = value
 
     def get_player_id(self, pm, base_addr: int) -> int:
         """

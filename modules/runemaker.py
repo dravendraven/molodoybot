@@ -1,5 +1,8 @@
 import time
 import random
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Módulos Windows opcionais
 try:
@@ -20,7 +23,10 @@ except ImportError:
 def _beep(freq, duration):
     """Toca beep se winsound disponível."""
     if _has_winsound:
-        _beep(freq, duration)
+        try:
+            winsound.Beep(freq, duration)
+        except Exception as e:
+            logger.warning(f"[AUDIO] winsound.Beep falhou: {e}")
 
 from core.packet import (
     PacketManager, get_inventory_pos, get_container_pos
@@ -572,6 +578,10 @@ def runemaker_loop(pm, base_addr, hwnd, check_running=None, config=None, is_safe
 
                             log_msg("🚪 LOGOUT: Sem blanks e parado por 15s - deslogando...")
                             set_status("deslogando...")
+
+                            # Marca motivo de logout para notificação
+                            state.logout_reason = "NO_BLANKS"
+
                             try:
                                 packet.quit_game()
                                 time.sleep(2)
