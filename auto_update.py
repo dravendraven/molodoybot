@@ -17,6 +17,7 @@ CURRENT_VERSION = "9.3"
 # URLs do GitHub
 URL_VERSION = "https://raw.githubusercontent.com/dravendraven/molodoybot/refs/heads/main/version.txt"
 URL_EXE = "https://github.com/dravendraven/molodoybot/releases/download/latest/MolodoyBot.exe"
+URL_CHANGELOG = "https://github.com/dravendraven/molodoybot/releases/download/latest/changelog.txt"
 EXE_NAME = "MolodoyBot.exe"
 
 # Arquivos legados a serem removidos (migração do launcher antigo)
@@ -72,22 +73,29 @@ def cleanup_duplicate_exes():
 
 
 class UpdateWindow:
-    """Janela de progresso para update."""
+    """Janela de progresso para update com patch notes."""
 
-    def __init__(self, local_ver, remote_ver):
+    def __init__(self, local_ver, remote_ver, changelog=None):
         self.root = tk.Tk()
         self.root.title("Atualizando")
-        self.root.geometry("300x120")
-        self.root.resizable(False, False)
         self.root.configure(bg="#1a1a1a")
         self.root.protocol("WM_DELETE_WINDOW", lambda: None)  # Impede fechar
+
+        # Tamanho baseado em ter changelog ou não
+        if changelog:
+            width, height = 380, 300
+        else:
+            width, height = 300, 120
+
+        self.root.geometry(f"{width}x{height}")
+        self.root.resizable(False, False)
 
         # Centraliza na tela
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
-        x = (screen_width // 2) - 150
-        y = (screen_height // 2) - 60
-        self.root.geometry(f"300x120+{x}+{y}")
+        x = (screen_width // 2) - (width // 2)
+        y = (screen_height // 2) - (height // 2)
+        self.root.geometry(f"{width}x{height}+{x}+{y}")
 
         # Estilo
         style = ttk.Style()
@@ -104,7 +112,57 @@ class UpdateWindow:
             bg="#1a1a1a",
             fg="#3B8ED0"
         )
-        title.pack(pady=(15, 5))
+        title.pack(pady=(10, 5))
+
+        # Changelog (se disponível)
+        if changelog:
+            # Label "Novidades:"
+            lbl_novidades = tk.Label(
+                self.root,
+                text="Novidades:",
+                font=("Verdana", 9, "bold"),
+                bg="#1a1a1a",
+                fg="#AAAAAA"
+            )
+            lbl_novidades.pack(anchor="w", padx=15)
+
+            # Frame para lista com scroll
+            frame_changelog = tk.Frame(self.root, bg="#252525", bd=1, relief="sunken")
+            frame_changelog.pack(fill="both", expand=True, padx=15, pady=5)
+
+            # Canvas + Scrollbar para scroll
+            canvas = tk.Canvas(frame_changelog, bg="#252525", highlightthickness=0, height=130)
+            scrollbar = ttk.Scrollbar(frame_changelog, orient="vertical", command=canvas.yview)
+            scrollable_frame = tk.Frame(canvas, bg="#252525")
+
+            scrollable_frame.bind(
+                "<Configure>",
+                lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+            )
+
+            canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+            canvas.configure(yscrollcommand=scrollbar.set)
+
+            # Adiciona itens do changelog
+            for item in changelog:
+                lbl_item = tk.Label(
+                    scrollable_frame,
+                    text=f"  {item}",
+                    font=("Verdana", 8),
+                    bg="#252525",
+                    fg="#CCCCCC",
+                    anchor="w",
+                    justify="left"
+                )
+                lbl_item.pack(anchor="w", pady=1)
+
+            canvas.pack(side="left", fill="both", expand=True)
+            scrollbar.pack(side="right", fill="y")
+
+            # Bind mouse wheel
+            def _on_mousewheel(event):
+                canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+            canvas.bind_all("<MouseWheel>", _on_mousewheel)
 
         # Status
         self.lbl_status = tk.Label(
@@ -114,16 +172,16 @@ class UpdateWindow:
             bg="#1a1a1a",
             fg="#CCCCCC"
         )
-        self.lbl_status.pack(pady=5)
+        self.lbl_status.pack(pady=(5, 2))
 
         # Barra de progresso
         self.progress = ttk.Progressbar(
             self.root,
             style="dark.Horizontal.TProgressbar",
-            length=250,
+            length=width - 50,
             mode='determinate'
         )
-        self.progress.pack(pady=10)
+        self.progress.pack(pady=(2, 10))
 
         self.root.update()
 
@@ -155,6 +213,34 @@ def get_remote_version():
         response = requests.get(URL_VERSION, timeout=10)
         if response.status_code == 200:
             return response.text.strip()
+    except:
+        pass
+    return None
+
+
+def get_changelog():
+    """
+    Baixa changelog da release e formata para exibição.
+    Retorna lista de strings (mensagens de commit) ou None se falhar.
+    """
+    try:
+        import requests
+        response = requests.get(URL_CHANGELOG, timeout=5)
+        if response.status_code == 200:
+            lines = response.text.strip().split('\n')
+            # Formata: remove hash do commit, mantém só a mensagem
+            formatted = []
+            for line in lines[:15]:  # Max 15 itens
+                line = line.strip()
+                if not line:
+                    continue
+                # Formato: "abc1234 mensagem do commit" -> "mensagem do commit"
+                parts = line.split(' ', 1)
+                if len(parts) == 2:
+                    formatted.append(parts[1])
+                else:
+                    formatted.append(line)
+            return formatted if formatted else None
     except:
         pass
     return None
@@ -402,7 +488,7 @@ del "%~f0"
 
 
 def run_update(local_ver, remote_ver):
-    """Executa o processo de update com UI."""
+    """Executa o processo de update com UI e patch notes."""
     # Fecha splash nativo do PyInstaller (se existir) para não cobrir a GUI de update
     try:
         import pyi_splash
@@ -410,7 +496,10 @@ def run_update(local_ver, remote_ver):
     except ImportError:
         pass
 
-    window = UpdateWindow(local_ver, remote_ver)
+    # Tenta baixar changelog (não bloqueia se falhar)
+    changelog = get_changelog()
+
+    window = UpdateWindow(local_ver, remote_ver, changelog)
 
     def do_update():
         try:
