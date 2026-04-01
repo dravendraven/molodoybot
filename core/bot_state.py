@@ -405,8 +405,11 @@ class BotState:
             in_combat: True se há combate ativo, False caso contrário
         """
         with self._lock:
+            was_in_combat = self._is_in_combat  # Guarda estado anterior
             self._is_in_combat = in_combat
-            if in_combat:
+            # Atualiza last_combat_time APENAS na transição True → False
+            # (quando combate realmente termina, não a cada polling)
+            if was_in_combat and not in_combat:
                 self._last_combat_time = time.time()
 
     def set_loot_state(self, has_loot: bool):
@@ -443,9 +446,13 @@ class BotState:
         """
         Marca fim do ciclo de loot completo.
         Chamado pelo auto_loot ao finalizar (ou em exceção via finally).
+
+        Também atualiza last_combat_time para acionar cooldown pós-combate
+        no cavebot, garantindo pausa humanizada antes de retomar navegação.
         """
         with self._lock:
             self._is_processing_loot = False
+            self._last_combat_time = time.time()  # Aciona cooldown pós-combate
 
     @property
     def is_runemaking(self) -> bool:

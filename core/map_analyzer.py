@@ -1,5 +1,5 @@
 # core/map_analyzer.py
-from database.tiles_config import BLOCKING_IDS, AVOID_IDS, MOVE_IDS, STACK_IDS, get_special_type
+from database.tiles_config import BLOCKING_IDS, AVOID_IDS, MOVE_IDS, STACK_IDS, DAMAGE_IDS, POISON_IDS, get_special_type
 from config import DEBUG_PATHFINDING, DEBUG_OBSTACLE_CLEARING, DEBUG_STACK_CLEARING, PLAYER_AVOIDANCE_MULTIPLIER
 
 class MapAnalyzer:
@@ -102,6 +102,27 @@ class MapAnalyzer:
                         result['blocking_item_id'] = item_id
                         result['items'] = list(tile.items)
                     return result
+
+            # 3.5 VERIFICAÇÃO DE DANO (Fire, Energy, Lava)
+            # Estes tiles são WALKABLE mas com custo MUITO ALTO para evitar
+            # Só passa por cima se for o ÚNICO caminho possível
+            if item_id in DAMAGE_IDS:
+                properties['walkable'] = True
+                properties['type'] = 'DAMAGE'
+                properties['cost'] = 500  # Custo muito alto - quase último recurso
+                if debug_reason:
+                    properties['damage_item_id'] = item_id
+                continue
+
+            # 3.6 VERIFICAÇÃO DE POISON (menos perigoso que fire)
+            # Custo menor - bot pode passar se economizar bastante caminho
+            if item_id in POISON_IDS:
+                properties['walkable'] = True
+                properties['type'] = 'POISON'
+                properties['cost'] = 200  # Custo médio - menos perigoso que fire
+                if debug_reason:
+                    properties['poison_item_id'] = item_id
+                continue
 
             # 4. ITENS ESPECIAIS (Escadas, Buracos de Acesso, Corda)
             special = get_special_type(item_id)

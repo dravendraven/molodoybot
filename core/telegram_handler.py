@@ -80,9 +80,13 @@ class TelegramHandler:
         self._listener_thread = None
         self._stop_listener = False
 
+        # Connection pooling para evitar SSL access violations
+        self._session = None  # Será inicializado no listener_loop
+        self._session_lock = threading.Lock()
+
     def send_alert(self, msg: str):
         """
-        Envia alerta/notificação no Telegram.
+        Envia alerta/notificação no Telegram usando session pooling quando disponível.
         Usado por outros módulos (alarm, disconnect, etc.).
 
         Args:
@@ -101,6 +105,9 @@ class TelegramHandler:
         try:
             import requests
 
+            # Usa session se disponível (evita criar nova conexão)
+            session = self._session if self._session else requests
+
             # Obtém nome do personagem do bot_state (thread-safe)
             char_name = self.state.char_name if self.state.char_name else "Unknown"
 
@@ -113,7 +120,7 @@ class TelegramHandler:
             print(f"[DEBUG TELEGRAM] Enviando para chat_id={self.chat_id}")
             print(f"[DEBUG TELEGRAM] Mensagem: {formatted_msg}")
 
-            response = requests.post(url, data=data, timeout=15)
+            response = session.post(url, data=data, timeout=15)
 
             print(f"[DEBUG TELEGRAM] Status code: {response.status_code}")
             print(f"[DEBUG TELEGRAM] Response: {response.text}")
@@ -122,6 +129,9 @@ class TelegramHandler:
                 self.log("[TELEGRAM] Mensagem enviada.")
             else:
                 self.log(f"[TELEGRAM] Falha no envio: {response.status_code} - {response.text}")
+        except requests.exceptions.SSLError as e:
+            self.log(f"[TELEGRAM] SSL Error: {e}")
+            print(f"[DEBUG TELEGRAM] SSL Error: {e}")
         except Exception as e:
             self.log(f"[TELEGRAM ERROR] {e}")
             print(f"[DEBUG TELEGRAM] Exception: {e}")
@@ -176,44 +186,111 @@ class TelegramHandler:
 
     def _listener_loop(self):
         """
-        Loop principal de polling do Telegram.
-        Escuta comandos remotos via getUpdates.
+        Loop principal de polling do Telegram com connection pooling.
+        Evita SSL access violations usando session persistente.
         """
         print("[Telegram Listener] Thread iniciada.")
 
-        while self.state.is_running and not self._stop_listener:
-            # Só processa se conectado e com token configurado
-            if not self.state.is_connected or not self.token or "TOKEN" in self.token:
-                time.sleep(5)
-                continue
+        # Inicializa session com connection pooling
+        import requests
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
 
-            try:
-                import requests
+        self._session = requests.Session()
 
-                url = f"https://api.telegram.org/bot{self.token}/getUpdates"
-                params = {
-                    "timeout": 30,
-                    "offset": self._last_update_id + 1,
-                    "allowed_updates": ["message", "callback_query"]
-                }
+        # Configuração de retry automático para erros de rede
+        retry_strategy = Retry(
+            total=3,  # 3 tentativas
+            backoff_factor=1,  # 1s, 2s, 4s
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET", "POST"]
+        )
+        adapter = HTTPAdapter(
+            max_retries=retry_strategy,
+            pool_connections=1,  # 1 conexão persistente
+            pool_maxsize=1
+        )
+        self._session.mount("https://", adapter)
+        self._session.mount("http://", adapter)
 
-                response = requests.get(url, params=params, timeout=35)
+        consecutive_errors = 0
+        max_consecutive_errors = 5
+        backoff_time = 5
 
-                if response.status_code == 200:
-                    data = response.json()
-                    for update in data.get("result", []):
-                        self._last_update_id = update["update_id"]
-                        self._process_command(update)
-                else:
-                    print(f"[Telegram Listener] Erro HTTP: {response.status_code}")
+        try:
+            while self.state.is_running and not self._stop_listener:
+                # Circuit breaker: para após muitos erros consecutivos
+                if consecutive_errors >= max_consecutive_errors:
+                    print(f"[Telegram Listener] Circuit breaker ativado - {consecutive_errors} erros consecutivos")
+                    print(f"[Telegram Listener] Aguardando {backoff_time}s antes de retentar...")
+                    time.sleep(backoff_time)
+                    backoff_time = min(backoff_time * 2, 60)  # Exponential backoff (max 60s)
+                    consecutive_errors = 0
+
+                # Só processa se conectado e com token configurado
+                if not self.state.is_connected or not self.token or "TOKEN" in self.token:
+                    time.sleep(5)
+                    continue
+
+                try:
+                    url = f"https://api.telegram.org/bot{self.token}/getUpdates"
+                    params = {
+                        "timeout": 30,  # Server-side long polling
+                        "offset": self._last_update_id + 1,
+                        "allowed_updates": ["message", "callback_query"]
+                    }
+
+                    # Timeout aumentado para 90s (30s server + 60s buffer)
+                    response = self._session.get(url, params=params, timeout=90)
+
+                    if response.status_code == 200:
+                        consecutive_errors = 0  # Reset em caso de sucesso
+                        backoff_time = 5
+
+                        data = response.json()
+                        for update in data.get("result", []):
+                            self._last_update_id = update["update_id"]
+                            self._process_command(update)
+                    else:
+                        print(f"[Telegram Listener] Erro HTTP: {response.status_code}")
+                        consecutive_errors += 1
+                        time.sleep(5)
+
+                except requests.exceptions.Timeout:
+                    # Long polling timeout - normal, apenas continua
+                    consecutive_errors = 0
+                    pass
+
+                except requests.exceptions.SSLError as e:
+                    print(f"[Telegram Listener] SSL Error (recriar session): {e}")
+                    consecutive_errors += 1
+                    # Recria session em caso de SSL error
+                    try:
+                        self._session.close()
+                    except:
+                        pass
+                    self._session = requests.Session()
+                    self._session.mount("https://", adapter)
+                    time.sleep(10)
+
+                except (requests.exceptions.ConnectionError, OSError) as e:
+                    print(f"[Telegram Listener] Erro de conexão: {e}")
+                    consecutive_errors += 1
+                    time.sleep(10)
+
+                except Exception as e:
+                    print(f"[Telegram Listener] Erro inesperado: {type(e).__name__}: {e}")
+                    consecutive_errors += 1
                     time.sleep(5)
 
-            except requests.exceptions.Timeout:
-                # Long polling timeout - normal, continua
-                pass
-            except Exception as e:
-                print(f"[Telegram Listener] Erro: {e}")
-                time.sleep(5)
+        finally:
+            # Cleanup ao encerrar thread
+            if self._session:
+                try:
+                    self._session.close()
+                    print("[Telegram Listener] Session fechada corretamente")
+                except:
+                    pass
 
         print("[Telegram Listener] Thread encerrada.")
 

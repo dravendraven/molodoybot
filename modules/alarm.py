@@ -33,6 +33,7 @@ from core.bot_state import state
 from core.game_state import game_state
 from core.config_utils import make_config_getter
 from core.battlelist import BattleListScanner, SpawnTracker
+from core.models import Position
 
 # Definição de intervalos de alerta (Fallback caso não esteja no config)
 TELEGRAM_INTERVAL_NORMAL = 60
@@ -228,6 +229,8 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
             # =================================================================
             # A. VERIFICAÇÃO DE HP BAIXO
             # =================================================================
+            hp_danger_only = get_cfg('hp_danger_only', False)
+
             if hp_check_enabled:
                 try:
                     curr_hp = pm.read_int(base_addr + OFFSET_PLAYER_HP)
@@ -236,16 +239,53 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
                     if max_hp > 0 and curr_hp > 0:
                         pct = (curr_hp / max_hp) * 100
                         if pct < hp_threshold:
-                            # Marca como não-seguro (outros módulos vão reagir)
-                            set_safe_state(False)
+                            # VERIFICAÇÃO: Se hp_danger_only, só dispara com perigo real
+                            should_alert = True
 
-                            # Limita o alerta sonoro a cada 2 segundos
-                            if (time.time() - last_hp_alert) > 2.0:
-                                log_msg(f"🩸 ALARME DE VIDA: {pct:.1f}% (Abaixo de {hp_threshold}%)")
-                                set_status(f"🩸 HP baixo ({pct:.0f}%)")
-                                _beep(2500, 200)
-                                _beep(2500, 200)
-                                last_hp_alert = time.time()
+                            if hp_danger_only:
+                                should_alert = False  # Só alerta se encontrar perigo
+
+                                # Obtém posição do jogador
+                                hp_x, hp_y, hp_z = get_player_pos(pm, base_addr)
+
+                                # Obtém lista de criaturas
+                                hp_creatures = game_state.get_creatures() + game_state.get_players()
+                                if not hp_creatures:
+                                    hp_creatures = scanner.scan_all()
+
+                                for creature in hp_creatures:
+                                    # Ignora a si mesmo
+                                    if creature.name == current_name:
+                                        continue
+                                    # Ignora mortos/invisíveis
+                                    if not creature.is_visible or creature.hp_percent <= 0:
+                                        continue
+                                    # Ignora andares diferentes
+                                    if creature.position.z != hp_z:
+                                        continue
+
+                                    # Condição 1: Player com skull PK (white ou red)
+                                    if creature.is_player and creature.is_pk:
+                                        should_alert = True
+                                        break
+
+                                    # Condição 2: Criatura não-safe (não NPC, não na safe_list)
+                                    if not creature.is_npc:
+                                        if not any(s in creature.name for s in safe_list):
+                                            should_alert = True
+                                            break
+
+                            if should_alert:
+                                # Marca como não-seguro (outros módulos vão reagir)
+                                set_safe_state(False)
+
+                                # Limita o alerta sonoro a cada 2 segundos
+                                if (time.time() - last_hp_alert) > 2.0:
+                                    log_msg(f"🩸 ALARME DE VIDA: {pct:.1f}% (Abaixo de {hp_threshold}%)")
+                                    set_status(f"🩸 HP baixo ({pct:.0f}%)")
+                                    _beep(2500, 200)
+                                    _beep(2500, 200)
+                                    last_hp_alert = time.time()
                 except: pass
 
             # =================================================================
@@ -488,8 +528,10 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
                     is_visual_gm = True
 
             # =================================================================
-            # E. VERIFICAÇÃO DE MOVIMENTO INESPERADO
+            # E. VERIFICAÇÃO DE MOVIMENTO INESPERADO (detecta "push" por player)
             # =================================================================
+            # Só dispara alarme se houver player adjacente (fora da safe_list)
+            # empurrando o bot. Movimento sem player próximo é ignorado.
             movement_danger = False
             movement_enabled = get_cfg('movement_enabled', False)
             keep_position = get_cfg('keep_position', False)
@@ -509,47 +551,72 @@ def alarm_loop(pm, base_addr, check_running, config, callbacks, status_callback=
 
                 ex, ey, ez = origin
                 if (my_x, my_y, my_z) != (ex, ey, ez):
-                    # Comportamento baseado em quem gerencia o retorno:
-                    # - runemaker_return_safe=True: Alerta UMA vez, runemaker faz flee/return
-                    # - runemaker_return_safe=False: Alerta contínuo como perigo padrão
-                    is_first_alert = (last_movement_alert_time == 0)
-                    should_alert = is_first_alert or (not runemaker_return_safe)
+                    # Verifica se há player adjacente (fora da safe_list) - detecta "push"
+                    has_adjacent_player = False
 
-                    # Só marca como perigo se é primeiro alerta OU runemaker não está gerenciando
-                    # Isso permite que runemaker transite de FLEEING → RETURNING quando chega ao safe_pos
-                    # (a consolidação de estado usa movement_danger para chamar set_safe_state)
-                    if is_first_alert or not runemaker_return_safe:
-                        movement_danger = True
-                        set_safe_state(False)
+                    # Garante que temos lista de criaturas
+                    if visual_enabled:
+                        _creatures = all_creatures
+                    else:
+                        _creatures = game_state.get_creatures() + game_state.get_players()
+                        if not _creatures:
+                            _creatures = scanner.scan_all()
 
-                    if should_alert:
-                        dist_moved = max(abs(my_x - ex), abs(my_y - ey))
+                    my_pos = Position(my_x, my_y, my_z)
 
-                        # Log só no primeiro alerta (evita flood no console)
-                        if is_first_alert:
-                            log_msg(f"🚨 MOVIMENTO INESPERADO: ({ex},{ey},{ez}) → ({my_x},{my_y},{my_z}) [{dist_moved} sqm]")
+                    for creature in _creatures:
+                        if creature.is_player and creature.name != current_name:
+                            # Ignora players na safe_list
+                            if any(s in creature.name for s in safe_list):
+                                continue
+                            # Verifica adjacência (distância <= 1, mesmo andar)
+                            if creature.is_adjacent_to(my_pos):
+                                has_adjacent_player = True
+                                break
 
-                        set_status(f"🚨 Movimento inesperado! ({dist_moved} sqm)")
-                        _beep(1500, 500)
+                    # Só dispara alarme se há player adjacente (push detectado)
+                    if has_adjacent_player:
+                        # Comportamento baseado em quem gerencia o retorno:
+                        # - runemaker_return_safe=True: Alerta UMA vez, runemaker faz flee/return
+                        # - runemaker_return_safe=False: Alerta contínuo como perigo padrão
+                        is_first_alert = (last_movement_alert_time == 0)
+                        should_alert = is_first_alert or (not runemaker_return_safe)
 
-                        if (time.time() - last_telegram_time) > TELEGRAM_INTERVAL_NORMAL:
-                            send_telegram(f"🚨 Movimento inesperado: ({ex},{ey},{ez}) → ({my_x},{my_y},{my_z})")
-                            last_telegram_time = time.time()
+                        # Só marca como perigo se é primeiro alerta OU runemaker não está gerenciando
+                        # Isso permite que runemaker transite de FLEEING → RETURNING quando chega ao safe_pos
+                        # (a consolidação de estado usa movement_danger para chamar set_safe_state)
+                        if is_first_alert or not runemaker_return_safe:
+                            movement_danger = True
+                            set_safe_state(False)
 
-                        last_movement_alert_time = time.time()
+                        if should_alert:
+                            dist_moved = max(abs(my_x - ex), abs(my_y - ey))
 
-                    # Manter Posição: retornar ao ponto (só se runemaker return_safe NÃO está ativo)
-                    if keep_position and not runemaker_return_safe:
-                        try:
-                            from core.navigation_utils import navigate_to_position
-                            navigate_to_position(
-                                pm, base_addr, hwnd, origin,
-                                packet=None,
-                                clear_obstacles=True,
-                                log_func=log_msg
-                            )
-                        except Exception as e:
-                            log_msg(f"[ALARM] Erro ao retornar posição: {e}")
+                            # Log só no primeiro alerta (evita flood no console)
+                            if is_first_alert:
+                                log_msg(f"🚨 MOVIMENTO INESPERADO: ({ex},{ey},{ez}) → ({my_x},{my_y},{my_z}) [{dist_moved} sqm]")
+
+                            set_status(f"🚨 Movimento inesperado! ({dist_moved} sqm)")
+                            _beep(1500, 500)
+
+                            if (time.time() - last_telegram_time) > TELEGRAM_INTERVAL_NORMAL:
+                                send_telegram(f"🚨 Movimento inesperado: ({ex},{ey},{ez}) → ({my_x},{my_y},{my_z})")
+                                last_telegram_time = time.time()
+
+                            last_movement_alert_time = time.time()
+
+                        # Manter Posição: retornar ao ponto (só se runemaker return_safe NÃO está ativo)
+                        if keep_position and not runemaker_return_safe:
+                            try:
+                                from core.navigation_utils import navigate_to_position
+                                navigate_to_position(
+                                    pm, base_addr, hwnd, origin,
+                                    packet=None,
+                                    clear_obstacles=True,
+                                    log_func=log_msg
+                                )
+                            except Exception as e:
+                                log_msg(f"[ALARM] Erro ao retornar posição: {e}")
                 else:
                     # Voltou para origin - MAS só reseta se runemaker não está fugindo
                     # (runemaker pode passar pelo origin durante a fuga para o safe_pos)

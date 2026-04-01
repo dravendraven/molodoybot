@@ -145,6 +145,9 @@ class Creature:
     light: int = 0          # Light level emitted
     light_color: int = 0    # Light color
     blacksquare: int = 0    # Shown when creature attacks player (8 bytes)
+    # PvP Status
+    skull: int = 0          # 0=none, 1=yellow, 2=green(party), 3=white(pk), 4=red(pk)
+    party: int = 0          # Party status
 
     @property
     def is_npc(self) -> bool:
@@ -221,6 +224,43 @@ class Creature:
     def is_monster(self) -> bool:
         """Verifica se é um monstro (não player, não NPC)."""
         return not self.is_player and not self.is_npc
+
+    # ===== SKULL PROPERTIES =====
+
+    @property
+    def has_skull(self) -> bool:
+        """Verifica se tem qualquer skull (PvP marker)."""
+        return self.skull > 0
+
+    @property
+    def is_yellow_skull(self) -> bool:
+        """Yellow skull = atacou alguém recentemente."""
+        return self.skull == 1
+
+    @property
+    def is_green_skull(self) -> bool:
+        """Green skull = membro do party."""
+        return self.skull == 2
+
+    @property
+    def is_white_skull(self) -> bool:
+        """White skull = Player Killer."""
+        return self.skull == 3
+
+    @property
+    def is_red_skull(self) -> bool:
+        """Red skull = Mass Player Killer."""
+        return self.skull == 4
+
+    @property
+    def is_pk(self) -> bool:
+        """Verifica se é PK (white ou red skull)."""
+        return self.skull in (3, 4)
+
+    @property
+    def is_party_member(self) -> bool:
+        """Verifica se é membro do party (green skull)."""
+        return self.skull == 2
 
     @property
     def is_dead(self) -> bool:

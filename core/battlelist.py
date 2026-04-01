@@ -19,7 +19,8 @@ from config import (
     OFFSET_WALK_DIRECTION, OFFSET_MOVEMENT_STATUS, OFFSET_FACING_DIRECTION,
     OFFSET_OUTFIT_TYPE, OFFSET_OUTFIT_HEAD, OFFSET_OUTFIT_BODY,
     OFFSET_OUTFIT_LEGS, OFFSET_OUTFIT_FEET,
-    OFFSET_LIGHT, OFFSET_LIGHT_COLOR, OFFSET_BLACKSQUARE
+    OFFSET_LIGHT, OFFSET_LIGHT_COLOR, OFFSET_BLACKSQUARE,
+    OFFSET_SKULL, OFFSET_PARTY
 )
 from core.models import Creature, Position
 
@@ -123,6 +124,10 @@ class BattleListScanner:
             light_color = struct.unpack_from('<I', raw_bytes, OFFSET_LIGHT_COLOR)[0]
             blacksquare = struct.unpack_from('<I', raw_bytes, OFFSET_BLACKSQUARE)[0]  # uint32_t (GetTickCount)
 
+            # Parse PvP status
+            skull = struct.unpack_from('<I', raw_bytes, OFFSET_SKULL)[0]  # 0=none, 1=yellow, 2=green, 3=white, 4=red
+            party = struct.unpack_from('<I', raw_bytes, OFFSET_PARTY)[0]
+
             return Creature(
                 id=c_id,
                 name=name,
@@ -141,7 +146,9 @@ class BattleListScanner:
                 outfit_feet=outfit_feet,
                 light=light,
                 light_color=light_color,
-                blacksquare=blacksquare
+                blacksquare=blacksquare,
+                skull=skull,
+                party=party
             )
 
         except Exception:

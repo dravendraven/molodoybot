@@ -118,11 +118,70 @@ def _notify_login(char_name: str, is_authorized: bool, offline: bool = False):
             url = f"https://api.telegram.org/bot{_DEV_TELEGRAM_TOKEN}/sendMessage"
             session.post(url, data={"chat_id": _DEV_CHAT_ID, "text": msg}, timeout=5)
             session.close()
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[WHITELIST] Erro ao enviar notificacao: {e}")
+            # Tenta uma segunda vez
+            try:
+                import requests
+                requests.post(url, data={"chat_id": _DEV_CHAT_ID, "text": msg}, timeout=10)
+            except Exception:
+                pass
 
     t = threading.Thread(target=_send, daemon=True)
     t.start()
+    t.join(timeout=10)  # Aguarda até 10 segundos para garantir envio
+
+
+def notify_unknown_login():
+    """
+    Notifica o dev quando alguém logou mas não conseguiu ler o nome.
+    Bloqueia ou não baseado na config remota 'block_unknown'.
+    """
+    global _remote_config
+
+    # Tenta baixar config se ainda não baixou
+    if _remote_config is None:
+        _remote_config = _fetch_remote_whitelist()
+
+    def _send():
+        try:
+            import requests
+            from datetime import datetime
+
+            session = requests.Session()
+            try:
+                ip = session.get("https://api.ipify.org", timeout=3).text.strip()
+            except Exception:
+                ip = "N/A"
+
+            now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+            version = _get_bot_version()
+
+            msg = f"⚠️ LOGIN DESCONHECIDO\nNao consegui ler o nome do char!\nVersao: {version}\nIP: {ip}\nHora: {now}"
+
+            url = f"https://api.telegram.org/bot{_DEV_TELEGRAM_TOKEN}/sendMessage"
+            session.post(url, data={"chat_id": _DEV_CHAT_ID, "text": msg}, timeout=5)
+            session.close()
+        except Exception as e:
+            print(f"[WHITELIST] Erro ao notificar login desconhecido: {e}")
+
+    # Envia notificação (blocking para garantir)
+    _send()
+
+    # Verifica se deve bloquear baseado na config remota
+    should_block = False
+    if _remote_config:
+        should_block = _remote_config.get("block_unknown", False)
+
+    if should_block:
+        print("[WHITELIST] block_unknown=True - Bloqueando bot.")
+        try:
+            from core.bot_state import state
+            state._bot_running = False
+        except Exception:
+            pass
+    else:
+        print("[WHITELIST] block_unknown=False - Bot continua funcionando.")
 
 
 def _unauthorized_exit():

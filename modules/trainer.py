@@ -674,6 +674,10 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
     floor_change_time = 0.0
     FLOOR_CHANGE_KS_GUARD = 1.5  # seconds - guard period for KS check after floor change
 
+    # HP Threshold logging (prevents spam during filtering)
+    last_hp_threshold_filter_log = 0.0
+    HP_THRESHOLD_LOG_COOLDOWN = 5.0  # seconds between filter log messages
+
     # Será inicializado dentro do loop com debug_mode
     mapper = None
     analyzer = None
@@ -789,6 +793,10 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
 
         # CHASE MODE: usar walker A* em vez de packet.follow nativo
         chase_mode = get_cfg('chase_mode_enabled', CHASE_MODE_ENABLED)
+
+        # HP THRESHOLD: filtrar criaturas abaixo de HP configurável
+        hp_threshold_enabled = get_cfg('hp_threshold_enabled', False)
+        hp_threshold_value = get_cfg('hp_threshold_value', 20)
 
         # Ativa se: standalone config OU (spear picker combo)
         follow_before_attack = follow_then_attack_standalone or (follow_before_attack_enabled and spear_picker_enabled and trigger_range > 1)
@@ -1052,18 +1060,17 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                         if debug_mode:
                             print(f"      ⚠️ Monstro no mesmo tile (dist=0)")
                     else:
-                        # Pergunta ao A*: "Consigo dar o primeiro passo em direção a esse destino?"
-                        next_step = walker.get_next_step(rel_x, rel_y, activate_fallback=False)
-
-                        # Se next_step for None, o caminho está bloqueado (parede ou outro monstro)
-                        if next_step is None:
+                        # Verifica se há caminho COMPLETO até posição ADJACENTE ao alvo
+                        # (get_bot_path_cost calcula tile adjacente e usa A* full path)
+                        path_cost = get_bot_path_cost(walker, rel_x, rel_y, MELEE_RANGE)
+                        if path_cost == float('inf'):
                             is_reachable = False
                             if debug_mode:
-                                print(f"      ❌ INACESSÍVEL: {name} (A* retornou None)")
+                                print(f"      ❌ INACESSÍVEL: {name} (sem caminho até tile adjacente)")
                             continue
                         else:
                             if debug_mode:
-                                print(f"      ✅ ACESSÍVEL: Next step = {next_step}")
+                                print(f"      ✅ ACESSÍVEL: path_cost = {path_cost}")
                 else:
                     if debug_mode:
                         print(f"      ⚡ BYPASS: Criatura nos atacando - ignorando check de acessibilidade")
@@ -1125,12 +1132,27 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                 # REGRA ABSOLUTA: Criatura atacando player SEMPRE é candidato válido
                 # Mesmo que anti-KS a descartasse, se is_attacking_me=True, é válida
                 if is_attacking_me or not skip_ks:
-                    if debug_mode:
-                        reason = "ATACANDO PLAYER" if is_attacking_me else "KS PASS"
-                        print(f"      → CANDIDATO ({reason}): HP:{hp} Dist:({dist_x},{dist_y})")
-                    valid_candidates.append(
-                        creature_to_candidate_dict(creature, my_x, my_y, trigger_range, current_line, is_attacking_me=is_attacking_me)
-                    )
+                    # === HP THRESHOLD FILTER ===
+                    # Skip creatures below HP threshold (unless attacking us)
+                    skip_hp_threshold = False
+                    if hp_threshold_enabled and not is_attacking_me:
+                        if hp < hp_threshold_value:
+                            skip_hp_threshold = True
+                            # Log decision (throttled to prevent spam)
+                            if debug_mode:
+                                current_time = time.time()
+                                if current_time - last_hp_threshold_filter_log >= HP_THRESHOLD_LOG_COOLDOWN:
+                                    last_hp_threshold_filter_log = current_time
+                                    print(f"[HP THRESHOLD] SKIP: {name} HP={hp}% < {hp_threshold_value}%")
+
+                    # Add to candidates if passed all filters
+                    if not skip_hp_threshold:
+                        if debug_mode:
+                            reason = "ATACANDO PLAYER" if is_attacking_me else "KS PASS + HP PASS"
+                            print(f"      → CANDIDATO ({reason}): HP:{hp} Dist:({dist_x},{dist_y})")
+                        valid_candidates.append(
+                            creature_to_candidate_dict(creature, my_x, my_y, trigger_range, current_line, is_attacking_me=is_attacking_me)
+                        )
 
             if debug_mode:
                 print(f"--- FIM DO SCAN ---")
@@ -1339,9 +1361,9 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                                 # Se não está atacando: pode ser KS ou criatura ainda não reagiu
                                 is_attacking_me = target_data.get("is_attacking_me", False)
 
-                                if not is_attacking_me:
-                                    # Criatura NÃO está atacando - cancelar follow e voltar ao cavebot
-                                    log(f"⚠️ {target_data['name']} não está atacando - cancelando follow")
+                                if ks_enabled and not is_attacking_me:
+                                    # Criatura NÃO está atacando - cancelar follow e voltar ao cavebot (apenas se anti-KS ativo)
+                                    log(f"⚠️ {target_data['name']} não está atacando - cancelando follow (anti-KS ativo)")
                                     log_decision(f"🛑 FOLLOW CANCELADO: {target_data['name']} não está atacando (is_attacking_me=False)")
 
                                     # Para chase/follow
@@ -1366,7 +1388,7 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                                     # should_attack_new permanece False
 
                                     if debug_mode:
-                                        print(f"[FOLLOW-DEBUG] Follow/chase cancelado - criatura não atacando")
+                                        print(f"[FOLLOW-DEBUG] Follow/chase cancelado - criatura não atacando (anti-KS ativo)")
                                         print(f"[FOLLOW-DEBUG]   Cavebot pode retomar navegação")
 
                                     time.sleep(SCAN_DELAY_COMBAT)
@@ -1408,6 +1430,36 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                         if debug_mode: print(f"--> Iniciando monitoramento em {target_data['name']} (ID: {current_target_id})")
                     else:
                         monitor.update(target_data["hp"])
+
+                    # === HP THRESHOLD: REACTIVE STOP ===
+                    if hp_threshold_enabled:
+                        current_hp = target_data["hp"]
+
+                        if current_hp < hp_threshold_value:
+                            # Current target dropped below threshold - STOP ATTACK
+                            log(f"⏸️ HP THRESHOLD: {target_data['name']} HP={current_hp}% < {hp_threshold_value}% - PARANDO ataque")
+                            set_status(f"HP baixo: {target_data['name']} ({current_hp}%)")
+
+                            # Stop monitor
+                            if current_monitored_id != 0:
+                                monitor.stop_and_report()
+                                current_monitored_id = 0
+
+                            # Clear target from memory (stops attack, removes red square)
+                            try:
+                                pm.write_int(target_addr, 0)
+                            except Exception as e:
+                                if debug_mode:
+                                    log(f"⚠️ Erro ao limpar target: {e}")
+
+                            # Clear local state
+                            current_target_id = 0
+                            last_target_data = None
+                            became_unreachable_time = None
+
+                            # Go to next cycle (filter will prevent re-selection)
+                            time.sleep(SCAN_DELAY_COMBAT)
+                            continue
 
                     # === COMBAT MOVEMENT (LOOP CONSTANTE) ===
                     # Verifica a cada COMBAT_MOVE_CHECK_INTERVAL segundos durante combate
@@ -1831,210 +1883,220 @@ def trainer_loop(pm, base_addr, hwnd, monitor, check_running, config, status_cal
                 # =============================================
 
                 if len(final_candidates) > 0:
-                    if next_attack_time == 0:
-                        delay = random.uniform(min_delay, max_delay)
-                        next_attack_time = time.time() + delay
-                        log(f"⏳ Aguardando {delay:.2f}s para atacar...")
-                        # Status: aguardando delay
-                        target_name = final_candidates[0]['name'] if final_candidates else "alvo"
-                        set_status(f"delay {delay:.1f}s → {target_name}")
+                    # NOTA: Delay de humanização agora é aplicado APENAS antes de ATTACK, não FOLLOW
+                    # Isso evita que o personagem fique "congelado" após cavebot pausar
+                    # FOLLOW inicia imediatamente (comportamento humano natural)
 
-                        # Se configurado, pausa módulos durante delay (simula AFK)
-                        # IMPORTANTE: Só pausa se NÃO está pausado (evita conflito com AFK global)
-                        if get_cfg('pause_modules_during_delay', False) and not state.is_afk_paused:
-                            state.set_afk_pause(True, delay)
-                            log(f"⏸️ Módulos pausados por {delay:.1f}s (simulando AFK)")
+                    # ===== LOG DETALHADO DE DECISÃO =====
+                    if debug_decisions or debug_mode:
+                        print(f"\n{'='*60}")
+                        print(f"[DECISION] 🎯 AVALIANDO NOVO ALVO")
+                        print(f"{'='*60}")
+                        print(f"[DECISION] Minha posição: ({my_x}, {my_y}, {my_z})")
+                        print(f"[DECISION] KS Prevention: {'ATIVO' if ks_enabled else 'DESATIVADO'}")
 
-                    if time.time() >= next_attack_time:
-                        # ===== LOG DETALHADO DE DECISÃO =====
-                        if debug_decisions or debug_mode:
-                            print(f"\n{'='*60}")
-                            print(f"[DECISION] 🎯 AVALIANDO NOVO ALVO")
-                            print(f"{'='*60}")
-                            print(f"[DECISION] Minha posição: ({my_x}, {my_y}, {my_z})")
-                            print(f"[DECISION] KS Prevention: {'ATIVO' if ks_enabled else 'DESATIVADO'}")
+                        # Lista candidatos
+                        print(f"\n[DECISION] 📋 CANDIDATOS ({len(final_candidates)}):")
+                        for idx, c in enumerate(final_candidates):
+                            c_dist = max(abs(c['dist_x']), abs(c['dist_y']))
+                            c_cost = get_distance_cost(walker, c['abs_x'] - my_x, c['abs_y'] - my_y, MELEE_RANGE)
+                            attacking_me = "⚔️ ATACANDO" if c.get('is_attacking_me') else ""
+                            print(f"  [{idx}] {c['name']} | pos:({c['abs_x']},{c['abs_y']}) | dist:{c_dist} | custo_A*:{c_cost} | HP:{c['hp']}% {attacking_me}")
 
-                            # Lista candidatos
-                            print(f"\n[DECISION] 📋 CANDIDATOS ({len(final_candidates)}):")
-                            for idx, c in enumerate(final_candidates):
-                                c_dist = max(abs(c['dist_x']), abs(c['dist_y']))
-                                c_cost = get_distance_cost(walker, c['abs_x'] - my_x, c['abs_y'] - my_y, MELEE_RANGE)
-                                attacking_me = "⚔️ ATACANDO" if c.get('is_attacking_me') else ""
-                                print(f"  [{idx}] {c['name']} | pos:({c['abs_x']},{c['abs_y']}) | dist:{c_dist} | custo_A*:{c_cost} | HP:{c['hp']}% {attacking_me}")
+                        # Lista entidades visíveis (potenciais players)
+                        potential_players = [e for e in all_visible_entities if not any(t in e['name'] for t in targets_list)]
+                        if potential_players:
+                            print(f"\n[DECISION] 👥 PLAYERS VISÍVEIS ({len(potential_players)}):")
+                            for e in potential_players:
+                                e_dist = max(abs(e['abs_x'] - my_x), abs(e['abs_y'] - my_y))
+                                print(f"  • {e['name']} | pos:({e['abs_x']},{e['abs_y']}) | dist_de_mim:{e_dist}")
+                        else:
+                            print(f"\n[DECISION] 👥 PLAYERS VISÍVEIS: Nenhum")
+                        print(f"")
 
-                            # Lista entidades visíveis (potenciais players)
-                            potential_players = [e for e in all_visible_entities if not any(t in e['name'] for t in targets_list)]
-                            if potential_players:
-                                print(f"\n[DECISION] 👥 PLAYERS VISÍVEIS ({len(potential_players)}):")
-                                for e in potential_players:
-                                    e_dist = max(abs(e['abs_x'] - my_x), abs(e['abs_y'] - my_y))
-                                    print(f"  • {e['name']} | pos:({e['abs_x']},{e['abs_y']}) | dist_de_mim:{e_dist}")
+                    # RE-VALIDAÇÃO KS: Verifica engagement no momento do ataque
+                    # Corrige cenário onde bot vê criatura antes do player
+                    best = None
+                    skipped_candidates = []  # Rastreia candidatos rejeitados
+
+                    for candidate in final_candidates:
+                        if candidate["id"] == current_target_id:
+                            continue
+
+                        c_dist = max(abs(candidate['dist_x']), abs(candidate['dist_y']))
+                        c_cost = get_distance_cost(walker, candidate['abs_x'] - my_x, candidate['abs_y'] - my_y, MELEE_RANGE)
+
+                        # Re-valida KS com lista ATUAL de entidades
+                        # BYPASS: Se criatura está atacando o player, ignora KS check
+                        if ks_enabled and not candidate.get("is_attacking_me", False):
+                            # Log detalhado do KS check
+                            if debug_decisions or debug_mode:
+                                print(f"[DECISION] 🔍 KS CHECK: {candidate['name']}")
+                                print(f"[DECISION]   Criatura em: ({candidate['abs_x']}, {candidate['abs_y']})")
+                                print(f"[DECISION]   Meu custo até ela (A*): {c_cost}")
+
+                                # Calcula distância de cada player até esta criatura
+                                for e in all_visible_entities:
+                                    if e['name'] == current_name:
+                                        continue
+                                    if any(t in e['name'] for t in targets_list):
+                                        continue
+                                    player_cost = steps_to_adjacent(candidate['abs_x'] - e['abs_x'], candidate['abs_y'] - e['abs_y'], MELEE_RANGE) * 10
+                                    comparison = "⚠️ PLAYER MAIS PERTO" if player_cost <= c_cost else "✓ Eu mais perto"
+                                    print(f"[DECISION]   → {e['name']}: custo={player_cost} | {comparison}")
+
+                            is_engaged, ks_reason = engagement_detector.is_engaged_with_other(
+                                {'id': candidate["id"], 'abs_x': candidate["abs_x"],
+                                 'abs_y': candidate["abs_y"], 'hp': candidate["hp"]},
+                                current_name,
+                                (my_x, my_y),
+                                all_visible_entities,
+                                current_target_id,
+                                targets_list,
+                                walker=walker,
+                                attack_range=MELEE_RANGE,
+                                debug=False,  # Já logamos acima
+                                log_func=print
+                            )
+                            if is_engaged:
+                                if debug_decisions or debug_mode:
+                                    print(f"[DECISION]   ❌ REJEITADO: {ks_reason}")
+                                log(f"⚠️ [KS RE-CHECK] {candidate['name']} engajada - pulando")
+                                skipped_candidates.append((candidate['name'], ks_reason))
+                                continue
                             else:
-                                print(f"\n[DECISION] 👥 PLAYERS VISÍVEIS: Nenhum")
-                            print(f"")
+                                if debug_decisions or debug_mode:
+                                    print(f"[DECISION]   ✅ APROVADO: Nenhum player mais próximo")
+                        elif candidate.get("is_attacking_me", False):
+                            if debug_decisions or debug_mode:
+                                print(f"[DECISION] ⚡ KS BYPASS: {candidate['name']} está me atacando!")
 
-                        # RE-VALIDAÇÃO KS: Verifica engagement no momento do ataque
-                        # Corrige cenário onde bot vê criatura antes do player
-                        best = None
-                        skipped_candidates = []  # Rastreia candidatos rejeitados
+                        best = candidate
+                        break
 
-                        for candidate in final_candidates:
-                            if candidate["id"] == current_target_id:
+                    # Log resumo da decisão
+                    if debug_decisions or debug_mode:
+                        if skipped_candidates:
+                            print(f"\n[DECISION] 🚫 CANDIDATOS REJEITADOS POR KS:")
+                            for name, reason in skipped_candidates:
+                                print(f"  • {name}: {reason}")
+                        print(f"")
+
+                    if best and best["id"] != current_target_id:
+                        # Calcula distância Chebyshev para o alvo
+                        dist_to_target = max(abs(best["dist_x"]), abs(best["dist_y"]))
+                        best_cost = get_distance_cost(walker, best['abs_x'] - my_x, best['abs_y'] - my_y, MELEE_RANGE)
+
+                        # LOG FINAL DE DECISÃO
+                        if debug_decisions or debug_mode:
+                            action = "FOLLOW" if follow_before_attack and dist_to_target > 1 else "ATTACK"
+                            print(f"[DECISION] ✅ ALVO SELECIONADO: {best['name']}")
+                            print(f"[DECISION]   Posição: ({best['abs_x']}, {best['abs_y']})")
+                            print(f"[DECISION]   Distância: {dist_to_target} tiles | Custo A*: {best_cost}")
+                            print(f"[DECISION]   HP: {best['hp']}%")
+                            print(f"[DECISION]   Atacando-me: {'SIM' if best.get('is_attacking_me') else 'NÃO'}")
+                            print(f"[DECISION]   Ação: {action}")
+                            print(f"{'='*60}\n")
+
+                        # DEBUG: Log da decisão follow/attack (verbose)
+                        if debug_mode:
+                            print(f"[FOLLOW-DEBUG] Novo alvo: {best['name']} (id={best['id']})")
+                            print(f"[FOLLOW-DEBUG]   Distância: {dist_to_target} tiles")
+                            print(f"[FOLLOW-DEBUG]   follow_before_attack={follow_before_attack}")
+                            print(f"[FOLLOW-DEBUG]   Decisão: {'FOLLOW' if follow_before_attack and dist_to_target > 1 else 'ATTACK'}")
+
+                        # FOLLOW BEFORE ATTACK: Quando spear_picker + range > 1
+                        if follow_before_attack and dist_to_target > 1:
+                            # Usa FOLLOW em vez de attack
+                            log(f"🏃 SEGUINDO: {best['name']} (dist={dist_to_target})")
+                            set_status(f"seguindo {best['name']}")
+
+                            if chase_mode:
+                                log_decision(f"🏃 CHASE: {best['name']} (dist:{dist_to_target}) - walker A*")
+                                chaser.start_chase(best["id"], best["abs_x"], best["abs_y"], best["z"])
+                                # Write target ID to client memory for visual indicator and state tracking
+                                try:
+                                    pm.write_int(target_addr, best["id"])
+                                except:
+                                    pass
+                            else:
+                                log_decision(f"🏃 SEGUINDO: {best['name']} (dist:{dist_to_target}) - follow nativo")
+                                packet.follow(best["id"])
+
+                            # Atualiza estado de follow
+                            state.start_follow(best["id"])
+                            is_currently_following = True
+                            follow_target_id = best["id"]
+
+                            if debug_mode:
+                                mode_str = "CHASE (walker)" if chase_mode else "FOLLOW (0xA2)"
+                                print(f"[FOLLOW-DEBUG] {mode_str} para creature_id={best['id']}")
+                                print(f"[FOLLOW-DEBUG]   state.is_following={state.is_following}")
+                                print(f"[FOLLOW-DEBUG]   state.is_in_combat={state.is_in_combat}")
+                        else:
+                            # Attack normal (distância <= 1 ou follow desabilitado)
+                            # DELAY DE HUMANIZAÇÃO: Aplicado APENAS antes de ATTACK
+                            # (FOLLOW inicia imediatamente, delay é só para o ataque)
+                            if next_attack_time == 0:
+                                delay = random.uniform(min_delay, max_delay)
+                                next_attack_time = time.time() + delay
+                                log(f"⏳ Aguardando {delay:.2f}s para atacar {best['name']}...")
+                                set_status(f"delay {delay:.1f}s → {best['name']}")
+
+                                # Se configurado, pausa módulos durante delay (simula AFK)
+                                if get_cfg('pause_modules_during_delay', False) and not state.is_afk_paused:
+                                    state.set_afk_pause(True, delay)
+                                    log(f"⏸️ Módulos pausados por {delay:.1f}s (simulando AFK)")
+                                continue  # Aguarda próximo ciclo para verificar delay
+
+                            if time.time() < next_attack_time:
+                                # Delay ainda não passou - aguarda
+                                remaining = next_attack_time - time.time()
+                                set_status(f"delay {remaining:.1f}s → {best['name']}")
                                 continue
 
-                            c_dist = max(abs(candidate['dist_x']), abs(candidate['dist_y']))
-                            c_cost = get_distance_cost(walker, candidate['abs_x'] - my_x, candidate['abs_y'] - my_y, MELEE_RANGE)
+                            # Delay passou - executa attack
+                            log(f"⚔️ ATACANDO: {best['name']}")
+                            set_status(f"atacando {best['name']}")
+                            ks_status = "KS: bypass (atacando)" if best.get('is_attacking_me') else "KS: pass"
+                            log_decision(f"⚔️ ATACANDO: {best['name']} (HP:{best['hp']}%, dist:{dist_to_target}) | {ks_status}")
+                            if not safe_attack(packet, best["id"], log):
+                                time.sleep(0.5)
+                                continue
 
-                            # Re-valida KS com lista ATUAL de entidades
-                            # BYPASS: Se criatura está atacando o player, ignora KS check
-                            if ks_enabled and not candidate.get("is_attacking_me", False):
-                                # Log detalhado do KS check
-                                if debug_decisions or debug_mode:
-                                    print(f"[DECISION] 🔍 KS CHECK: {candidate['name']}")
-                                    print(f"[DECISION]   Criatura em: ({candidate['abs_x']}, {candidate['abs_y']})")
-                                    print(f"[DECISION]   Meu custo até ela (A*): {c_cost}")
-
-                                    # Calcula distância de cada player até esta criatura
-                                    for e in all_visible_entities:
-                                        if e['name'] == current_name:
-                                            continue
-                                        if any(t in e['name'] for t in targets_list):
-                                            continue
-                                        player_cost = steps_to_adjacent(candidate['abs_x'] - e['abs_x'], candidate['abs_y'] - e['abs_y'], MELEE_RANGE) * 10
-                                        comparison = "⚠️ PLAYER MAIS PERTO" if player_cost <= c_cost else "✓ Eu mais perto"
-                                        print(f"[DECISION]   → {e['name']}: custo={player_cost} | {comparison}")
-
-                                is_engaged, ks_reason = engagement_detector.is_engaged_with_other(
-                                    {'id': candidate["id"], 'abs_x': candidate["abs_x"],
-                                     'abs_y': candidate["abs_y"], 'hp': candidate["hp"]},
-                                    current_name,
-                                    (my_x, my_y),
-                                    all_visible_entities,
-                                    current_target_id,
-                                    targets_list,
-                                    walker=walker,
-                                    attack_range=MELEE_RANGE,
-                                    debug=False,  # Já logamos acima
-                                    log_func=print
-                                )
-                                if is_engaged:
-                                    if debug_decisions or debug_mode:
-                                        print(f"[DECISION]   ❌ REJEITADO: {ks_reason}")
-                                    log(f"⚠️ [KS RE-CHECK] {candidate['name']} engajada - pulando")
-                                    skipped_candidates.append((candidate['name'], ks_reason))
-                                    continue
-                                else:
-                                    if debug_decisions or debug_mode:
-                                        print(f"[DECISION]   ✅ APROVADO: Nenhum player mais próximo")
-                            elif candidate.get("is_attacking_me", False):
-                                if debug_decisions or debug_mode:
-                                    print(f"[DECISION] ⚡ KS BYPASS: {candidate['name']} está me atacando!")
-
-                            best = candidate
-                            break
-
-                        # Log resumo da decisão
-                        if debug_decisions or debug_mode:
-                            if skipped_candidates:
-                                print(f"\n[DECISION] 🚫 CANDIDATOS REJEITADOS POR KS:")
-                                for name, reason in skipped_candidates:
-                                    print(f"  • {name}: {reason}")
-                            print(f"")
-
-                        if best and best["id"] != current_target_id:
-                            # Calcula distância Chebyshev para o alvo
-                            dist_to_target = max(abs(best["dist_x"]), abs(best["dist_y"]))
-                            best_cost = get_distance_cost(walker, best['abs_x'] - my_x, best['abs_y'] - my_y, MELEE_RANGE)
-
-                            # LOG FINAL DE DECISÃO
-                            if debug_decisions or debug_mode:
-                                action = "FOLLOW" if follow_before_attack and dist_to_target > 1 else "ATTACK"
-                                print(f"[DECISION] ✅ ALVO SELECIONADO: {best['name']}")
-                                print(f"[DECISION]   Posição: ({best['abs_x']}, {best['abs_y']})")
-                                print(f"[DECISION]   Distância: {dist_to_target} tiles | Custo A*: {best_cost}")
-                                print(f"[DECISION]   HP: {best['hp']}%")
-                                print(f"[DECISION]   Atacando-me: {'SIM' if best.get('is_attacking_me') else 'NÃO'}")
-                                print(f"[DECISION]   Ação: {action}")
-                                print(f"{'='*60}\n")
-
-                            # DEBUG: Log da decisão follow/attack (verbose)
-                            if debug_mode:
-                                print(f"[FOLLOW-DEBUG] Novo alvo: {best['name']} (id={best['id']})")
-                                print(f"[FOLLOW-DEBUG]   Distância: {dist_to_target} tiles")
-                                print(f"[FOLLOW-DEBUG]   follow_before_attack={follow_before_attack}")
-                                print(f"[FOLLOW-DEBUG]   Decisão: {'FOLLOW' if follow_before_attack and dist_to_target > 1 else 'ATTACK'}")
-
-                            # FOLLOW BEFORE ATTACK: Quando spear_picker + range > 1
-                            if follow_before_attack and dist_to_target > 1:
-                                # Usa FOLLOW em vez de attack
-                                log(f"🏃 SEGUINDO: {best['name']} (dist={dist_to_target})")
-                                set_status(f"seguindo {best['name']}")
-
-                                if chase_mode:
-                                    log_decision(f"🏃 CHASE: {best['name']} (dist:{dist_to_target}) - walker A*")
-                                    chaser.start_chase(best["id"], best["abs_x"], best["abs_y"], best["z"])
-                                    # Write target ID to client memory for visual indicator and state tracking
-                                    try:
-                                        pm.write_int(target_addr, best["id"])
-                                    except:
-                                        pass
-                                else:
-                                    log_decision(f"🏃 SEGUINDO: {best['name']} (dist:{dist_to_target}) - follow nativo")
-                                    packet.follow(best["id"])
-
-                                # Atualiza estado de follow
-                                state.start_follow(best["id"])
-                                is_currently_following = True
-                                follow_target_id = best["id"]
-
+                            # Para follow/chase se estava seguindo
+                            if is_currently_following:
+                                chaser.stop()
+                                state.stop_follow()
                                 if debug_mode:
-                                    mode_str = "CHASE (walker)" if chase_mode else "FOLLOW (0xA2)"
-                                    print(f"[FOLLOW-DEBUG] {mode_str} para creature_id={best['id']}")
-                                    print(f"[FOLLOW-DEBUG]   state.is_following={state.is_following}")
-                                    print(f"[FOLLOW-DEBUG]   state.is_in_combat={state.is_in_combat}")
-                            else:
-                                # Attack normal (distância <= 1 ou follow desabilitado)
-                                log(f"⚔️ ATACANDO: {best['name']}")
-                                set_status(f"atacando {best['name']}")
-                                ks_status = "KS: bypass (atacando)" if best.get('is_attacking_me') else "KS: pass"
-                                log_decision(f"⚔️ ATACANDO: {best['name']} (HP:{best['hp']}%, dist:{dist_to_target}) | {ks_status}")
-                                if not safe_attack(packet, best["id"], log):
-                                    time.sleep(0.5)
-                                    continue
+                                    print(f"[FOLLOW-DEBUG] Follow/chase parado - trocou para ATTACK")
+                                is_currently_following = False
+                                follow_target_id = 0
 
-                                # Para follow/chase se estava seguindo
-                                if is_currently_following:
-                                    chaser.stop()
-                                    state.stop_follow()
-                                    if debug_mode:
-                                        print(f"[FOLLOW-DEBUG] Follow/chase parado - trocou para ATTACK")
-                                    is_currently_following = False
-                                    follow_target_id = 0
+                        current_target_id = best["id"]
+                        current_monitored_id = best["id"]
+                        last_target_data = best.copy()
+                        monitor.start(best["id"], best["name"], best["hp"])
 
-                            current_target_id = best["id"]
-                            current_monitored_id = best["id"]
-                            last_target_data = best.copy()
-                            monitor.start(best["id"], best["name"], best["hp"])
+                        # Reset death state when attacking new target
+                        death_state = DeathState.ALIVE
+                        dying_creature_data = None
+                        death_timestamp = None
 
-                            # Reset death state when attacking new target
-                            death_state = DeathState.ALIVE
-                            dying_creature_data = None
-                            death_timestamp = None
+                        # Combat movement agora roda no loop constante do Cenario A
+                        # (ver "COMBAT MOVEMENT (LOOP CONSTANTE)" mais acima)
 
-                            # Combat movement agora roda no loop constante do Cenario A
-                            # (ver "COMBAT MOVEMENT (LOOP CONSTANTE)" mais acima)
-
-                            next_attack_time = 0
-                            if not chase_mode:
-                                gauss_wait(0.5, 20)  # Delay only for native follow
-                        elif not best and len(final_candidates) > 0:
-                            # Todos engajados - reseta para tentar novamente
-                            if debug_decisions or debug_mode:
-                                print(f"[DECISION] ⚠️ NENHUM ALVO VÁLIDO")
-                                print(f"[DECISION]   Todos os {len(final_candidates)} candidatos foram rejeitados por KS")
-                                print(f"[DECISION]   Aguardando próximo ciclo...")
-                                print(f"{'='*60}\n")
-                            next_attack_time = 0
+                        next_attack_time = 0
+                        if not chase_mode:
+                            gauss_wait(0.5, 20)  # Delay only for native follow
+                    elif not best and len(final_candidates) > 0:
+                        # Todos engajados - reseta para tentar novamente
+                        if debug_decisions or debug_mode:
+                            print(f"[DECISION] ⚠️ NENHUM ALVO VÁLIDO")
+                            print(f"[DECISION]   Todos os {len(final_candidates)} candidatos foram rejeitados por KS")
+                            print(f"[DECISION]   Aguardando próximo ciclo...")
+                            print(f"{'='*60}\n")
+                        next_attack_time = 0
 
             # Throttle dinâmico baseado no estado
             if current_target_id != 0:

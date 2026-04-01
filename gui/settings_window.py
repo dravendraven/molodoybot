@@ -602,154 +602,153 @@ class SettingsWindow:
                      fg_color="#2CC985", height=32).pack(side="bottom", pady=5, fill="x", padx=20)
 
     def _build_tab_trainer(self, tab: ctk.CTkFrame) -> None:
-        """Constrói a aba Trainer."""
+        """Constrói a aba Trainer (layout compacto em 2 colunas)."""
         settings = self.cb.get_bot_settings()
 
-        frame_tr = ctk.CTkFrame(tab, fg_color="transparent")
-        frame_tr.pack(fill="x", pady=self.UI['PAD_SECTION'][0])
+        # === GRID DE 2 COLUNAS ===
+        top_frame = ctk.CTkFrame(tab, fg_color="transparent")
+        top_frame.pack(fill="x", padx=10, pady=5)
+        top_frame.grid_columnconfigure((0, 1), weight=1)
 
-        # Delay
-        ctk.CTkLabel(frame_tr, text="Delay de Ataque (s):", **self.UI['H1']).pack(anchor="w", padx=10)
+        # --- Coluna Esquerda: Ataque ---
+        col_left = ctk.CTkFrame(top_frame, fg_color="transparent")
+        col_left.grid(row=0, column=0, sticky="nw", padx=(0, 10))
 
-        f_dely = ctk.CTkFrame(frame_tr, fg_color="transparent")
-        f_dely.pack(fill="x", padx=10, pady=self.UI['PAD_ITEM'])
+        ctk.CTkLabel(col_left, text="Ataque", **self.UI['H1']).pack(anchor="w")
 
-        ctk.CTkLabel(f_dely, text="Min:", **self.UI['BODY']).pack(side="left")
-        entry_tr_min = ctk.CTkEntry(f_dely, **self.UI['INPUT'])
-        entry_tr_min.pack(side="left", padx=5)
+        # Delay em linha única
+        f_delay = ctk.CTkFrame(col_left, fg_color="transparent")
+        f_delay.pack(fill="x", pady=2)
+        ctk.CTkLabel(f_delay, text="Delay:", **self.UI['BODY']).pack(side="left")
+        entry_tr_min = ctk.CTkEntry(f_delay, **self.UI['INPUT'])
+        entry_tr_min.pack(side="left", padx=3)
         entry_tr_min.insert(0, str(settings.get('trainer_min_delay', 1.0)))
-
-        ctk.CTkLabel(f_dely, text="Max:", **self.UI['BODY']).pack(side="left", padx=(10, 0))
-        entry_tr_max = ctk.CTkEntry(f_dely, **self.UI['INPUT'])
-        entry_tr_max.pack(side="left", padx=5)
+        ctk.CTkLabel(f_delay, text="-", **self.UI['BODY']).pack(side="left")
+        entry_tr_max = ctk.CTkEntry(f_delay, **self.UI['INPUT'])
+        entry_tr_max.pack(side="left", padx=3)
         entry_tr_max.insert(0, str(settings.get('trainer_max_delay', 2.0)))
+        ctk.CTkLabel(f_delay, text="s", **self.UI['BODY']).pack(side="left")
 
-        # Switch em linha própria (abaixo do Min/Max)
-        switch_pause_modules = ctk.CTkSwitch(
-            frame_tr,
-            text="Treino: Pausar módulos durante delay (pausa AFK)",
-            progress_color="#9B59B6",
-            **self.UI['BODY']
-        )
-        switch_pause_modules.pack(anchor="w", padx=10, pady=(3, 0))
+        # Range em linha única
+        f_range = ctk.CTkFrame(col_left, fg_color="transparent")
+        f_range.pack(fill="x", pady=2)
+        ctk.CTkLabel(f_range, text="Range:", **self.UI['BODY']).pack(side="left")
+        entry_tr_range = ctk.CTkEntry(f_range, **self.UI['INPUT'])
+        entry_tr_range.pack(side="left", padx=3)
+        entry_tr_range.insert(0, str(settings.get('trainer_range', 1)))
+        ctk.CTkLabel(f_range, text="SQM", **self.UI['BODY']).pack(side="left")
+
+        # Switch pausar módulos
+        switch_pause_modules = ctk.CTkSwitch(col_left, text="Pausar módulos no delay",
+                                              progress_color="#9B59B6", **self.UI['BODY'])
+        switch_pause_modules.pack(anchor="w", pady=2)
         if settings.get('pause_modules_during_delay', False):
             switch_pause_modules.select()
 
-        # Range
-        ctk.CTkLabel(frame_tr, text="Distância (SQM):", **self.UI['H1']).pack(anchor="w", padx=10, pady=(15, 0))
+        # --- Coluna Direita: Comportamento ---
+        col_right = ctk.CTkFrame(top_frame, fg_color="transparent")
+        col_right.grid(row=0, column=1, sticky="nw")
 
-        f_rng = ctk.CTkFrame(frame_tr, fg_color="transparent")
-        f_rng.pack(fill="x", padx=10, pady=self.UI['PAD_ITEM'])
+        ctk.CTkLabel(col_right, text="Comportamento", **self.UI['H1']).pack(anchor="w")
 
-        entry_tr_range = ctk.CTkEntry(f_rng, **self.UI['INPUT'])
-        entry_tr_range.pack(side="left")
-        entry_tr_range.insert(0, str(settings.get('trainer_range', 1)))
-
-        ctk.CTkLabel(f_rng, text="(Distancia mínima para começar a atacar alvos)",
-                    **self.UI['HINT']).pack(side="left", padx=10)
-
-        # Lógica de Alvo (linha horizontal)
-        ctk.CTkLabel(frame_tr, text="Lógica de Alvo:", **self.UI['H1']).pack(anchor="w", padx=10, pady=(10, 0))
-
-        f_logic = ctk.CTkFrame(tab, fg_color="transparent")
-        f_logic.pack(fill="x", padx=10, pady=3)
-
-        switch_ignore = ctk.CTkSwitch(f_logic, text="Ignorar 1º",
+        # Switch Ignorar 1º
+        switch_ignore = ctk.CTkSwitch(col_right, text="Ignorar 1º alvo",
                                       command=lambda: self.cb.on_ignore_toggle(bool(switch_ignore.get())),
                                       progress_color="#FFA500", **self.UI['BODY'])
-        switch_ignore.pack(side="left", padx=(5, 10))
+        switch_ignore.pack(anchor="w", pady=1)
         if settings.get('ignore_first', False):
             switch_ignore.select()
 
-        switch_ks = ctk.CTkSwitch(f_logic, text="Anti KS",
+        # Switch Anti KS
+        switch_ks = ctk.CTkSwitch(col_right, text="Anti KS",
                                   command=lambda: self.cb.on_ks_toggle(bool(switch_ks.get())),
                                   progress_color="#FF6B6B", **self.UI['BODY'])
-        switch_ks.pack(side="left", padx=(0, 10))
+        switch_ks.pack(anchor="w", pady=1)
         if settings.get('ks_prevention_enabled', True):
             switch_ks.select()
 
-        switch_chase = ctk.CTkSwitch(f_logic, text="A* Chase Mode",
+        # Switch A* Chase Mode
+        switch_chase = ctk.CTkSwitch(col_right, text="A* Chase Mode",
                                       command=lambda: self.cb.on_chase_mode_toggle(bool(switch_chase.get())),
                                       progress_color="#3498DB", **self.UI['BODY'])
-        switch_chase.pack(side="left")
+        switch_chase.pack(anchor="w", pady=1)
         if settings.get('chase_mode_enabled', False):
             switch_chase.select()
 
-        ctk.CTkLabel(tab, text="↳ Anti KS: evita criaturas perto de players. Chase: A* pathfinding.",
-                    **self.UI['HINT']).pack(anchor="w", padx=15)
-
-        # === COMBAT MOVEMENT (EXPERIMENTAL) ===
-        ctk.CTkLabel(tab, text="Combat Movement (Experimental):", **self.UI['H1']).pack(anchor="w", padx=10, pady=(15, 0))
-
-        switch_combat_movement = ctk.CTkSwitch(
-            tab,
-            text="Movimentação humanizada em combate",
-            command=lambda: self.cb.on_combat_movement_toggle(bool(switch_combat_movement.get())),
-            progress_color="#E67E22",  # Laranja para indicar experimental
-            **self.UI['BODY']
-        )
-        switch_combat_movement.pack(anchor="w", padx=10, pady=(3, 0))
+        # Switch Combat Movement
+        switch_combat_movement = ctk.CTkSwitch(col_right, text="Combat Movement",
+                                                command=lambda: self.cb.on_combat_movement_toggle(bool(switch_combat_movement.get())),
+                                                progress_color="#E67E22", **self.UI['BODY'])
+        switch_combat_movement.pack(anchor="w", pady=1)
         if settings.get('combat_movement_enabled', False):
             switch_combat_movement.select()
 
-        ctk.CTkLabel(tab, text="↳ Move na direção do waypoint durante combate, mantendo adjacência ao alvo.",
-                    **self.UI['HINT']).pack(anchor="w", padx=15)
+        # === HP THRESHOLD (linha compacta) ===
+        f_hp = ctk.CTkFrame(tab, fg_color="transparent")
+        f_hp.pack(fill="x", padx=10, pady=(8, 2))
 
-        # === AIMBOT ===
-        ctk.CTkLabel(tab, text="Aimbot (Runas):", **self.UI['H1']).pack(anchor="w", padx=10, pady=(15, 0))
+        switch_hp_threshold = ctk.CTkSwitch(f_hp, text="HP Threshold: pausar se HP <",
+                                             progress_color="#9B59B6", **self.UI['BODY'])
+        switch_hp_threshold.pack(side="left")
+        if settings.get('hp_threshold_enabled', False):
+            switch_hp_threshold.select()
 
-        frame_aimbot = ctk.CTkFrame(tab, fg_color="transparent")
-        frame_aimbot.pack(fill="x", padx=10, pady=5)
+        entry_hp_threshold = ctk.CTkEntry(f_hp, **self.UI['INPUT'])
+        entry_hp_threshold.pack(side="left", padx=3)
+        entry_hp_threshold.insert(0, str(settings.get('hp_threshold_value', 20)))
+        ctk.CTkLabel(f_hp, text="%", **self.UI['BODY']).pack(side="left")
 
-        switch_aimbot = ctk.CTkSwitch(frame_aimbot, text="Ativar Aimbot",
-                                      command=lambda: None,
+        # === AIMBOT (linha compacta) ===
+        ctk.CTkLabel(tab, text="Aimbot", **self.UI['H1']).pack(anchor="w", padx=10, pady=(8, 2))
+
+        f_aimbot = ctk.CTkFrame(tab, fg_color="transparent")
+        f_aimbot.pack(fill="x", padx=10, pady=2)
+
+        switch_aimbot = ctk.CTkSwitch(f_aimbot, text="Ativar",
                                       progress_color="#E74C3C", **self.UI['BODY'])
-        switch_aimbot.pack(anchor="w")
+        switch_aimbot.pack(side="left", padx=(0, 10))
         if settings.get('aimbot_enabled', False):
             switch_aimbot.select()
 
-        # Aimbot Rune + Hotkey
-        f_aimbot_opts = ctk.CTkFrame(tab, fg_color="transparent")
-        f_aimbot_opts.pack(fill="x", padx=20, pady=5)
-
-        ctk.CTkLabel(f_aimbot_opts, text="Runa:", **self.UI['BODY']).pack(side="left")
-        combo_aimbot_rune = ctk.CTkComboBox(f_aimbot_opts, values=["SD", "HMM", "GFB", "EXPLO"],
+        ctk.CTkLabel(f_aimbot, text="Runa:", **self.UI['BODY']).pack(side="left")
+        combo_aimbot_rune = ctk.CTkComboBox(f_aimbot, values=["SD", "HMM", "GFB", "EXPLO"],
                                             width=70, **self.UI['BODY'])
-        combo_aimbot_rune.pack(side="left", padx=5)
+        combo_aimbot_rune.pack(side="left", padx=(3, 10))
         combo_aimbot_rune.set(settings.get('aimbot_rune_type', 'SD'))
 
-        ctk.CTkLabel(f_aimbot_opts, text="Hotkey:", **self.UI['BODY']).pack(side="left", padx=(15, 0))
-        combo_aimbot_hotkey = ctk.CTkComboBox(f_aimbot_opts,
+        ctk.CTkLabel(f_aimbot, text="Hotkey:", **self.UI['BODY']).pack(side="left")
+        combo_aimbot_hotkey = ctk.CTkComboBox(f_aimbot,
                                               values=["F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12", "MOUSE4", "MOUSE5"],
                                               width=90, **self.UI['BODY'])
-        combo_aimbot_hotkey.pack(side="left", padx=5)
+        combo_aimbot_hotkey.pack(side="left", padx=3)
         combo_aimbot_hotkey.set(settings.get('aimbot_hotkey', 'F5'))
 
-        # Botão Salvar
+        # === BOTÃO SALVAR ===
         def save_trainer():
             try:
                 s = self.cb.get_bot_settings()
                 s['trainer_min_delay'] = float(entry_tr_min.get().replace(',', '.'))
                 s['trainer_max_delay'] = float(entry_tr_max.get().replace(',', '.'))
                 s['trainer_range'] = int(entry_tr_range.get())
-                # Pause modules during delay
                 s['pause_modules_during_delay'] = bool(switch_pause_modules.get())
-                # Aimbot settings
                 s['aimbot_enabled'] = bool(switch_aimbot.get())
                 s['aimbot_rune_type'] = combo_aimbot_rune.get()
                 s['aimbot_hotkey'] = combo_aimbot_hotkey.get()
-                # Combat Movement settings
                 s['combat_movement_enabled'] = bool(switch_combat_movement.get())
+                s['hp_threshold_enabled'] = bool(switch_hp_threshold.get())
+                try:
+                    threshold_val = int(entry_hp_threshold.get())
+                    s['hp_threshold_value'] = max(0, min(100, threshold_val))
+                except ValueError:
+                    s['hp_threshold_value'] = 20
                 self.cb.save_config_file()
-                self.cb.log("⚔️ Trainer salvo!")
-                # DEBUG: Confirma que o valor foi gravado no dict correto
-                print(f"[DEBUG SAVE] trainer_range={s['trainer_range']} | id(dict)={id(s)}")
+                self.cb.log("Trainer salvo!")
             except Exception as e:
-                self.cb.log("❌ Erro nos valores.")
+                self.cb.log("Erro nos valores.")
                 print(f"[DEBUG SAVE] EXCEPTION: {e}")
 
         ctk.CTkButton(tab, text="Salvar Trainer", command=save_trainer,
-                     fg_color="#2CC985", height=32).pack(side="bottom", pady=10, fill="x", padx=20)
+                     fg_color="#2CC985", height=32).pack(pady=10, fill="x", padx=20)
 
     def _build_tab_alarm(self, tab: ctk.CTkFrame) -> None:
         """Constrói a aba Alarme (layout compacto)."""
@@ -806,11 +805,18 @@ class SettingsWindow:
         if settings.get('alarm_hp_enabled', False):
             switch_hp_alarm.select()
 
-        ctk.CTkLabel(f_hp, text="dispara se <", **self.UI['BODY']).pack(side="left")
+        ctk.CTkLabel(f_hp, text=" <", **self.UI['BODY']).pack(side="left")
         entry_hp_pct = ctk.CTkEntry(f_hp, width=40, height=24, font=self.UI['BODY']['font'], justify="center")
         entry_hp_pct.pack(side="left", padx=3)
         entry_hp_pct.insert(0, str(settings.get('alarm_hp_percent', 50)))
         ctk.CTkLabel(f_hp, text="%", **self.UI['BODY']).pack(side="left")
+
+        # Toggle: Apenas com perigo (criatura não-safe ou player PK)
+        switch_hp_danger_only = ctk.CTkSwitch(f_hp, text="Apenas c/ Perigo",
+                                               progress_color="#FF8800", **self.UI['BODY'])
+        switch_hp_danger_only.pack(side="left", padx=(15, 5))
+        if settings.get('alarm_hp_danger_only', False):
+            switch_hp_danger_only.select()
 
         # Switches individuais em linhas separadas
         f_mana = ctk.CTkFrame(tab, fg_color="transparent")
@@ -867,6 +873,7 @@ class SettingsWindow:
                 s['alarm_floor'] = floor_rev.get(combo_floor.get(), "Padrão")
                 s['alarm_hp_enabled'] = bool(switch_hp_alarm.get())
                 s['alarm_hp_percent'] = int(entry_hp_pct.get())
+                s['alarm_hp_danger_only'] = bool(switch_hp_danger_only.get())
                 s['alarm_players'] = bool(switch_alarm_players.get())
                 s['alarm_creatures'] = bool(switch_alarm_creatures.get())
                 s['alarm_chat_enabled'] = bool(switch_chat.get())
@@ -1093,42 +1100,85 @@ class SettingsWindow:
                      fg_color="#2CC985", height=32).pack(side="bottom", pady=10, fill="x", padx=20)
 
     def _build_tab_rune(self, tab: ctk.CTkFrame) -> None:
-        """Constrói a aba Rune."""
+        """Constrói a aba Rune (layout com modos Rune Making / Mana Train)."""
         settings = self.cb.get_bot_settings()
 
-        # Frame Craft
-        frame_craft = ctk.CTkFrame(tab, fg_color="#2b2b2b")
-        frame_craft.pack(fill="x", padx=5, pady=2)
+        # === FRAME MODO (título + radios na mesma linha) ===
+        frame_mode = ctk.CTkFrame(tab, fg_color="#1a3a1a")
+        frame_mode.pack(fill="x", padx=5, pady=3)
 
-        ctk.CTkLabel(frame_craft, text="⚙️ Crafting", **self.UI['H1']).pack(anchor="w", padx=5, pady=(5, 5))
+        f_mode_row = ctk.CTkFrame(frame_mode, fg_color="transparent")
+        f_mode_row.pack(fill="x", padx=10, pady=5)
 
-        f_c1 = ctk.CTkFrame(frame_craft, fg_color="transparent")
-        f_c1.pack(fill="x", padx=2, pady=2)
+        ctk.CTkLabel(f_mode_row, text="🔮 Modo:", **self.UI['H1']).pack(side="left")
 
-        ctk.CTkLabel(f_c1, text="Mana:", **self.UI['BODY']).pack(side="left", padx=5)
-        entry_mana = ctk.CTkEntry(f_c1, **self.UI['INPUT'])
+        mode_var = ctk.StringVar(value="train" if settings.get('mana_train', False) else "rune")
+
+        radio_rune = ctk.CTkRadioButton(f_mode_row, text="Rune Making",
+                                         variable=mode_var, value="rune",
+                                         font=self.UI['BODY']['font'])
+        radio_rune.pack(side="left", padx=(15, 20))
+
+        radio_train = ctk.CTkRadioButton(f_mode_row, text="Mana Train (só spell)",
+                                          variable=mode_var, value="train",
+                                          font=self.UI['BODY']['font'])
+        radio_train.pack(side="left")
+
+        # === FRAME SPELL & TIMING (global) ===
+        frame_spell = ctk.CTkFrame(tab, fg_color="#2b2b2b")
+        frame_spell.pack(fill="x", padx=5, pady=2)
+
+        ctk.CTkLabel(frame_spell, text="⚡ Spell & Timing", **self.UI['H1']).pack(anchor="w", padx=10, pady=(5, 2))
+
+        f_spell = ctk.CTkFrame(frame_spell, fg_color="transparent")
+        f_spell.pack(fill="x", padx=10, pady=5)
+
+        ctk.CTkLabel(f_spell, text="Mana:", **self.UI['BODY']).pack(side="left")
+        entry_mana = ctk.CTkEntry(f_spell, **self.UI['INPUT'])
         entry_mana.configure(width=45)
-        entry_mana.pack(side="left", padx=2)
+        entry_mana.pack(side="left", padx=3)
         entry_mana.insert(0, str(settings['rune_mana']))
 
-        ctk.CTkLabel(f_c1, text="Key:", **self.UI['BODY']).pack(side="left", padx=5)
-        entry_hk = ctk.CTkEntry(f_c1, **self.UI['INPUT'])
+        ctk.CTkLabel(f_spell, text="Key:", **self.UI['BODY']).pack(side="left", padx=(10, 0))
+        entry_hk = ctk.CTkEntry(f_spell, **self.UI['INPUT'])
         entry_hk.configure(width=35)
-        entry_hk.pack(side="left", padx=2)
+        entry_hk.pack(side="left", padx=3)
         entry_hk.insert(0, settings['rune_hotkey'])
 
-        # Quantidade de runas (controla opções do combo Mão)
-        ctk.CTkLabel(f_c1, text="Qtd:", **self.UI['BODY']).pack(side="left", padx=5)
-        combo_rune_count = ctk.CTkComboBox(f_c1, values=["1", "2", "3", "4"], **self.UI['COMBO'])
-        combo_rune_count.configure(width=45)
-        combo_rune_count.pack(side="left", padx=2)
+        ctk.CTkLabel(f_spell, text="Delay:", **self.UI['BODY']).pack(side="left", padx=(10, 0))
+        entry_human_min = ctk.CTkEntry(f_spell, **self.UI['INPUT'])
+        entry_human_min.configure(width=35)
+        entry_human_min.pack(side="left", padx=2)
+        entry_human_min.insert(0, str(settings.get('rune_human_min', 5)))
+        ctk.CTkLabel(f_spell, text="-", **self.UI['BODY']).pack(side="left")
+        entry_human_max = ctk.CTkEntry(f_spell, **self.UI['INPUT'])
+        entry_human_max.configure(width=35)
+        entry_human_max.pack(side="left", padx=2)
+        entry_human_max.insert(0, str(settings.get('rune_human_max', 30)))
+        ctk.CTkLabel(f_spell, text="s", **self.UI['BODY']).pack(side="left")
+
+        # === FRAME RUNAS (desabilita em Mana Train) ===
+        frame_runas = ctk.CTkFrame(tab, fg_color="#2b2b2b")
+        frame_runas.pack(fill="x", padx=5, pady=2)
+
+        lbl_runas = ctk.CTkLabel(frame_runas, text="📦 Runas", **self.UI['H1'])
+        lbl_runas.pack(anchor="w", padx=10, pady=(5, 2))
+
+        f_runas = ctk.CTkFrame(frame_runas, fg_color="transparent")
+        f_runas.pack(fill="x", padx=10, pady=2)
+
+        lbl_qtd = ctk.CTkLabel(f_runas, text="Qtd:", **self.UI['BODY'])
+        lbl_qtd.pack(side="left")
+        combo_rune_count = ctk.CTkComboBox(f_runas, values=["1", "2", "3", "4"], width=50,
+                                            font=self.UI['BODY']['font'], state="readonly")
+        combo_rune_count.pack(side="left", padx=3)
         combo_rune_count.set(str(settings.get('rune_count', 1)))
 
-        # Mão (valores condicionais baseados em Qtd)
-        ctk.CTkLabel(f_c1, text="Mão:", **self.UI['BODY']).pack(side="left", padx=5)
-        combo_hand = ctk.CTkComboBox(f_c1, values=["DIREITA", "ESQUERDA"], **self.UI['COMBO'])
-        combo_hand.configure(width=80)
-        combo_hand.pack(side="left", padx=2)
+        lbl_mao = ctk.CTkLabel(f_runas, text="Mão:", **self.UI['BODY'])
+        lbl_mao.pack(side="left", padx=(15, 0))
+        combo_hand = ctk.CTkComboBox(f_runas, values=["DIREITA", "ESQUERDA"], width=90,
+                                      font=self.UI['BODY']['font'], state="readonly")
+        combo_hand.pack(side="left", padx=3)
         combo_hand.set(settings.get('rune_hand', 'DIREITA'))
 
         def on_rune_count_change(choice):
@@ -1136,161 +1186,146 @@ class SettingsWindow:
             count = int(choice)
             current = combo_hand.get()
             if count == 1:
-                # 1 runa: escolhe esquerda ou direita
                 combo_hand.configure(values=["DIREITA", "ESQUERDA"])
                 if current == "AMBAS":
                     combo_hand.set("DIREITA")
             elif count == 2:
-                # 2 runas: sempre ambas
                 combo_hand.configure(values=["AMBAS"])
                 combo_hand.set("AMBAS")
             elif count == 3:
-                # 3 runas: ambas + escolhe mão extra (esquerda ou direita)
                 combo_hand.configure(values=["ESQUERDA", "DIREITA"])
                 if current == "AMBAS":
                     combo_hand.set("ESQUERDA")
             elif count == 4:
-                # 4 runas: sempre ambas × 2
                 combo_hand.configure(values=["AMBAS"])
                 combo_hand.set("AMBAS")
 
         combo_rune_count.configure(command=on_rune_count_change)
-        # Aplicar estado inicial
         on_rune_count_change(combo_rune_count.get())
 
-        # Hint explicativo sobre quantidade de runas
-        ctk.CTkLabel(frame_craft, text="↳ 1: mão única | 2: ambas | 3: ambas + mão | 4: ambas × 2",
-                    **self.UI['HINT']).pack(anchor="w", padx=10)
+        # Logout options na seção Runas
+        f_logout = ctk.CTkFrame(frame_runas, fg_color="transparent")
+        f_logout.pack(fill="x", padx=10, pady=3)
 
-        # Frame Human
-        frame_human = ctk.CTkFrame(tab, fg_color="#2b2b2b")
-        frame_human.pack(fill="x", padx=5, pady=2)
-
-        f_h1 = ctk.CTkFrame(frame_human, fg_color="transparent")
-        f_h1.pack(fill="x", padx=2, pady=5)
-
-        ctk.CTkLabel(f_h1, text="Esperar de:", **self.UI['BODY']).pack(side="left", padx=5)
-        entry_human_min = ctk.CTkEntry(f_h1, **self.UI['INPUT'])
-        entry_human_min.configure(width=35)
-        entry_human_min.pack(side="left", padx=2)
-        entry_human_min.insert(0, str(settings.get('rune_human_min', 5)))
-
-        ctk.CTkLabel(f_h1, text="a", **self.UI['BODY']).pack(side="left", padx=2)
-        entry_human_max = ctk.CTkEntry(f_h1, **self.UI['INPUT'])
-        entry_human_max.configure(width=35)
-        entry_human_max.pack(side="left", padx=2)
-        entry_human_max.insert(0, str(settings.get('rune_human_max', 30)))
-        ctk.CTkLabel(f_h1, text="segundos antes de castar", **self.UI['BODY']).pack(side="left", padx=2)
-
-        # Frame Move
-        frame_move = ctk.CTkFrame(tab, fg_color="#2b2b2b")
-        frame_move.pack(fill="x", padx=5, pady=5)
-        ctk.CTkLabel(frame_move, text="🚨 Anti-PK / Movimento", **self.UI['H1']).pack(anchor="w", padx=5, pady=(5, 5))
-
-        # Toggle
-        f_m1 = ctk.CTkFrame(frame_move, fg_color="transparent")
-        f_m1.pack(fill="x", padx=2, pady=2)
-        switch_movement = ctk.CTkSwitch(f_m1, text="Fugir para Safe", width=50, height=20,
-                                        font=self.UI['BODY']['font'])
-        switch_movement.pack(side="left", padx=5)
-        if settings.get('rune_movement', False):
-            switch_movement.select()
-
-        # Coords - Work
-        f_wk = ctk.CTkFrame(frame_move, fg_color="transparent")
-        f_wk.pack(fill="x", pady=2)
-        ctk.CTkButton(f_wk, text="Set Work", width=60, height=20, font=("Verdana", 9),
-                     fg_color="#444", command=lambda: self.cb.set_rune_pos("WORK")).pack(side="left", padx=5)
-        self.lbl_work_pos = ctk.CTkLabel(f_wk, text=str(settings.get('rune_work_pos', (0, 0, 0))),
-                                         **self.UI['HINT'])
-        self.lbl_work_pos.pack(side="left", padx=5)
-
-        # Coords - Safe
-        f_sf = ctk.CTkFrame(frame_move, fg_color="transparent")
-        f_sf.pack(fill="x", pady=2)
-        ctk.CTkButton(f_sf, text="Set Safe", width=60, height=20, font=("Verdana", 9),
-                     fg_color="#444", command=lambda: self.cb.set_rune_pos("SAFE")).pack(side="left", padx=5)
-        self.lbl_safe_pos = ctk.CTkLabel(f_sf, text=str(settings.get('rune_safe_pos', (0, 0, 0))),
-                                         **self.UI['HINT'])
-        self.lbl_safe_pos.pack(side="left", padx=5)
-
-        # Delays
-        f_m2 = ctk.CTkFrame(frame_move, fg_color="transparent")
-        f_m2.pack(fill="x", padx=5, pady=5)
-        ctk.CTkLabel(f_m2, text="Reagir em:", **self.UI['BODY']).pack(side="left")
-        entry_flee = ctk.CTkEntry(f_m2, **self.UI['INPUT'])
-        entry_flee.configure(width=35)
-        entry_flee.pack(side="left", padx=2)
-        entry_flee.insert(0, str(settings.get('rune_flee_delay', 0.5)))
-
-        ctk.CTkLabel(f_m2, text="Retornar após:", **self.UI['BODY']).pack(side="left", padx=5)
-        entry_ret_delay = ctk.CTkEntry(f_m2, **self.UI['INPUT'])
-        entry_ret_delay.configure(width=35)
-        entry_ret_delay.pack(side="left", padx=2)
-        entry_ret_delay.insert(0, str(settings.get('rune_return_delay', 300)))
-
-        # Frame Extras
-        frame_extras = ctk.CTkFrame(tab, fg_color="#2b2b2b")
-        frame_extras.pack(fill="x", padx=5, pady=2)
-        ctk.CTkLabel(frame_extras, text="Outros", **self.UI['H1']).pack(anchor="w", padx=5, pady=5)
-
-        switch_eat = ctk.CTkSwitch(frame_extras, text="Auto Eat", width=60, height=20,
-                                   font=self.UI['BODY']['font'])
-        switch_eat.pack(anchor="w", padx=10, pady=2)
-        if settings['auto_eat']:
-            switch_eat.select()
-
-        switch_train = ctk.CTkSwitch(frame_extras, text="Mana Train (No rune)", width=60, height=20,
-                                     font=self.UI['BODY']['font'])
-        switch_train.pack(anchor="w", padx=10, pady=2)
-        if settings['mana_train']:
-            switch_train.select()
-
-        # Frame horizontal para logout options
-        f_logout_row = ctk.CTkFrame(frame_extras, fg_color="transparent")
-        f_logout_row.pack(anchor="w", padx=10, pady=2)
-
-        switch_logout_blanks = ctk.CTkSwitch(f_logout_row, text="Logout se sem Blanks", width=60, height=20,
-                                             font=self.UI['BODY']['font'])
+        switch_logout_blanks = ctk.CTkSwitch(f_logout, text="Logout sem Blanks",
+                                              progress_color="#E74C3C", **self.UI['BODY'])
         switch_logout_blanks.pack(side="left")
         if settings.get('logout_on_no_blanks', False):
             switch_logout_blanks.select()
 
-        switch_wait_mana_full = ctk.CTkSwitch(f_logout_row, text="Esperar Mana Full", width=60, height=20,
-                                              font=self.UI['BODY']['font'])
+        switch_wait_mana_full = ctk.CTkSwitch(f_logout, text="Esperar Mana Full",
+                                               progress_color="#3498DB", **self.UI['BODY'])
         switch_wait_mana_full.pack(side="left", padx=(15, 0))
         if settings.get('logout_wait_mana_full', False):
             switch_wait_mana_full.select()
 
-        ctk.CTkLabel(frame_extras, text="↳ Desloga após 15s sem blanks (mana full: só com 100%)",
-                    **self.UI['HINT']).pack(anchor="w", padx=45)
+        # Widgets a desabilitar em Mana Train
+        rune_widgets = [combo_rune_count, combo_hand, switch_logout_blanks, switch_wait_mana_full]
+        rune_labels = [lbl_qtd, lbl_mao]
 
-        # Frame horizontal para aviso de mana
-        f_mana_alert = ctk.CTkFrame(frame_extras, fg_color="transparent")
-        f_mana_alert.pack(anchor="w", padx=10, pady=(8, 2))
+        def on_mode_change():
+            """Habilita/desabilita seção Runas baseado no modo."""
+            is_rune_mode = mode_var.get() == "rune"
+            state = "normal" if is_rune_mode else "disabled"
 
-        switch_mana_alert = ctk.CTkSwitch(f_mana_alert, text="Aviso Mana >=", width=60, height=20,
-                                          font=self.UI['BODY']['font'])
-        switch_mana_alert.pack(side="left")
+            for w in rune_widgets:
+                w.configure(state=state)
+
+            # Visual feedback
+            if is_rune_mode:
+                lbl_runas.configure(text="📦 Runas")
+                frame_runas.configure(fg_color="#2b2b2b")
+                for lbl in rune_labels:
+                    lbl.configure(text_color="#CCCCCC")
+            else:
+                lbl_runas.configure(text="📦 Runas (desabilitado)")
+                frame_runas.configure(fg_color="#1a1a1a")
+                for lbl in rune_labels:
+                    lbl.configure(text_color="#555555")
+
+        radio_rune.configure(command=on_mode_change)
+        radio_train.configure(command=on_mode_change)
+        on_mode_change()  # Aplicar estado inicial
+
+        # === FRAME ANTI-PK (global) ===
+        frame_antipk = ctk.CTkFrame(tab, fg_color="#2b2b2b")
+        frame_antipk.pack(fill="x", padx=5, pady=2)
+
+        ctk.CTkLabel(frame_antipk, text="🚨 Anti-PK", **self.UI['H1']).pack(anchor="w", padx=10, pady=(5, 2))
+
+        f_antipk = ctk.CTkFrame(frame_antipk, fg_color="transparent")
+        f_antipk.pack(fill="x", padx=10, pady=2)
+
+        switch_movement = ctk.CTkSwitch(f_antipk, text="Fugir p/ Safe",
+                                         progress_color="#FF6B6B", **self.UI['BODY'])
+        switch_movement.pack(side="left")
+        if settings.get('rune_movement', False):
+            switch_movement.select()
+
+        ctk.CTkButton(f_antipk, text="Work", width=50, height=22, fg_color="#444",
+                      command=lambda: self.cb.set_rune_pos("WORK")).pack(side="left", padx=(15, 3))
+        self.lbl_work_pos = ctk.CTkLabel(f_antipk, text=str(settings.get('rune_work_pos', (0, 0, 0))),
+                                         **self.UI['HINT'])
+        self.lbl_work_pos.pack(side="left")
+
+        ctk.CTkButton(f_antipk, text="Safe", width=50, height=22, fg_color="#444",
+                      command=lambda: self.cb.set_rune_pos("SAFE")).pack(side="left", padx=(10, 3))
+        self.lbl_safe_pos = ctk.CTkLabel(f_antipk, text=str(settings.get('rune_safe_pos', (0, 0, 0))),
+                                         **self.UI['HINT'])
+        self.lbl_safe_pos.pack(side="left")
+
+        # Delays em linha separada
+        f_delays = ctk.CTkFrame(frame_antipk, fg_color="transparent")
+        f_delays.pack(fill="x", padx=10, pady=3)
+
+        ctk.CTkLabel(f_delays, text="Reagir:", **self.UI['BODY']).pack(side="left")
+        entry_flee = ctk.CTkEntry(f_delays, **self.UI['INPUT'])
+        entry_flee.configure(width=35)
+        entry_flee.pack(side="left", padx=3)
+        entry_flee.insert(0, str(settings.get('rune_flee_delay', 0.5)))
+        ctk.CTkLabel(f_delays, text="s", **self.UI['BODY']).pack(side="left")
+
+        ctk.CTkLabel(f_delays, text="Retornar:", **self.UI['BODY']).pack(side="left", padx=(15, 0))
+        entry_ret_delay = ctk.CTkEntry(f_delays, **self.UI['INPUT'])
+        entry_ret_delay.configure(width=45)
+        entry_ret_delay.pack(side="left", padx=3)
+        entry_ret_delay.insert(0, str(settings.get('rune_return_delay', 300)))
+        ctk.CTkLabel(f_delays, text="s", **self.UI['BODY']).pack(side="left")
+
+        # === FRAME EXTRAS (global) ===
+        frame_extras = ctk.CTkFrame(tab, fg_color="#2b2b2b")
+        frame_extras.pack(fill="x", padx=5, pady=2)
+
+        ctk.CTkLabel(frame_extras, text="⚙️ Extras", **self.UI['H1']).pack(anchor="w", padx=10, pady=(5, 2))
+
+        f_extras = ctk.CTkFrame(frame_extras, fg_color="transparent")
+        f_extras.pack(fill="x", padx=10, pady=5)
+
+        switch_eat = ctk.CTkSwitch(f_extras, text="Auto Eat",
+                                    progress_color="#2ECC71", **self.UI['BODY'])
+        switch_eat.pack(side="left")
+        if settings['auto_eat']:
+            switch_eat.select()
+
+        switch_mana_alert = ctk.CTkSwitch(f_extras, text="Aviso Mana >=",
+                                           progress_color="#F39C12", **self.UI['BODY'])
+        switch_mana_alert.pack(side="left", padx=(20, 0))
         if settings.get('rune_mana_alert_enabled', False):
             switch_mana_alert.select()
 
-        entry_mana_alert_pct = ctk.CTkEntry(f_mana_alert, width=40, height=20,
-                                            font=self.UI['BODY']['font'], justify="center")
+        entry_mana_alert_pct = ctk.CTkEntry(f_extras, **self.UI['INPUT'])
+        entry_mana_alert_pct.configure(width=35)
         entry_mana_alert_pct.pack(side="left", padx=2)
         entry_mana_alert_pct.insert(0, str(settings.get('rune_mana_alert_percent', 90)))
+        ctk.CTkLabel(f_extras, text="%", **self.UI['BODY']).pack(side="left")
 
-        ctk.CTkLabel(f_mana_alert, text="%", **self.UI['BODY']).pack(side="left", padx=(0, 10))
-
-        switch_mana_telegram = ctk.CTkSwitch(f_mana_alert, text="Telegram", width=60, height=20,
-                                              font=self.UI['BODY']['font'])
-        switch_mana_telegram.pack(side="left")
+        switch_mana_telegram = ctk.CTkSwitch(f_extras, text="Telegram",
+                                              progress_color="#3498DB", **self.UI['BODY'])
+        switch_mana_telegram.pack(side="left", padx=(10, 0))
         if settings.get('rune_mana_alert_telegram', False):
             switch_mana_telegram.select()
 
-        ctk.CTkLabel(frame_extras, text="↳ Alarme sonoro + Telegram quando mana atingir % (para runas manuais)",
-                    **self.UI['HINT']).pack(anchor="w", padx=45)
-
+        # === BOTÃO SALVAR ===
         def save_rune():
             try:
                 s = self.cb.get_bot_settings()
@@ -1305,16 +1340,16 @@ class SettingsWindow:
                 s['rune_return_delay'] = int(entry_ret_delay.get())
                 s['rune_movement'] = bool(switch_movement.get())
                 s['auto_eat'] = bool(switch_eat.get())
-                s['mana_train'] = bool(switch_train.get())
+                s['mana_train'] = mode_var.get() == "train"
                 s['logout_on_no_blanks'] = bool(switch_logout_blanks.get())
                 s['logout_wait_mana_full'] = bool(switch_wait_mana_full.get())
                 s['rune_mana_alert_enabled'] = bool(switch_mana_alert.get())
                 s['rune_mana_alert_percent'] = int(entry_mana_alert_pct.get())
                 s['rune_mana_alert_telegram'] = bool(switch_mana_telegram.get())
                 self.cb.save_config_file()
-                self.cb.log("🔮 Rune Config salva!")
+                self.cb.log("Rune Config salva!")
             except:
-                self.cb.log("❌ Erro Rune.")
+                self.cb.log("Erro Rune.")
 
         ctk.CTkButton(tab, text="Salvar Rune", command=save_rune, height=32,
                      fg_color="#00A86B", hover_color="#008f5b").pack(side="bottom", fill="x", padx=20, pady=5)

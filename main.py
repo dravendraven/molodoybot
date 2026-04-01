@@ -215,7 +215,10 @@ BOT_SETTINGS = {
     "trainer_min_delay": 1.0,
     "trainer_max_delay": 2.0,
     "trainer_range": 6, # 1 = Melee, 3+ = Distance
-    
+    # HP Threshold (Training)
+    "hp_threshold_enabled": False,  # Filter creatures below HP %
+    "hp_threshold_value": 20,       # HP % threshold (0-100)
+
     # Listas
     "targets": list(TARGET_MONSTERS),
     "safe": list(SAFE_CREATURES),
@@ -1530,6 +1533,45 @@ def notify_disconnect(disconnect_type: str, char_name: str, last_notification_ti
 
     return current_time
 
+# ==============================================================================
+# GUI THREAD SAFETY HELPERS
+# ==============================================================================
+
+_gui_update_lock = threading.Lock()
+
+def safe_gui_update(widget, method_name: str, *args, **kwargs):
+    """
+    Atualiza widget de forma thread-safe usando .after() do tkinter.
+
+    Args:
+        widget: Widget tkinter/customtkinter
+        method_name: Nome do método ('configure', 'set', etc)
+        *args, **kwargs: Argumentos para o método
+
+    Example:
+        safe_gui_update(lbl_connection, 'configure', text="🟢 Connected", text_color="#00FF00")
+    """
+    def _update():
+        try:
+            if widget and hasattr(widget, 'winfo_exists') and widget.winfo_exists():
+                method = getattr(widget, method_name)
+                method(*args, **kwargs)
+        except Exception as e:
+            # Widget pode ter sido destruído - silenciosamente ignora
+            pass
+
+    try:
+        # Agenda update na main thread via event loop do tkinter
+        if main_window and hasattr(main_window, 'app'):
+            main_window.app.after(0, _update)
+    except:
+        # Se main_window não existe, tenta diretamente (fallback)
+        _update()
+
+# ==============================================================================
+# CONNECTION WATCHDOG
+# ==============================================================================
+
 def connection_watchdog():
     global pm, base_addr, selected_pid
     was_connected_once = False
@@ -1606,7 +1648,7 @@ def connection_watchdog():
                         os._exit(0) # Mata o bot
                     state.is_connected = False
                     previous_connection_state = False
-                    lbl_connection.configure(text="❌ Cliente Fechado", text_color="#FF5555")
+                    safe_gui_update(lbl_connection, 'configure', text="❌ Cliente Fechado", text_color="#FF5555")
                     time.sleep(2)
                     continue
 
@@ -1619,17 +1661,21 @@ def connection_watchdog():
                         log("🟢 Conectado ao mundo!")
 
                         # === VALIDACAO DE WHITELIST ===
-                        from core.whitelist import validate_character_or_exit
-                        time.sleep(0.5)  # Aguarda dados do personagem carregarem
-                        char_name = get_player_name()
+                        from core.whitelist import validate_character_or_exit, notify_unknown_login
+
+                        # Tenta até 5 vezes com delays crescentes
+                        char_name = None
+                        for attempt in range(5):
+                            time.sleep(0.5 + attempt * 0.5)  # 0.5, 1.0, 1.5, 2.0, 2.5 segundos
+                            char_name = get_player_name()
+                            if char_name:
+                                break
+
                         if char_name:
                             validate_character_or_exit(char_name)
                         else:
-                            # Retry apos delay
-                            time.sleep(1.0)
-                            char_name = get_player_name()
-                            if char_name:
-                                validate_character_or_exit(char_name)
+                            # FALLBACK: Notifica que alguém logou mas não conseguiu ler o nome
+                            notify_unknown_login()
                         # === FIM VALIDACAO DE WHITELIST ===
 
                         # === CARREGA CONFIG ESPECÍFICA DO PERSONAGEM ===
@@ -1648,7 +1694,7 @@ def connection_watchdog():
                     char_display = get_player_name() or "???"
                     if len(char_display) > 12:
                         char_display = char_display[:11] + "…"
-                    lbl_connection.configure(text=f"🟢 {char_display}", text_color="#00FF00")
+                    safe_gui_update(lbl_connection, 'configure', text=f"🟢 {char_display}", text_color="#00FF00")
                 else:
                     # Detecta transição e captura nome ANTES de limpar cache
                     if previous_connection_state:
@@ -1674,7 +1720,7 @@ def connection_watchdog():
 
                     state.is_connected = False
                     previous_connection_state = False
-                    lbl_connection.configure(text="⚠️ Desconectado", text_color="#FFFF00")
+                    safe_gui_update(lbl_connection, 'configure', text="⚠️ Desconectado", text_color="#FFFF00")
                     clear_player_name_cache()
                     _reset_telegram_listener() 
                     
@@ -1699,7 +1745,7 @@ def connection_watchdog():
                 if was_connected_once:
                     os._exit(0)
 
-                lbl_connection.configure(text="❌ Cliente Fechado", text_color="#FF5555")
+                safe_gui_update(lbl_connection, 'configure', text="❌ Cliente Fechado", text_color="#FF5555")
                 clear_player_name_cache()
                 _reset_telegram_listener()
 
@@ -2210,9 +2256,8 @@ def regen_monitor_loop():
                 
                 global_is_hungry = final_is_hungry
                 global_is_full = is_totally_full
-                
-                if lbl_regen and lbl_regen.winfo_exists():
-                    lbl_regen.configure(text=status_text, text_color=color)
+
+                safe_gui_update(lbl_regen, 'configure', text=status_text, text_color=color)
 
                 last_hp = curr_hp
                 last_mana = curr_mana
@@ -2484,7 +2529,7 @@ def auto_loot_thread():
                 # elif did_loot == "BAG":
                 #     log("🎒 Bag extra aberta.")
 
-                gauss_wait(0.5, 20)
+                gauss_wait(0.25, 20)
                 continue
 
             # ===== FIM DO CICLO DE LOOT (EVENT-BASED vs MEMORY) =====
@@ -2537,7 +2582,7 @@ def auto_loot_thread():
                         gauss_wait(0.3, 20)
                 last_stack_time = current_time
 
-            time.sleep(1.0)
+            time.sleep(1)
 
         except Exception as e:
             print(f"Erro Loot/Stack: {e}")
@@ -3035,8 +3080,8 @@ def resource_monitor_loop():
 def gui_updater_loop():
     while state.is_running:
         if not state.is_connected:
-            lbl_sword_val.configure(text="--")
-            lbl_shield_val.configure(text="--")
+            safe_gui_update(lbl_sword_val, 'configure', text="--")
+            safe_gui_update(lbl_shield_val, 'configure', text="--")
             time.sleep(1)
             continue
 
@@ -3077,16 +3122,14 @@ def gui_updater_loop():
                 exp_tracker.update(curr_exp)
                 xp_stats = exp_tracker.get_stats(char_lvl)
 
-                if lbl_exp_rate.winfo_exists():
-                    if xp_stats['xp_hour'] > 0:
-                        lbl_exp_rate.configure(text=f"{xp_stats['xp_hour']} xp/h")
-                        lbl_exp_eta.configure(text=f"⏳ {xp_stats['eta']}")
-                    else:
-                        lbl_exp_rate.configure(text="-- xp/h")
-                        lbl_exp_eta.configure(text="⏳ --")
+                if xp_stats['xp_hour'] > 0:
+                    safe_gui_update(lbl_exp_rate, 'configure', text=f"{xp_stats['xp_hour']} xp/h")
+                    safe_gui_update(lbl_exp_eta, 'configure', text=f"⏳ {xp_stats['eta']}")
+                else:
+                    safe_gui_update(lbl_exp_rate, 'configure', text="-- xp/h")
+                    safe_gui_update(lbl_exp_eta, 'configure', text="⏳ --")
 
-                if lbl_exp_left.winfo_exists():
-                    lbl_exp_left.configure(text=f"{xp_stats['left']} xp")
+                safe_gui_update(lbl_exp_left, 'configure', text=f"{xp_stats['left']} xp")
 
                 # --- Gold & Regen trackers ---
                 current_containers = scan_containers(pm, base_addr)
@@ -3096,19 +3139,15 @@ def gui_updater_loop():
                     gold_tracker.update_inventory(current_containers)
                     g_stats = gold_tracker.get_stats()
 
-                    if lbl_gold_total.winfo_exists():
-                        lbl_gold_total.configure(text=f"🪙 {g_stats['inventory']} gp")
-
-                    if lbl_gold_rate.winfo_exists():
-                        lbl_gold_rate.configure(text=f"{g_stats['gp_h']} gp/h")
+                    safe_gui_update(lbl_gold_total, 'configure', text=f"🪙 {g_stats['inventory']} gp")
+                    safe_gui_update(lbl_gold_rate, 'configure', text=f"{g_stats['gp_h']} gp/h")
 
                 # B. ATUALIZA REGEN STOCK
                 if regen_tracker:
                     regen_tracker.update_inventory(current_containers)
                     r_str = regen_tracker.get_display_string()
 
-                    if lbl_regen_stock.winfo_exists():
-                        lbl_regen_stock.configure(text=f"🍖 {r_str}")
+                    safe_gui_update(lbl_regen_stock, 'configure', text=f"🍖 {r_str}")
 
             except Exception as e:
                 print(f"Erro GUI: {e}")
@@ -3121,9 +3160,9 @@ def gui_updater_loop():
                 ml_pct = pm.read_int(base_addr + OFFSET_MAGIC_PCT)
                 ml_lvl = pm.read_int(base_addr + OFFSET_MAGIC_LEVEL)
 
-                lbl_sword_val.configure(text=f"{sw_lvl} ({sw_data['pct']}%)")
-                lbl_shield_val.configure(text=f"{sh_lvl} ({sh_data['pct']}%)")
-                lbl_magic_val.configure(text=f"{ml_lvl} ({ml_stats['pct']}%)")
+                safe_gui_update(lbl_sword_val, 'configure', text=f"{sw_lvl} ({sw_data['pct']}%)")
+                safe_gui_update(lbl_shield_val, 'configure', text=f"{sh_lvl} ({sh_data['pct']}%)")
+                safe_gui_update(lbl_magic_val, 'configure', text=f"{ml_lvl} ({ml_stats['pct']}%)")
 
                 # Benchmark usa "Dist" para Paladin, "Melee" para Knight/None
                 skill_type = "Dist" if "Paladin" in vocation else "Melee"
@@ -3131,31 +3170,31 @@ def gui_updater_loop():
                 real_sw = sw_data['speed'] 
                 
                 if ml_stats['speed'] > 0:
-                    lbl_magic_rate.configure(text=f"{ml_stats['speed']:.1f}m/%")
+                    safe_gui_update(lbl_magic_rate, 'configure', text=f"{ml_stats['speed']:.1f}m/%")
                     pct_left = 100 - ml_stats['pct']
                     mins_left = pct_left * ml_stats['speed']
                     horas, minutos = divmod(int(mins_left), 60)
-                    lbl_magic_time.configure(text=f"⏳ {horas:02d}:{minutos:02d}")
+                    safe_gui_update(lbl_magic_time, 'configure', text=f"⏳ {horas:02d}:{minutos:02d}")
                 else:
-                    lbl_magic_rate.configure(text="-- m/%")
-                    lbl_magic_time.configure(text="⏳ --")
+                    safe_gui_update(lbl_magic_rate, 'configure', text="-- m/%")
+                    safe_gui_update(lbl_magic_time, 'configure', text="⏳ --")
 
                 if real_sw > 0:
                     efficiency = (bench_sw / real_sw) * 100
                     if efficiency > 100: efficiency = 100
                     
                     color_sw = "#00FF00" if efficiency >= 90 else "#FFFF00" if efficiency >= 70 else "#FF5555"
-                    
-                    lbl_sword_rate.configure(text=f"{real_sw:.1f} m/% ({efficiency:.0f}%)", text_color=color_sw)
-                    
+
+                    safe_gui_update(lbl_sword_rate, 'configure', text=f"{real_sw:.1f} m/% ({efficiency:.0f}%)", text_color=color_sw)
+
                     pct_left = 100 - sw_data['pct']
                     mins_left_sw = pct_left * real_sw
                     total_minutos = int(mins_left_sw)
                     horas, minutos = divmod(total_minutos, 60)
-                    lbl_sword_time.configure(text=f"⏳ {horas:02d}:{minutos:02d}")
+                    safe_gui_update(lbl_sword_time, 'configure', text=f"⏳ {horas:02d}:{minutos:02d}")
                 else:
-                    lbl_sword_rate.configure(text="-- m/%", text_color="gray")
-                    lbl_sword_time.configure(text="--")
+                    safe_gui_update(lbl_sword_rate, 'configure', text="-- m/%", text_color="gray")
+                    safe_gui_update(lbl_sword_time, 'configure', text="--")
 
                 bench_sh = get_benchmark_min_per_pct(sh_lvl, BOT_SETTINGS['vocation'], "Shield")
                 real_sh = sh_data['speed']
@@ -3165,16 +3204,16 @@ def gui_updater_loop():
                     if efficiency > 100: efficiency = 100
                     
                     color_sh = "#00FF00" if efficiency >= 90 else "#FFFF00" if efficiency >= 70 else "#FF5555"
-                    
-                    lbl_shield_rate.configure(text=f"{real_sh:.1f} m/% ({efficiency:.0f}%)", text_color=color_sh)
-                    
+
+                    safe_gui_update(lbl_shield_rate, 'configure', text=f"{real_sh:.1f} m/% ({efficiency:.0f}%)", text_color=color_sh)
+
                     pct_left = 100 - sh_data['pct']
                     mins_left_sh = pct_left * real_sh
                     horas_sh, minutos_sh = divmod(int(mins_left_sh), 60)
-                    lbl_shield_time.configure(text=f"⏳ {horas_sh:02d}:{minutos_sh:02d}")
+                    safe_gui_update(lbl_shield_time, 'configure', text=f"⏳ {horas_sh:02d}:{minutos_sh:02d}")
                 else:
-                    lbl_shield_rate.configure(text="-- m/%", text_color="gray")
-                    lbl_shield_time.configure(text="--")
+                    safe_gui_update(lbl_shield_rate, 'configure', text="-- m/%", text_color="gray")
+                    safe_gui_update(lbl_shield_time, 'configure', text="--")
 
             except Exception as e:
                 print(f"Erro GUI: {e}")

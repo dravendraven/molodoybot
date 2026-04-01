@@ -180,6 +180,15 @@ OFFSET_OUTFIT_FEET = 0x70   # 112 - Cor dos pés
 OFFSET_LIGHT = 0x74         # 116 - Light level emitted
 OFFSET_LIGHT_COLOR = 0x78   # 120 - Light color
 OFFSET_BLACKSQUARE = 0x80   # 128 - Blacksquare indicator (4 bytes uint32, GetTickCount timestamp when creature attacks player)
+OFFSET_SKULL = 0x94         # 148 - Skull type (0=none, 1=yellow, 2=green, 3=white, 4=red)
+OFFSET_PARTY = 0x98         # 152 - Party status
+
+# Skull constants
+SKULL_NONE = 0
+SKULL_YELLOW = 1   # Attacked someone (yellow skull)
+SKULL_GREEN = 2    # Party member
+SKULL_WHITE = 3    # Player Killer (white skull)
+SKULL_RED = 4      # Mass Player Killer (red skull)
 
 MAX_CREATURES = 250
 
@@ -292,10 +301,10 @@ DEST_CONTAINER_INDEX = 0
 # Formato: (tempo_base, variacao_percentual)
 
 LOOT_DELAY_OPEN_BAG = (0.25, 15)          # Após abrir bag dentro do corpo
-LOOT_DELAY_EAT_FOOD = (0.25, 20)         # Após comer comida
-LOOT_DELAY_MOVE_ITEM = (0.25, 30)         # Após mover item para backpack
+LOOT_DELAY_EAT_FOOD = (0.20, 20)         # Após comer comida
+LOOT_DELAY_MOVE_ITEM = (0.3, 30)         # Após mover item para backpack
 LOOT_DELAY_DROP_ITEM = (0.3, 20)         # Após dropar item no chão
-LOOT_DELAY_CLOSE_CONTAINER = (0.5, 30)  # Após fechar container de loot
+LOOT_DELAY_CLOSE_CONTAINER = (0.25, 30)  # Após fechar container de loot
 
 # ==============================================================================
 # FEATURE FLAGS

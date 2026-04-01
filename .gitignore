@@ -114,3 +114,5 @@ tests/test_trade_parser.py
 utils/market_exporter.py
 bot_config_Newton.json
 core/trade_parser.py
+bot_config_Erema.json
+bot_config_Minotaur Hammerman.json

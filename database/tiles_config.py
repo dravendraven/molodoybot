@@ -7,6 +7,7 @@ Gerado automaticamente a partir de objects.srv (Unpass Flags).
 # IDs especiais que não estão no objects.srv mas bloqueiam
 MANUAL_BLOCKING_IDS = {
     99, # Criaturas / Players
+    478, 480, # sandstone walls (decorativas mas bloqueiam)
     1949, 5022, 5023, # teleports
 }
 
@@ -178,22 +179,49 @@ GENERATED_BLOCKING_IDS = {
     5076, 5077, 5078, 5079, 5082, 5084,
 }
 
+# ==============================================================================
+# DAMAGE_IDS - Tiles walkable que causam dano ALTO (fire, energy, lava)
+# Bot deve EVITAR fortemente - custo muito alto (500)
+# ==============================================================================
+DAMAGE_IDS = {
+    # Campfire
+    1998, 1999, 2000,
+    # Mystic flame
+    1959,
+    # Fire
+    2118, 2119, 2123, 2124, 2131, 2132, 2138, 2139, 2150, 2151,
+    # Energy field
+    2122, 2126, 2135,
+    # Searing fire
+    2137, 2141, 2142, 2149,
+    # Lava
+    2144,
+}
+
+# ==============================================================================
+# POISON_IDS - Tiles walkable que causam dano BAIXO (poison - DoT)
+# Bot prefere evitar mas pode passar mais facilmente - custo médio (200)
+# ==============================================================================
+POISON_IDS = {
+    2121, 2127, 2134,  # Poison gas
+}
+
+# ==============================================================================
+# GENERATED_AVOID_IDS - IDs de transições que NÃO devem ser usados como rota
+# APENAS transições de andar (escadas, buracos, rampas) que já estão em FLOOR_CHANGE
+# O pathfinding os trata como bloqueados, mas scan_for_floor_change os reconhece
+# ==============================================================================
 GENERATED_AVOID_IDS = {
-    293, 294, 369, 370, 385, 387, 394, 411, 412, 413, 414, 424, 425, 428, 432, 433, 434,
-    437, 438, 451, 465, 466, 467, 468, 469, 471, 472, 473, 474, 477, 478,
-    480, 482, 483, 484, 485, 566, 567, 593, 594, 595, 600, 601, 604, 605, 606,
-    607, 608, 609, 610, 611, 615, 1067, 1080, 1156, 1947, 1950, 1952, 1954, 1956,
-    1958, 1959, 1960, 1962, 1964, 1966, 1969, 1971, 1973, 1975, 1977, 1978, 1998, 1999, 2000,
-    2118, 2119, 2121, 2122, 2123, 2124, 2126, 2127, 2131, 2132, 2134, 2135, 2137, 2138, 2139,
-    2140, 2141, 2142, 2143, 2144, 2149, 2150, 2151, 2192, 2194, 2196, 2198, 2354, 2355, 2356,
-    2357, 2362, 2363, 2364, 2365, 2366, 2367, 2368, 2369, 2370, 2371,
-    2372, 2373, 2374, 2375, 2376, 2377, 2378, 2379, 2380, 2381, 2382, 2383, 2384, 2385, 2402,
-    2403, 2404, 2405, 2406, 2407, 2408, 2409, 2410, 2411, 2412, 2413, 2414, 2415, 2416, 2417,
-    2418, 2419, 2420, 2421, 2422, 2423, 2424, 2425, 2426, 2469, 2470, 2478, 2555,
-    2556, 2775, 2776, 2777, 2778, 2779, 2780, 2781, 2782, 2783, 2784, 2785, 2786, 2787, 2788,
-    2789, 2790, 2791, 2792, 2793, 2794, 2795, 2796, 2797, 2798, 2799, 2800, 2801, 2802, 2803,
-    2804, 2805, 2806, 2807, 2808, 2809, 2810, 2811, 2812, 2981, 2983, 2984, 2985, 2987, 2988,
-    3504, 3652, 3666, 4393, 4823, 4824, 4825, 4826, 5081, 5086, 5087, 5088,
+    # DOWN transitions
+    293, 294, 369, 370, 385, 387, 394, 411, 412, 413, 414, 428,
+    432, 433, 434, 437, 438, 451, 465, 466, 467, 468, 469,
+    471, 472, 473, 474, 482, 483, 484, 485, 566, 567,
+    593, 594, 595, 600, 601, 604, 605, 606, 607, 608, 609, 610, 615,
+    1067, 1080, 1156, 2555, 2556, 4823, 4824, 4825, 4826,
+    # UP transitions
+    1947, 1950, 1952, 1954, 1956, 1958, 1960, 1962, 1964, 1966,
+    1969, 1971, 1973, 1975, 1977, 1978, 2192, 2194, 2196, 2198,
+    5081,
 }
 
 # Combina os dois conjuntos
@@ -223,36 +251,50 @@ FLOOR_CHANGE = {
     # --- SUBIR (Apenas andar em cima) ---
     'UP_WALK': {
         1947,       # Escada de construção (cinza)
-        1958,       # Escada de madeira (Wooden Stairs) - *Verifique se no 7.4 ela é use ou walk, coloquei aqui como walk padrao
+        1958,       # Escada de madeira (Wooden Stairs)
         1956,       # Rampa de pedra Norte
         1954,       # Rampa de pedra Sul
         1950, 1952, # Outras rampas
         1977, 1978, # Escadas circulares
+        # Rampas adicionais
+        1960, 1962, 1964, 1966,  # rampas
+        1969, 1971, 1973, 1975,  # rampas
+        2192, 2194, 2196, 2198,  # rampas
     },
 
     # --- SUBIR (Requer "Use" no tile) ---
     'UP_USE': {
         1948, # Ladder (Madeira)
-        1968, # Ladder (FerroFV/Clickable)
-        # Adicione aqui escadas verticais de parede se houver
+        1968, # Ladder (Ferro/Clickable)
+        5081, # Ladder
     },
     
     # --- DESCER ---
     'DOWN': {
-        370,
-        438, 
-        414, # escada
-        412,  # escada(trapdoor)
-        437, # escada
-        385, # buraco
-        604, # buraco descer
-        469, # rampa montanha
-        432, 433, # Buraco Aberto
-        434, 369, # Escada descendo
-        411,      # Escada navio
-        482,      # Bueiro
-        293, 294, # Buracos de caverna
-        594, 595  # Buraco de pá aberto
+        # Escadas existentes
+        370, 438, 414, 412, 437, 434, 369, 411, 482,
+        432, 433,  # Buraco Aberto
+        293, 294,  # Buracos de caverna
+        594, 595,  # Buraco de pá aberto
+        385,       # buraco
+        604,       # buraco descer
+        469,       # rampa montanha
+        # Novas transições
+        387, 394,  # small hole, hole
+        413, 428, 451,  # stairs
+        465, 466, 467,  # stairs
+        471, 472, 473, 474,  # stairs
+        483,       # trapdoor
+        484, 485,  # stairs
+        566, 567,  # stairs
+        600, 601, 605,  # ramps
+        607, 609, 610, 615,  # holes
+        1067,      # pitfall
+        1080,      # earth hole
+        1156,      # stairs
+        2555,      # small hole
+        2556,      # loose board
+        4823, 4824, 4825, 4826,  # stairs
     },
 
     # --- DESCER (Requer "Use" no tile) ---
@@ -262,6 +304,7 @@ FLOOR_CHANGE = {
 
     # --- FERRAMENTAS ---
     'SHOVEL': {
+        468,          # shovel hole
         593, 606, 608 # Buracos fechados
     },
     

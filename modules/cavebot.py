@@ -44,7 +44,7 @@ def _get_bundled_path(filename):
     return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), filename)
 
 
-COOLDOWN_AFTER_COMBAT_BASE = 3.0    # Média de 3 segundos
+COOLDOWN_AFTER_COMBAT_BASE = 1.0    # Média de 3 segundos
 COOLDOWN_AFTER_COMBAT_VARIANCE = 30  # ±30% variação gaussiana
 GLOBAL_RECALC_LIMIT = 5
 
